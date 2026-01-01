@@ -1,0 +1,26 @@
+.ai_text/
+dist/
+
+# Go binaries
+host/cmd2host
+host/cmd2host-*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Logs
+*.log
+
+# Local test/dev files
+.cmd2host/
+*.local

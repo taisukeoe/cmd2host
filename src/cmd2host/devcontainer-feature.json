@@ -1,0 +1,18 @@
+{
+  "id": "cmd2host",
+  "version": "1.0.0",
+  "name": "Host Command Proxy",
+  "description": "Proxy commands (gh, etc.) from container to host machine. Requires cmd2host daemon on host.",
+  "documentationURL": "https://github.com/taisukeoe/cmd2host",
+  "options": {
+    "commands": {
+      "type": "string",
+      "default": "gh",
+      "description": "Comma-separated list of commands to proxy (e.g., 'gh' or 'gh,docker')"
+    }
+  },
+  "containerEnv": {
+    "HOST_CMD_PROXY_HOST": "host.docker.internal",
+    "HOST_CMD_PROXY_PORT": "9876"
+  }
+}

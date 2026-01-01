@@ -1,0 +1,13 @@
+{
+  "listen_address": "127.0.0.1",
+  "listen_port": 19876,
+  "allowed_repositories": ["taisukeoe/cmd2host"],
+  "commands": {
+    "gh": {
+      "timeout": 60,
+      "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run ", "^--version$"],
+      "denied": ["[;&|`$]", "^auth (login|logout|token)", "^config"],
+      "repo_arg_patterns": ["--repo[= ]([^ ]+)", "-R[= ]?([^ ]+)"]
+    }
+  }
+}

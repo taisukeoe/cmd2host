@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [synchronize, opened, reopened]
+
+jobs:
+  changes:
+    runs-on: ubuntu-slim
+    outputs:
+      host: ${{ steps.filter.outputs.host }}
+      devcontainer: ${{ steps.filter.outputs.devcontainer }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            host:
+              - 'host/**'
+              - 'justfile'
+              - 'test/host/**'
+              - '.github/workflows/ci.yml'
+            devcontainer:
+              - 'src/**'
+              - 'test/cmd2host/**'
+              - '.github/workflows/ci.yml'
+
+  test-host:
+    needs: changes
+    if: needs.changes.outputs.host == 'true'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install just
+        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
+
+      - name: Unit Test
+        run: just test
+
+      - name: Build
+        run: just build
+
+      - name: Host Scenario Test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: just test-host
+
+  test-devcontainer:
+    needs: changes
+    if: needs.changes.outputs.devcontainer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Test devcontainer feature
+        run: devcontainer features test --features cmd2host --base-image mcr.microsoft.com/devcontainers/base:ubuntu

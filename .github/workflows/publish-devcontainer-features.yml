@@ -1,0 +1,32 @@
+name: Publish DevContainer Features
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # ratchet:docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Features
+        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # ratchet:devcontainers/action@v1
+        with:
+          publish-features: 'true'
+          base-path-to-features: './src'
+          generate-docs: 'true'
