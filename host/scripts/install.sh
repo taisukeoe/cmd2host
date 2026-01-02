@@ -69,8 +69,9 @@ if [[ -d "$INSTALL_DIR" ]]; then
     exit 1
 fi
 
-# Create install directory
+# Create install directory and tokens directory
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/tokens"
 
 # Detect platform and architecture (macOS only)
 detect_platform() {
@@ -172,7 +173,7 @@ if [[ -f "$SCRIPT_DIR/uninstall.sh" ]]; then
     cp "$SCRIPT_DIR/uninstall.sh" "$UNINSTALL_SCRIPT"
 else
     # Download from GitHub
-    curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/host/uninstall.sh" \
+    curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/host/scripts/uninstall.sh" \
         -o "$UNINSTALL_SCRIPT" 2>/dev/null || true
 fi
 [[ -f "$UNINSTALL_SCRIPT" ]] && chmod +x "$UNINSTALL_SCRIPT"
@@ -245,3 +246,6 @@ echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
 echo ""
 echo "To add repos:   $0 --repos \"owner/repo\" --append"
 echo "To uninstall:   $INSTALL_DIR/uninstall.sh"
+echo ""
+echo "Token authentication is enabled."
+echo "See README.md for devcontainer.json configuration."

@@ -10,14 +10,18 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/guiyomh/features/just:0": {}
   },
+  // Initialize cmd2host session token (runs on host before container starts)
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
   "mounts": [
     "source=claude-config-cmd2host,target=/home/vscode/.claude,type=volume",
     "source=claude-data-cmd2host,target=/home/vscode/.local/share/claude,type=volume",
-    "source=codex-config-cmd2host,target=/home/vscode/.codex,type=volume"
+    "source=codex-config-cmd2host,target=/home/vscode/.codex,type=volume",
+    "source=${localWorkspaceFolder}/.devcontainer/.session-token,target=/run/cmd2host-token,type=bind,readonly"
   ],
   "containerEnv": {
     "HOST_CMD_PROXY_HOST": "host.docker.internal",
-    "HOST_CMD_PROXY_PORT": "9876"
+    "HOST_CMD_PROXY_PORT": "9876",
+    "HOST_CMD_PROXY_TOKEN_FILE": "/run/cmd2host-token"
   },
   "remoteUser": "vscode",
   // Install cmd2host feature via postCreateCommand instead of "features" because:

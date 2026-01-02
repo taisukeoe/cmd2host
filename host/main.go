@@ -21,23 +21,30 @@ const (
 type Request struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args"`
+	Token   string   `json:"token"`
 }
 
 // Server handles TCP connections and command proxying
 type Server struct {
-	config    *Config
-	validator *Validator
-	executor  *Executor
-	listener  net.Listener
+	config     *Config
+	validator  *Validator
+	executor   *Executor
+	tokenStore *TokenStore
+	listener   net.Listener
 }
 
 // NewServer creates a new Server
-func NewServer(config *Config) *Server {
-	return &Server{
-		config:    config,
-		validator: NewValidator(config),
-		executor:  NewExecutor(config),
+func NewServer(config *Config) (*Server, error) {
+	tokenStore, err := NewTokenStore()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize token store: %w", err)
 	}
+	return &Server{
+		config:     config,
+		validator:  NewValidator(config),
+		executor:   NewExecutor(config),
+		tokenStore: tokenStore,
+	}, nil
 }
 
 // handleClient processes a single client connection
@@ -64,6 +71,18 @@ func (s *Server) handleClient(conn net.Conn) {
 		resp := ExecuteResult{
 			ExitCode: 1,
 			Stderr:   fmt.Sprintf("Invalid JSON: %v", err),
+		}
+		s.sendResponse(conn, resp)
+		return
+	}
+
+	// Authenticate token
+	if !s.tokenStore.IsValid(req.Token) {
+		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
+		fmt.Println("  -> AUTH FAILED")
+		resp := ExecuteResult{
+			ExitCode: 1,
+			Stderr:   "Authentication failed",
 		}
 		s.sendResponse(conn, resp)
 		return
@@ -107,6 +126,22 @@ func (s *Server) sendResponse(conn net.Conn, resp ExecuteResult) {
 
 // Run starts the TCP server
 func (s *Server) Run() error {
+	// Cleanup expired tokens on startup
+	if err := s.tokenStore.CleanupExpired(); err != nil {
+		fmt.Printf("Warning: failed to cleanup expired tokens: %v\n", err)
+	}
+
+	// Periodic cleanup for long-running daemons
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := s.tokenStore.CleanupExpired(); err != nil {
+				fmt.Printf("Warning: periodic token cleanup failed: %v\n", err)
+			}
+		}
+	}()
+
 	addr := fmt.Sprintf("%s:%d", s.config.ListenAddress, s.config.ListenPort)
 
 	listener, err := net.Listen("tcp", addr)
@@ -155,6 +190,23 @@ func (s *Server) commandNames() []string {
 }
 
 func main() {
+	// Handle --hash-token for generating token hashes (used by init scripts)
+	// Token is read from stdin to avoid exposure in process list (ps aux)
+	if len(os.Args) == 2 && os.Args[1] == "--hash-token" {
+		token, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading token from stdin: %v\n", err)
+			os.Exit(1)
+		}
+		tokenStr := strings.TrimSpace(string(token))
+		if tokenStr == "" {
+			fmt.Fprintln(os.Stderr, "Error: empty token")
+			os.Exit(1)
+		}
+		fmt.Println(hashToken(tokenStr))
+		return
+	}
+
 	configPath := DefaultConfigPath()
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
@@ -164,11 +216,15 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
 		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/install.sh | bash")
+		fmt.Fprintln(os.Stderr, "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash")
 		os.Exit(1)
 	}
 
-	server := NewServer(config)
+	server, err := NewServer(config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Server initialization error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
