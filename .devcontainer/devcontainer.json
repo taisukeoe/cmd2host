@@ -1,0 +1,33 @@
+{
+  "name": "cmd2host-devcontainer",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.25"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/guiyomh/features/just:0": {}
+  },
+  "mounts": [
+    "source=claude-config-cmd2host,target=/home/vscode/.claude,type=volume",
+    "source=claude-data-cmd2host,target=/home/vscode/.local/share/claude,type=volume",
+    "source=codex-config-cmd2host,target=/home/vscode/.codex,type=volume"
+  ],
+  "containerEnv": {
+    "HOST_CMD_PROXY_HOST": "host.docker.internal",
+    "HOST_CMD_PROXY_PORT": "9876"
+  },
+  "remoteUser": "vscode",
+  // Install cmd2host feature via postCreateCommand instead of "features" because:
+  // DevContainer spec requires local features to be inside .devcontainer/ directory.
+  // Since src/cmd2host/ is outside .devcontainer/, we cannot reference it as a local feature.
+  // See: https://github.com/devcontainers/feature-starter/issues/20
+  "postCreateCommand": "bash .devcontainer/post-create.sh && sudo COMMANDS=gh bash src/cmd2host/install.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go"]
+    }
+  }
+}

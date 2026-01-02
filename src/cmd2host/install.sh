@@ -32,7 +32,7 @@ install_netcat
 # Install wrapper script
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/cmd-wrapper.sh" /usr/local/bin/cmd-wrapper.sh
-chmod +x /usr/local/bin/cmd-wrapper.sh
+chmod 755 /usr/local/bin/cmd-wrapper.sh
 
 # Create symlinks for each command
 echo "Creating command wrappers for: $COMMANDS"
