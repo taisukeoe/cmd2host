@@ -24,7 +24,7 @@ Communication flow:
 - `host/config.go` - Configuration loading
 - `host/validator.go` - Command validation logic
 - `host/executor.go` - Command execution
-- `host/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
+- `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
 - `justfile` - Build and test commands
 - `test/host/` - Host daemon scenario tests
 - `test/cmd2host/` - DevContainer feature tests
@@ -81,10 +81,10 @@ echo '{"command":"gh","args":["--version"]}' | nc host.docker.internal 9876
 
 ```bash
 # Download and install (downloads binary from GitHub Releases)
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/install.sh | bash -s -- --repos "owner/repo"
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos "owner/repo"
 
 # Or build from source
-./host/install.sh --build --repos "owner/repo"
+./host/scripts/install.sh --build --repos "owner/repo"
 ```
 
 ## Security Model

@@ -13,6 +13,7 @@
   },
   "containerEnv": {
     "HOST_CMD_PROXY_HOST": "host.docker.internal",
-    "HOST_CMD_PROXY_PORT": "9876"
+    "HOST_CMD_PROXY_PORT": "9876",
+    "HOST_CMD_PROXY_TOKEN_FILE": "/run/cmd2host-token"
   }
 }

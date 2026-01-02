@@ -20,14 +20,18 @@ DevContainer                      Host Machine (macOS)
 ### 1. Install daemon on host (one-time)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/install.sh \
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
   | bash -s -- --repos "owner/repo1,owner/repo2"
 ```
 
-### 2. Add feature to devcontainer.json
+### 2. Add feature and token auth to devcontainer.json
 
 ```json
 {
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/.session-token,target=/run/cmd2host-token,type=bind,readonly"
+  ],
   "features": {
     "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
       "commands": "gh"
@@ -36,13 +40,23 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/instal
 }
 ```
 
+### 3. Create token initialization script
+
+Copy `host/scripts/init-cmd2host.sh` to your project's `.devcontainer/` directory.
+
+### 4. Add to .gitignore
+
+```
+.devcontainer/.session-token
+```
+
 ## Host Setup
 
 ### Install
 
 ```bash
 # Install with specific repositories
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/install.sh \
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
   | bash -s -- --repos "owner/repo1,owner/repo2"
 
 # Add more repositories later
@@ -62,7 +76,7 @@ tail -f ~/.cmd2host/cmd2host.log
 ### Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/uninstall.sh | bash
 ```
 
 ## Feature Options
@@ -84,6 +98,23 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/uninst
 ```
 
 ## Security
+
+### Token Authentication
+
+cmd2host uses session tokens to authenticate requests from containers:
+
+- **256-bit tokens**: Cryptographically secure, generated per DevContainer session
+- **24-hour TTL**: Tokens expire automatically after 24 hours
+- **BLAKE3 hashing**: Tokens are hashed before storage (prevents leakage if token store is accessed)
+- **Brute-force protection**: 1-second delay on authentication failure
+
+Token flow:
+1. `initializeCommand` generates a random token on the host
+2. Token hash is stored in `~/.cmd2host/tokens/`
+3. Raw token is mounted into container at `/run/cmd2host-token`
+4. Container reads token from file and includes it in requests
+
+### Command Validation
 
 The daemon validates commands against configurable rules:
 
@@ -113,6 +144,7 @@ Set automatically by the feature:
 |----------|---------|-------------|
 | `HOST_CMD_PROXY_HOST` | `host.docker.internal` | Host address |
 | `HOST_CMD_PROXY_PORT` | `9876` | Daemon port |
+| `HOST_CMD_PROXY_TOKEN_FILE` | `/run/cmd2host-token` | Path to session token file |
 
 ## Development
 
