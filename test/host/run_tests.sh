@@ -92,8 +92,8 @@ test_request \
     "gh version"
 
 test_request \
-    "gh pr list -R allowed repo" \
-    '{"command":"gh","args":["pr","list","-R","taisukeoe/cmd2host"]}' \
+    "gh repo view -R allowed repo" \
+    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"]}' \
     "0" \
     ""
 
