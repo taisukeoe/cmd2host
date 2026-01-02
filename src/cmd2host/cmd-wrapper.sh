@@ -23,10 +23,52 @@ fi
 # Token is 64 hex chars only (validated on generation), no escaping needed
 TOKEN_ESCAPED="$TOKEN"
 
+# For gh command: auto-detect repository from git remote if -R/--repo not specified
+ARGS=("$@")
+if [[ "$CMD_NAME" == "gh" ]]; then
+    # Subcommands that work with repositories and support -R flag
+    repo_subcommands="pr issue repo run api"
+    first_arg="${1:-}"
+
+    # Check if this subcommand needs -R
+    needs_repo=false
+    for subcmd in $repo_subcommands; do
+        if [[ "$first_arg" == "$subcmd" ]]; then
+            needs_repo=true
+            break
+        fi
+    done
+
+    if [[ "$needs_repo" == "true" ]]; then
+        # Check if -R or --repo is already specified
+        has_repo_flag=false
+        for arg in "$@"; do
+            if [[ "$arg" == "-R" || "$arg" == "--repo" || "$arg" =~ ^-R.+ || "$arg" =~ ^--repo=.+ ]]; then
+                has_repo_flag=true
+                break
+            fi
+        done
+
+        # Auto-detect repo from git remote if not specified
+        if [[ "$has_repo_flag" == "false" ]]; then
+            remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+            if [[ -n "$remote_url" ]]; then
+                # Extract owner/repo from GitHub URL
+                # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
+                repo=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
+                if [[ -n "$repo" && "$repo" =~ ^[^/]+/[^/]+$ ]]; then
+                    # Append -R at the end to preserve subcommand position for validator
+                    ARGS=("$@" "-R" "$repo")
+                fi
+            fi
+        fi
+    fi
+fi
+
 # Build JSON args array
 ARGS_JSON="["
 first=true
-for arg in "$@"; do
+for arg in "${ARGS[@]}"; do
     # Escape special JSON characters (backslash, double quote, tab, carriage return, newline)
     # Note: sed processes line by line, so we use a different approach for newlines
     escaped=$(printf '%s' "$arg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/\r/\\r/g' | awk 'BEGIN{ORS="\\n"} {print}' | sed 's/\\n$//')
@@ -58,12 +100,13 @@ if [[ -z "$RESPONSE" ]]; then
 fi
 
 # Parse response using Python (available in most containers)
-python3 -c "
+# Use stdin to avoid issues with special characters in response
+echo "$RESPONSE" | python3 -c "
 import sys
 import json
 
 try:
-    resp = json.loads('''$RESPONSE''')
+    resp = json.load(sys.stdin)
     stdout = resp.get('stdout', '')
     stderr = resp.get('stderr', '')
     exit_code = resp.get('exit_code', 1)
@@ -76,6 +119,5 @@ try:
     sys.exit(exit_code)
 except json.JSONDecodeError as e:
     print(f'Error: Invalid JSON response: {e}', file=sys.stderr)
-    print(f'Response: {repr('''$RESPONSE'''[:200])}', file=sys.stderr)
     sys.exit(1)
 "

@@ -37,3 +37,19 @@ test-all: test test-host
 # Clean build artifacts
 clean:
     rm -rf dist/
+
+# Install daemon locally (for private repo / development)
+install repos:
+    ./host/scripts/install.sh --repos "{{repos}}"
+
+# Install daemon locally, building from source
+install-build repos:
+    ./host/scripts/install.sh --build --repos "{{repos}}"
+
+# Add repos to existing installation
+install-append repos:
+    ./host/scripts/install.sh --repos "{{repos}}" --append
+
+# Uninstall daemon
+uninstall:
+    ~/.cmd2host/uninstall.sh

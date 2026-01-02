@@ -101,15 +101,25 @@ download_binary() {
 
     echo "Downloading cmd2host for ${platform}..."
 
-    # Get latest release URL
+    # Try gh CLI first (works for private repos if authenticated)
+    if command -v gh &> /dev/null; then
+        if gh release download -R "${GITHUB_REPO}" -p "cmd2host-${platform}" -D "$(dirname "$binary_path")" --clobber 2>/dev/null; then
+            mv "$(dirname "$binary_path")/cmd2host-${platform}" "$binary_path"
+            echo "Downloaded from GitHub Releases (via gh)"
+            return 0
+        fi
+    fi
+
+    # Fall back to curl (only works for public repos)
     local download_url
     download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/cmd2host-${platform}"
 
     if curl -fsSL "$download_url" -o "$binary_path" 2>/dev/null; then
-        echo "Downloaded from GitHub Releases"
+        echo "Downloaded from GitHub Releases (via curl)"
         return 0
     else
         echo "Failed to download from GitHub Releases"
+        echo "(Private repos require gh CLI: brew install gh && gh auth login)"
         return 1
     fi
 }
@@ -184,6 +194,14 @@ if [[ -z "$REPOS" ]]; then
     read -r REPOS
 fi
 
+# Detect gh path (launchd doesn't inherit user's PATH)
+GH_PATH=$(which gh 2>/dev/null || echo "")
+if [[ -z "$GH_PATH" ]]; then
+    echo "Warning: gh CLI not found in PATH"
+    echo "Install with: brew install gh"
+    GH_PATH="gh"  # fallback, will fail at runtime
+fi
+
 # Convert comma-separated to JSON array using Python (no jq dependency)
 REPOS_JSON=$(python3 -c "
 import json
@@ -198,6 +216,7 @@ cat > "$INSTALL_DIR/config.json" << EOF
   "allowed_repositories": $REPOS_JSON,
   "commands": {
     "gh": {
+      "path": "$GH_PATH",
       "timeout": 60,
       "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
       "denied": ["[;&|\`\$]", "^auth (login|logout|token)", "^config"],
