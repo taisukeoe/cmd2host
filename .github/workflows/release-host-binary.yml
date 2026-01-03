@@ -33,7 +33,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           cd host
-          go build -ldflags="-s -w" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
@@ -69,7 +69,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           cd mcp-server
-          go build -ldflags="-s -w" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4

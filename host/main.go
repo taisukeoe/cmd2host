@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 const (
 	readTimeout = 5 * time.Second
 	maxReadSize = 65536
@@ -564,6 +567,12 @@ func (s *Server) profileNames() []string {
 }
 
 func main() {
+	// Handle --version flag
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("cmd2host version %s\n", version)
+		return
+	}
+
 	// Handle --hash-token for generating token hashes (used by init scripts)
 	// Token is read from stdin to avoid exposure in process list (ps aux)
 	if len(os.Args) == 2 && os.Args[1] == "--hash-token" {
