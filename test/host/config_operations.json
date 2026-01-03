@@ -1,0 +1,81 @@
+{
+  "listen_address": "127.0.0.1",
+  "listen_port": 19876,
+  "profiles": {
+    "gh_readonly": {
+      "repo": "owner/repo",
+      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list"],
+      "env": {
+        "GH_PROMPT_DISABLED": "1",
+        "GH_REPO": "owner/repo"
+      }
+    },
+    "git_write_min": {
+      "repo": "owner/repo",
+      "repo_path": "/path/to/repo",
+      "operations": ["git_add", "git_commit", "git_push"],
+      "branch_allow": ["^ai/", "^feature/ai-"],
+      "path_deny": [".git/**", ".github/workflows/**", "**/*.pem", ".env*"],
+      "env": {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ALLOW_PROTOCOL": "https:ssh"
+      },
+      "git_config": {
+        "core.hooksPath": "/usr/share/cmd2host/empty-hooks"
+      }
+    }
+  },
+  "operations": {
+    "gh_pr_view": {
+      "command": "gh",
+      "args_template": ["pr", "view", "{number}", "--json", "{fields}"],
+      "params": {
+        "number": {"type": "integer", "min": 1},
+        "fields": {"type": "string", "pattern": "^[a-zA-Z,]+$"}
+      },
+      "description": "View a pull request (JSON output)"
+    },
+    "gh_pr_list": {
+      "command": "gh",
+      "args_template": ["pr", "list", "--json", "{fields}"],
+      "params": {
+        "fields": {"type": "string", "pattern": "^[a-zA-Z,]+$"}
+      },
+      "allowed_flags": ["--state", "--limit"],
+      "description": "List pull requests (JSON output)"
+    },
+    "gh_issue_list": {
+      "command": "gh",
+      "args_template": ["issue", "list", "--json", "{fields}"],
+      "params": {
+        "fields": {"type": "string", "pattern": "^[a-zA-Z,]+$"}
+      },
+      "allowed_flags": ["--state", "--limit"],
+      "description": "List issues (JSON output)"
+    },
+    "git_add": {
+      "command": "git",
+      "args_template": ["-C", "{repo_path}", "add", "--"],
+      "params": {
+        "paths": {"type": "array", "items": {"type": "string"}}
+      },
+      "description": "Stage files for commit"
+    },
+    "git_commit": {
+      "command": "git",
+      "args_template": ["-C", "{repo_path}", "commit", "-m", "{message}"],
+      "params": {
+        "message": {"type": "string", "minLength": 1, "maxLength": 500}
+      },
+      "description": "Create a commit"
+    },
+    "git_push": {
+      "command": "git",
+      "args_template": ["-C", "{repo_path}", "push", "origin", "{branch}"],
+      "params": {
+        "branch": {"type": "string"}
+      },
+      "description": "Push to remote (origin only, branch constrained by profile)"
+    }
+  }
+}

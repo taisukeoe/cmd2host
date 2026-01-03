@@ -24,7 +24,10 @@ type TokenData struct {
 	// while repo-agnostic commands (e.g., gh --version) are still allowed.
 	// See validator.go:validateRepository for the enforcement logic.
 	Repo string `json:"repo"`
-	// Future fields can be added here (e.g., workspace path, project ID, etc.)
+
+	// Profile is the profile name that defines allowed operations and constraints.
+	// If empty, falls back to legacy command-based validation.
+	Profile string `json:"profile,omitempty"`
 }
 
 const (
