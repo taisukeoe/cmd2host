@@ -93,7 +93,8 @@ func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		// Log file system errors for debugging (permission denied, I/O errors, etc.)
-		log.Printf("Warning: failed to read token file %s: %v", path, err)
+		// Only show first 8 chars of hash to avoid leaking full token hash in logs
+		log.Printf("Warning: failed to read token file %s...: %v", hashStr[:8], err)
 		return TokenData{}, false
 	}
 

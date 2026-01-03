@@ -6,8 +6,8 @@
 # and configure devcontainer.json with:
 #   "initializeCommand": ".devcontainer/init-cmd2host.sh"
 #
-# Note: .devcontainer/init-cmd2host.sh in this repo is used for
-# cmd2host's own devcontainer. Keep both in sync when modifying.
+# Note: .devcontainer/init-cmd2host.sh in this repo is a symlink
+# to this file for cmd2host's own devcontainer.
 
 set -euo pipefail
 
@@ -38,8 +38,8 @@ if [[ -d ".git" ]]; then
         # Extract owner/repo from GitHub URL
         # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
         CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-        # Validate format (owner/repo) - use strict pattern matching cmd-wrapper.sh
-        if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+        # Validate format (owner/repo) - require alphanumeric start, match cmd-wrapper.sh
+        if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
             CURRENT_REPO=""
         fi
     fi
