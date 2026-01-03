@@ -30,8 +30,9 @@ if [[ -n "$remote_url" ]]; then
     # Extract owner/repo from GitHub URL
     # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
     CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-    # Validate format (owner/repo)
-    if [[ ! "$CURRENT_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+    # Validate format and characters: owner/repo with valid GitHub slug characters only
+    # This strict validation also prevents JSON injection via malicious git remote URLs
+    if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
         CURRENT_REPO=""
     fi
 fi
@@ -104,8 +105,8 @@ if [[ -z "$RESPONSE" ]]; then
 fi
 
 # Parse response using Python (available in most containers)
-# Use stdin to avoid issues with special characters in response
-echo "$RESPONSE" | python3 -c "
+# Use printf '%s' to safely pass response without escape sequence interpretation
+printf '%s' "$RESPONSE" | python3 -c "
 import sys
 import json
 
