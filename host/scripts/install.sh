@@ -170,7 +170,7 @@ cat > "$INSTALL_DIR/config.json" << EOF
       "path": "$GH_PATH",
       "timeout": 60,
       "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
-      "denied": ["[;&|\\\`\\\$]", "^auth (login|logout|token)", "^config"],
+      "denied": ["[;&|\`\$]", "^auth (login|logout|token)", "^config"],
       "repo_extract_patterns": [
         {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
         {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},

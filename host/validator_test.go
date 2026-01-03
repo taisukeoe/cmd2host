@@ -196,8 +196,14 @@ func TestValidateRepository_CurrentRepoRestriction(t *testing.T) {
 			wantOK:      true,
 		},
 		{
-			name:        "empty currentRepo allows any repo",
+			name:        "empty currentRepo denies explicit repo",
 			args:        []string{"pr", "list", "-R", "any/repo"},
+			currentRepo: "",
+			wantOK:      false,
+		},
+		{
+			name:        "empty currentRepo allows no-repo commands",
+			args:        []string{"pr", "list"},
 			currentRepo: "",
 			wantOK:      true,
 		},

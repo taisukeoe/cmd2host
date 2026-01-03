@@ -140,6 +140,10 @@ Repository restriction works as follows:
 - If a command explicitly specifies a different repository (via `-R`, `--repo`, positional argument, or API path), it is denied
 - Commands without explicit repository specification are allowed (they use the implicit current repo)
 
+### Auto Repository Flag
+
+For `gh` subcommands that require repository context (`pr`, `issue`, `run`), the wrapper automatically adds `-R <current_repo>` if not already specified. This ensures commands work correctly since the host daemon doesn't have access to the container's git context.
+
 ## Environment Variables
 
 Set automatically by the feature:

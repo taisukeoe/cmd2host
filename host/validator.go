@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -91,12 +92,21 @@ func (v *Validator) extractRepositories(cmdName string, args []string) []string 
 
 // validateRepository checks if explicitly specified repositories match the current repo
 func (v *Validator) validateRepository(cmdName string, args []string, currentRepo string) ValidationResult {
-	// If no current repo is specified, skip repo restriction (allow all)
-	if currentRepo == "" {
-		return ValidationResult{OK: true}
-	}
-
 	repos := v.extractRepositories(cmdName, args)
+
+	// If no current repo is specified
+	if currentRepo == "" {
+		// Allow commands that don't specify a repo (e.g., gh --version)
+		if len(repos) == 0 {
+			return ValidationResult{OK: true}
+		}
+		// Deny commands that explicitly specify a repo without current context
+		log.Printf("Warning: currentRepo is empty but command specifies repo: %v", repos)
+		return ValidationResult{
+			OK:      false,
+			Message: "Repository context required but not provided",
+		}
+	}
 
 	// If no explicit repo is specified, allow (implicit current repo usage)
 	if len(repos) == 0 {
