@@ -233,17 +233,17 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, profile 
 		}
 	}
 
-	// Create sanitizer with profile
+	// Create sanitizer with profile and prepare command once
 	sanitizer := NewCommandSanitizer(profile)
-	cmd := sanitizer.PrepareCommand(cmdName, args)
+	preparedCmd := sanitizer.PrepareCommand(cmdName, args)
 
 	timeout := time.Duration(s.config.DefaultTimeout) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Set up command with context
-	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
-	cmd.Env = sanitizer.PrepareCommand(cmdName, args).Env
+	// Set up command with context, reusing prepared command's path and env
+	cmd := exec.CommandContext(ctx, preparedCmd.Path, preparedCmd.Args[1:]...)
+	cmd.Env = preparedCmd.Env
 	if profile != nil && profile.RepoPath != "" {
 		cmd.Dir = profile.RepoPath
 	}

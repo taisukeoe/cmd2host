@@ -135,18 +135,15 @@ func validateParamValue(name string, value ParamValue, schema ParamSchema) error
 	case "array":
 		arr, ok := value.([]interface{})
 		if !ok {
-			// Also accept []string
-			if strArr, ok := value.([]string); ok {
-				for _, s := range strArr {
-					if schema.Items != nil && schema.Items.Type == "string" {
-						// Valid
-						_ = s
-					}
-				}
+			// Also accept []string - type already validated by Go type system
+			if _, ok := value.([]string); ok {
+				// ItemsSchema currently only has Type field (no Pattern)
+				// For []string, items are already strings, so validation passes
 				return nil
 			}
 			return fmt.Errorf("param %s: expected array, got %T", name, value)
 		}
+		// Validate []interface{} items against schema
 		if schema.Items != nil && schema.Items.Type == "string" {
 			for i, item := range arr {
 				if _, ok := item.(string); !ok {

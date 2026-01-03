@@ -101,9 +101,12 @@ func (s *SanitizedEnv) SetGitConfigFromMap(m map[string]string) {
 func (s *SanitizedEnv) buildGitConfigEnv() string {
 	var parts []string
 	for k, v := range s.gitConfig {
-		// Quote the value to handle special characters
+		// Escape single quotes in key and value to prevent injection
+		// Replace ' with '\'' (end quote, escaped quote, start quote)
+		escapedKey := strings.ReplaceAll(k, "'", `'\''`)
+		escapedVal := strings.ReplaceAll(v, "'", `'\''`)
 		// Git expects format: 'section.key=value'
-		parts = append(parts, fmt.Sprintf("'%s=%s'", k, v))
+		parts = append(parts, fmt.Sprintf("'%s=%s'", escapedKey, escapedVal))
 	}
 	return "GIT_CONFIG_PARAMETERS=" + strings.Join(parts, " ")
 }

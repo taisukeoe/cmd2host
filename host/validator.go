@@ -59,7 +59,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 	}
 
 	// Extract and validate policy-specific parameters
-	policyReq := extractPolicyParams(req, op)
+	policyReq := extractPolicyParams(req)
 
 	// Validate branch constraint (for git operations)
 	if policyReq.Branch != "" {
@@ -85,7 +85,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 }
 
 // extractPolicyParams extracts policy-relevant parameters from the request
-func extractPolicyParams(req OperationRequest, _ *Operation) PolicyValidationRequest {
+func extractPolicyParams(req OperationRequest) PolicyValidationRequest {
 	policyReq := PolicyValidationRequest{
 		OperationID: req.Operation,
 		Params:      req.Params,
