@@ -36,7 +36,38 @@ if [[ -n "$remote_url" ]]; then
     fi
 fi
 
+# For gh command: auto-add -R flag if repo is detected and not already specified
 ARGS=("$@")
+if [[ "$CMD_NAME" == "gh" && -n "$CURRENT_REPO" ]]; then
+    # Subcommands that work with repositories and support -R flag
+    repo_subcommands="pr issue run"
+    first_arg="${1:-}"
+
+    # Check if this subcommand needs -R
+    needs_repo=false
+    for subcmd in $repo_subcommands; do
+        if [[ "$first_arg" == "$subcmd" ]]; then
+            needs_repo=true
+            break
+        fi
+    done
+
+    if [[ "$needs_repo" == "true" ]]; then
+        # Check if -R or --repo is already specified
+        has_repo_flag=false
+        for arg in "$@"; do
+            if [[ "$arg" == "-R" || "$arg" == "--repo" || "$arg" =~ ^-R.+ || "$arg" =~ ^--repo=.+ ]]; then
+                has_repo_flag=true
+                break
+            fi
+        done
+
+        # Auto-add -R if not specified
+        if [[ "$has_repo_flag" == "false" ]]; then
+            ARGS=("$@" "-R" "$CURRENT_REPO")
+        fi
+    fi
+fi
 
 # Build JSON args array
 ARGS_JSON="["
