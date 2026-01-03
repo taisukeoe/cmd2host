@@ -6,8 +6,8 @@ LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.user.cmd2host.plist"
 
 echo "Uninstalling cmd2host..."
 
-# Stop daemon
-if launchctl list 2>/dev/null | grep -q "com.user.cmd2host"; then
+# Stop daemon (use direct check to avoid SIGPIPE with pipefail)
+if launchctl list com.user.cmd2host >/dev/null 2>&1; then
     launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
     echo "Daemon stopped"
 fi
