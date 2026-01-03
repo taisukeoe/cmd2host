@@ -1,13 +1,17 @@
 {
   "listen_address": "127.0.0.1",
   "listen_port": 19876,
-  "allowed_repositories": ["taisukeoe/cmd2host"],
   "commands": {
     "gh": {
       "timeout": 60,
       "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run ", "^--version$"],
       "denied": ["[;&|`$]", "^auth (login|logout|token)", "^config"],
-      "repo_arg_patterns": ["--repo[= ]([^ ]+)", "-R[= ]?([^ ]+)"]
+      "repo_extract_patterns": [
+        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
+        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
+        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
+        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
+      ]
     }
   }
 }

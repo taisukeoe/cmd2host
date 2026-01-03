@@ -48,4 +48,4 @@ done
 echo ""
 echo "cmd2host feature installed."
 echo "Ensure cmd2host daemon is running on host:"
-echo "  curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos \"owner/repo\""
+echo "  curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash"

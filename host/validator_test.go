@@ -13,12 +13,16 @@ func setupTestConfig(t *testing.T) *Config {
 	configPath := filepath.Join(tmpDir, "config.json")
 
 	configContent := `{
-		"allowed_repositories": ["owner/repo1", "owner/repo2"],
 		"commands": {
 			"gh": {
-				"allowed": ["^pr ", "^issue ", "^auth status$"],
+				"allowed": ["^pr ", "^issue ", "^auth status$", "^repo view", "^api repos/"],
 				"denied": ["[;&|]", "^auth (login|logout)"],
-				"repo_arg_patterns": ["--repo[= ]([^ ]+)", "-R[= ]?([^ ]+)"]
+				"repo_extract_patterns": [
+					{"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
+					{"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
+					{"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
+					{"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
+				]
 			}
 		}
 	}`
@@ -67,7 +71,7 @@ func TestValidateCommand_AllowedCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := validator.ValidateCommand(tt.cmd, tt.args)
+			result := validator.ValidateCommand(tt.cmd, tt.args, "")
 			if result.OK != tt.wantOK {
 				t.Errorf("ValidateCommand() OK = %v, want %v, message = %s", result.OK, tt.wantOK, result.Message)
 			}
@@ -108,7 +112,7 @@ func TestValidateCommand_DeniedPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := validator.ValidateCommand("gh", tt.args)
+			result := validator.ValidateCommand("gh", tt.args, "")
 			if result.OK != tt.wantOK {
 				t.Errorf("ValidateCommand() OK = %v, want %v", result.OK, tt.wantOK)
 			}
@@ -136,7 +140,7 @@ func TestValidateCommand_NotInWhitelist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := validator.ValidateCommand("gh", tt.args)
+			result := validator.ValidateCommand("gh", tt.args, "")
 			if result.OK {
 				t.Error("ValidateCommand() should deny command not in whitelist")
 			}
@@ -148,7 +152,7 @@ func TestValidateCommand_UnknownCommand(t *testing.T) {
 	config := setupTestConfig(t)
 	validator := NewValidator(config)
 
-	result := validator.ValidateCommand("unknown", []string{"arg1"})
+	result := validator.ValidateCommand("unknown", []string{"arg1"}, "")
 	if result.OK {
 		t.Error("ValidateCommand() should deny unknown command")
 	}
@@ -157,40 +161,57 @@ func TestValidateCommand_UnknownCommand(t *testing.T) {
 	}
 }
 
-func TestValidateRepository_AllowedRepo(t *testing.T) {
+func TestValidateRepository_CurrentRepoRestriction(t *testing.T) {
 	config := setupTestConfig(t)
 	validator := NewValidator(config)
 
 	tests := []struct {
-		name   string
-		args   []string
-		wantOK bool
+		name        string
+		args        []string
+		currentRepo string
+		wantOK      bool
 	}{
 		{
-			name:   "allowed repo with -R flag",
-			args:   []string{"pr", "list", "-R", "owner/repo1"},
-			wantOK: true,
+			name:        "same repo with -R flag is allowed",
+			args:        []string{"pr", "list", "-R", "owner/repo1"},
+			currentRepo: "owner/repo1",
+			wantOK:      true,
 		},
 		{
-			name:   "allowed repo with --repo flag",
-			args:   []string{"pr", "list", "--repo", "owner/repo2"},
-			wantOK: true,
+			name:        "same repo with --repo flag is allowed",
+			args:        []string{"pr", "list", "--repo", "owner/repo1"},
+			currentRepo: "owner/repo1",
+			wantOK:      true,
 		},
 		{
-			name:   "not allowed repo",
-			args:   []string{"pr", "list", "-R", "other/repo"},
-			wantOK: false,
+			name:        "different repo is denied",
+			args:        []string{"pr", "list", "-R", "other/repo"},
+			currentRepo: "owner/repo1",
+			wantOK:      false,
 		},
 		{
-			name:   "no repo specified (allowed)",
-			args:   []string{"pr", "list"},
-			wantOK: true,
+			name:        "no repo specified is allowed (implicit current repo)",
+			args:        []string{"pr", "list"},
+			currentRepo: "owner/repo1",
+			wantOK:      true,
+		},
+		{
+			name:        "empty currentRepo denies explicit repo",
+			args:        []string{"pr", "list", "-R", "any/repo"},
+			currentRepo: "",
+			wantOK:      false,
+		},
+		{
+			name:        "empty currentRepo allows no-repo commands",
+			args:        []string{"pr", "list"},
+			currentRepo: "",
+			wantOK:      true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := validator.ValidateCommand("gh", tt.args)
+			result := validator.ValidateCommand("gh", tt.args, tt.currentRepo)
 			if result.OK != tt.wantOK {
 				t.Errorf("ValidateCommand() OK = %v, want %v, message = %s", result.OK, tt.wantOK, result.Message)
 			}
@@ -198,34 +219,100 @@ func TestValidateRepository_AllowedRepo(t *testing.T) {
 	}
 }
 
-func TestValidateRepository_EmptyAllowedList(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
-
-	// Config without allowed_repositories
-	configContent := `{
-		"commands": {
-			"gh": {
-				"allowed": ["^pr "],
-				"repo_arg_patterns": ["-R[= ]?([^ ]+)"]
-			}
-		}
-	}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
-	}
-
-	config, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig failed: %v", err)
-	}
-
+func TestValidateRepository_PositionalRepoExtraction(t *testing.T) {
+	config := setupTestConfig(t)
 	validator := NewValidator(config)
 
-	// Any repo should be allowed when list is empty
-	result := validator.ValidateCommand("gh", []string{"pr", "list", "-R", "any/repo"})
-	if !result.OK {
-		t.Errorf("Empty allowed list should allow any repo, got: %s", result.Message)
+	tests := []struct {
+		name        string
+		args        []string
+		currentRepo string
+		wantOK      bool
+	}{
+		{
+			name:        "repo view same repo is allowed",
+			args:        []string{"repo", "view", "owner/repo1"},
+			currentRepo: "owner/repo1",
+			wantOK:      true,
+		},
+		{
+			name:        "repo view different repo is denied",
+			args:        []string{"repo", "view", "other/repo"},
+			currentRepo: "owner/repo1",
+			wantOK:      false,
+		},
+		{
+			name:        "api repos same repo is allowed",
+			args:        []string{"api", "repos/owner/repo1/pulls"},
+			currentRepo: "owner/repo1",
+			wantOK:      true,
+		},
+		{
+			name:        "api repos different repo is denied",
+			args:        []string{"api", "repos/other/repo/pulls"},
+			currentRepo: "owner/repo1",
+			wantOK:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := validator.ValidateCommand("gh", tt.args, tt.currentRepo)
+			if result.OK != tt.wantOK {
+				t.Errorf("ValidateCommand() OK = %v, want %v, message = %s", result.OK, tt.wantOK, result.Message)
+			}
+		})
+	}
+}
+
+func TestExtractRepositories(t *testing.T) {
+	config := setupTestConfig(t)
+	validator := NewValidator(config)
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantRepos []string
+	}{
+		{
+			name:      "-R flag extraction",
+			args:      []string{"pr", "list", "-R", "owner/repo"},
+			wantRepos: []string{"owner/repo"},
+		},
+		{
+			name:      "--repo flag extraction",
+			args:      []string{"pr", "list", "--repo", "owner/repo"},
+			wantRepos: []string{"owner/repo"},
+		},
+		{
+			name:      "repo view positional extraction",
+			args:      []string{"repo", "view", "owner/repo"},
+			wantRepos: []string{"owner/repo"},
+		},
+		{
+			name:      "api repos path extraction",
+			args:      []string{"api", "repos/owner/repo/pulls"},
+			wantRepos: []string{"owner/repo"},
+		},
+		{
+			name:      "no repo specified",
+			args:      []string{"pr", "list"},
+			wantRepos: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repos := validator.extractRepositories("gh", tt.args)
+			if len(repos) != len(tt.wantRepos) {
+				t.Errorf("extractRepositories() = %v, want %v", repos, tt.wantRepos)
+				return
+			}
+			for i, repo := range repos {
+				if repo != tt.wantRepos[i] {
+					t.Errorf("extractRepositories()[%d] = %q, want %q", i, repo, tt.wantRepos[i])
+				}
+			}
+		})
 	}
 }

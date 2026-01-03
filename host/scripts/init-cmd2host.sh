@@ -13,12 +13,13 @@ set -euo pipefail
 
 CMD2HOST_BIN="${HOME}/.cmd2host/cmd2host"
 TOKEN_DIR="${HOME}/.cmd2host/tokens"
-SESSION_TOKEN_FILE=".devcontainer/.session-token"
+SESSION_DIR=".devcontainer/.session"
+SESSION_TOKEN_FILE="${SESSION_DIR}/token"
 
 # Check if cmd2host is installed
 if [[ ! -x "$CMD2HOST_BIN" ]]; then
     echo "Warning: cmd2host is not installed on host" >&2
-    echo "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos \"owner/repo\"" >&2
+    echo "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash" >&2
     echo "Some commands may not work in the container" >&2
     exit 0
 fi
@@ -33,14 +34,14 @@ TOKEN_HASH=$(echo -n "$SESSION_TOKEN" | "$CMD2HOST_BIN" --hash-token)
 mkdir -p "$TOKEN_DIR"
 touch "$TOKEN_DIR/$TOKEN_HASH"
 
-# Ensure .session-token is in .devcontainer/.gitignore
+# Ensure .session/ is in .devcontainer/.gitignore
 GITIGNORE_FILE=".devcontainer/.gitignore"
-if [[ ! -f "$GITIGNORE_FILE" ]] || ! grep -qxF '.session-token' "$GITIGNORE_FILE" 2>/dev/null; then
-    echo '.session-token' >> "$GITIGNORE_FILE"
+if [[ ! -f "$GITIGNORE_FILE" ]] || ! grep -qxF '.session/' "$GITIGNORE_FILE" 2>/dev/null; then
+    echo '.session/' >> "$GITIGNORE_FILE"
 fi
 
-# Write session token to workspace (will be mounted into container)
-# Use temp file to avoid race condition where file has default permissions briefly
+# Create session directory and write token
+mkdir -p "$SESSION_DIR"
 TEMP_TOKEN=$(mktemp)
 chmod 600 "$TEMP_TOKEN"
 echo -n "$SESSION_TOKEN" > "$TEMP_TOKEN"

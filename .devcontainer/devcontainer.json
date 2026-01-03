@@ -3,6 +3,7 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
+  "workspaceFolder": "/workspaces/cmd2host",
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "1.25"
@@ -16,7 +17,9 @@
     "source=claude-config-cmd2host,target=/home/vscode/.claude,type=volume",
     "source=claude-data-cmd2host,target=/home/vscode/.local/share/claude,type=volume",
     "source=codex-config-cmd2host,target=/home/vscode/.codex,type=volume",
-    "source=${localWorkspaceFolder}/.devcontainer/.session-token,target=/run/cmd2host-token,type=bind,readonly"
+    "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly",
+    // Shadow .session directory from workspace path (security)
+    "source=cmd2host-session-shadow,target=/workspaces/cmd2host/.devcontainer/.session,type=volume"
   ],
   "containerEnv": {
     "HOST_CMD_PROXY_HOST": "host.docker.internal",

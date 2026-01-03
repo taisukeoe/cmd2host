@@ -19,9 +19,10 @@ const (
 
 // Request represents an incoming command request
 type Request struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-	Token   string   `json:"token"`
+	Command     string   `json:"command"`
+	Args        []string `json:"args"`
+	Token       string   `json:"token"`
+	CurrentRepo string   `json:"current_repo"`
 }
 
 // Server handles TCP connections and command proxying
@@ -96,7 +97,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	fmt.Printf("[%s] %s\n", req.Command, strings.Join(req.Args, " "))
 
 	// Validate command
-	result := s.validator.ValidateCommand(req.Command, req.Args)
+	result := s.validator.ValidateCommand(req.Command, req.Args, req.CurrentRepo)
 	if !result.OK {
 		fmt.Printf("  -> DENIED: %s\n", result.Message)
 		resp := ExecuteResult{
@@ -152,11 +153,7 @@ func (s *Server) Run() error {
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
 	fmt.Printf("Configured commands: %v\n", s.commandNames())
-	if len(s.config.AllowedRepositories) > 0 {
-		fmt.Printf("Allowed repositories: %v\n", s.config.AllowedRepositories)
-	} else {
-		fmt.Println("Allowed repositories: all")
-	}
+	fmt.Println("Repository restriction: current repo only (sent by client)")
 	fmt.Println()
 
 	for {

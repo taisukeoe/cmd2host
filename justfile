@@ -37,3 +37,15 @@ test-all: test test-host
 # Clean build artifacts
 clean:
     rm -rf dist/
+
+# Install daemon locally (downloads from GitHub Releases)
+install:
+    ./host/scripts/install.sh
+
+# Install daemon locally, building from source
+install-build:
+    ./host/scripts/install.sh --build
+
+# Uninstall daemon
+uninstall:
+    ~/.cmd2host/uninstall.sh

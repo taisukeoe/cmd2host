@@ -7,16 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GITHUB_REPO="taisukeoe/cmd2host"
 
 # Parse arguments
-REPOS=""
-APPEND=false
 BUILD_FROM_SOURCE=false
 
 usage() {
-    echo "Usage: $0 [--repos \"owner/repo1,owner/repo2\"] [--append] [--build]"
+    echo "Usage: $0 [--build]"
     echo ""
     echo "Options:"
-    echo "  --repos    Comma-separated list of allowed repositories"
-    echo "  --append   Add repos to existing config (instead of overwriting)"
     echo "  --build    Build from source (requires Go installed)"
     echo "  -h, --help Show this help message"
     exit 0
@@ -24,48 +20,17 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --repos) REPOS="$2"; shift 2 ;;
-        --append) APPEND=true; shift ;;
         --build) BUILD_FROM_SOURCE=true; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# Append mode: merge repos into existing config
-if [[ "$APPEND" == "true" ]]; then
-    if [[ ! -f "$INSTALL_DIR/config.json" ]]; then
-        echo "Error: --append requires existing installation"
-        echo "Run without --append first"
-        exit 1
-    fi
-    if [[ -z "$REPOS" ]]; then
-        echo "Error: --append requires --repos"
-        exit 1
-    fi
-
-    python3 -c "
-import json
-config_file = '$INSTALL_DIR/config.json'
-with open(config_file) as f:
-    config = json.load(f)
-new_repos = [r.strip() for r in '$REPOS'.split(',') if r.strip()]
-existing = set(config.get('allowed_repositories', []))
-config['allowed_repositories'] = sorted(existing | set(new_repos))
-with open(config_file, 'w') as f:
-    json.dump(config, f, indent=2)
-print(f\"Added repos: {new_repos}\")
-print(f\"Total repos: {config['allowed_repositories']}\")
-"
-    exit 0
-fi
-
 # Check if already installed
 if [[ -d "$INSTALL_DIR" ]]; then
     echo "cmd2host already installed at $INSTALL_DIR"
     echo ""
-    echo "To add more repos:  $0 --repos \"owner/repo\" --append"
-    echo "To reinstall:       ~/.cmd2host/uninstall.sh && $0 --repos \"...\""
+    echo "To reinstall: ~/.cmd2host/uninstall.sh && $0"
     exit 1
 fi
 
@@ -101,15 +66,25 @@ download_binary() {
 
     echo "Downloading cmd2host for ${platform}..."
 
-    # Get latest release URL
+    # Try gh CLI first (works for private repos if authenticated)
+    if command -v gh &> /dev/null; then
+        if gh release download -R "${GITHUB_REPO}" -p "cmd2host-${platform}" -D "$(dirname "$binary_path")" --clobber 2>/dev/null; then
+            mv "$(dirname "$binary_path")/cmd2host-${platform}" "$binary_path"
+            echo "Downloaded from GitHub Releases (via gh)"
+            return 0
+        fi
+    fi
+
+    # Fall back to curl (only works for public repos)
     local download_url
     download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/cmd2host-${platform}"
 
     if curl -fsSL "$download_url" -o "$binary_path" 2>/dev/null; then
-        echo "Downloaded from GitHub Releases"
+        echo "Downloaded from GitHub Releases (via curl)"
         return 0
     else
         echo "Failed to download from GitHub Releases"
+        echo "(Private repos require gh CLI: brew install gh && gh auth login)"
         return 1
     fi
 }
@@ -127,7 +102,8 @@ if [[ "$BUILD_FROM_SOURCE" == "true" ]]; then
         exit 1
     fi
 
-    cd "$SCRIPT_DIR"
+    # Go files are in parent directory (host/), not scripts/
+    cd "$SCRIPT_DIR/.."
     go build -o "$BINARY_PATH" .
     echo "Built: $BINARY_PATH"
 
@@ -140,8 +116,8 @@ elif download_binary "$BINARY_PATH"; then
     # Downloaded from GitHub Releases
     :
 
-elif [[ -f "$SCRIPT_DIR/go.mod" ]]; then
-    # Fall back to building from source
+elif [[ -f "$SCRIPT_DIR/../go.mod" ]]; then
+    # Fall back to building from source (Go files are in parent directory)
     echo "Building cmd2host from source..."
 
     if ! command -v go &> /dev/null; then
@@ -152,7 +128,7 @@ elif [[ -f "$SCRIPT_DIR/go.mod" ]]; then
         exit 1
     fi
 
-    cd "$SCRIPT_DIR"
+    cd "$SCRIPT_DIR/.."
     go build -o "$BINARY_PATH" .
     echo "Built: $BINARY_PATH"
 
@@ -161,7 +137,7 @@ else
     echo ""
     echo "Options:"
     echo "  1. Download manually from: https://github.com/${GITHUB_REPO}/releases"
-    echo "  2. Install Go and run: $0 --build --repos \"...\""
+    echo "  2. Install Go and run: $0 --build"
     exit 1
 fi
 
@@ -178,30 +154,30 @@ else
 fi
 [[ -f "$UNINSTALL_SCRIPT" ]] && chmod +x "$UNINSTALL_SCRIPT"
 
-# Get repos if not provided
-if [[ -z "$REPOS" ]]; then
-    echo "Enter allowed repositories (comma-separated, e.g., owner/repo1,owner/repo2):"
-    read -r REPOS
+# Detect gh path (launchd doesn't inherit user's PATH)
+GH_PATH=$(which gh 2>/dev/null || echo "")
+if [[ -z "$GH_PATH" ]]; then
+    echo "Warning: gh CLI not found in PATH"
+    echo "Install with: brew install gh"
+    GH_PATH="gh"  # fallback, will fail at runtime
 fi
-
-# Convert comma-separated to JSON array using Python (no jq dependency)
-REPOS_JSON=$(python3 -c "
-import json
-repos = [r.strip() for r in '$REPOS'.split(',') if r.strip()]
-print(json.dumps(repos))
-")
 
 cat > "$INSTALL_DIR/config.json" << EOF
 {
   "listen_address": "127.0.0.1",
   "listen_port": 9876,
-  "allowed_repositories": $REPOS_JSON,
   "commands": {
     "gh": {
+      "path": "$GH_PATH",
       "timeout": 60,
       "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
       "denied": ["[;&|\`\$]", "^auth (login|logout|token)", "^config"],
-      "repo_arg_patterns": ["--repo[= ]([^ ]+)", "-R[= ]?([^ ]+)"]
+      "repo_extract_patterns": [
+        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
+        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
+        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
+        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
+      ]
     }
   }
 }
@@ -238,14 +214,13 @@ EOF
 launchctl load "$LAUNCHD_PLIST"
 
 echo ""
-echo "cmd2host (Go) installed to $INSTALL_DIR"
+echo "cmd2host installed to $INSTALL_DIR"
 echo "Daemon started on port 9876"
 echo ""
 echo "Verify: lsof -i :9876"
 echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
 echo ""
-echo "To add repos:   $0 --repos \"owner/repo\" --append"
-echo "To uninstall:   $INSTALL_DIR/uninstall.sh"
+echo "To uninstall: $INSTALL_DIR/uninstall.sh"
 echo ""
-echo "Token authentication is enabled."
-echo "See README.md for devcontainer.json configuration."
+echo "Repository restriction: Only the current repository (detected from git remote) is allowed."
+echo "Token authentication is enabled. See README.md for devcontainer.json configuration."

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -42,7 +43,12 @@ func (e *Executor) Execute(cmdName string, args []string) ExecuteResult {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
-	stdout, err := cmd.Output()
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 
 	if err != nil {
 		// Check if it was a timeout
@@ -57,8 +63,8 @@ func (e *Executor) Execute(cmdName string, args []string) ExecuteResult {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return ExecuteResult{
 				ExitCode: exitErr.ExitCode(),
-				Stdout:   string(stdout),
-				Stderr:   string(exitErr.Stderr),
+				Stdout:   stdout.String(),
+				Stderr:   stderr.String(),
 			}
 		}
 
@@ -84,6 +90,7 @@ func (e *Executor) Execute(cmdName string, args []string) ExecuteResult {
 
 	return ExecuteResult{
 		ExitCode: 0,
-		Stdout:   string(stdout),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 	}
 }

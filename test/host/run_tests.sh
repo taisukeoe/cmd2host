@@ -111,10 +111,16 @@ test_request \
     "gh version"
 
 test_request \
-    "gh repo view -R allowed repo" \
-    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"],"token":"'"$TEST_TOKEN"'"}' \
+    "gh repo view same repo (allowed)" \
+    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
     "0" \
     ""
+
+test_request \
+    "gh repo view different repo (denied)" \
+    '{"command":"gh","args":["repo","view","other/repo","--json","name"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "1" \
+    "not allowed"
 
 test_request \
     "gh config list (denied pattern)" \
@@ -124,9 +130,15 @@ test_request \
 
 test_request \
     "gh pr list -R disallowed repo" \
-    '{"command":"gh","args":["pr","list","-R","other/repo"],"token":"'"$TEST_TOKEN"'"}' \
+    '{"command":"gh","args":["pr","list","-R","other/repo"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
     "1" \
-    "not in whitelist"
+    "not allowed"
+
+test_request \
+    "gh api repos/other/repo (denied - different repo)" \
+    '{"command":"gh","args":["api","repos/other/repo/pulls"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "1" \
+    "not allowed"
 
 test_request \
     "gh auth login (denied pattern)" \

@@ -81,19 +81,18 @@ echo '{"command":"gh","args":["--version"]}' | nc host.docker.internal 9876
 
 ```bash
 # Download and install (downloads binary from GitHub Releases)
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos "owner/repo"
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
 
 # Or build from source
-./host/scripts/install.sh --build --repos "owner/repo"
+./host/scripts/install.sh --build
 ```
 
 ## Security Model
 
 The daemon validates commands via `config.json`:
-- `allowed_repositories` - Whitelist of repos (e.g., `["owner/repo"]`)
 - `commands.<cmd>.allowed` - Regex patterns for allowed subcommands
 - `commands.<cmd>.denied` - Regex patterns for blocked subcommands (checked first)
-- `commands.<cmd>.repo_arg_patterns` - Regexes to extract repo from args for validation
+- `commands.<cmd>.repo_extract_patterns` - Regexes to extract repo from args for current-repo validation
 
 ## Protocol
 
