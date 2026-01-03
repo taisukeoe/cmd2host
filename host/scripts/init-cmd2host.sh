@@ -6,8 +6,8 @@
 # and configure devcontainer.json with:
 #   "initializeCommand": ".devcontainer/init-cmd2host.sh"
 #
-# Note: .devcontainer/init-cmd2host.sh in this repo is used for
-# cmd2host's own devcontainer. Keep both in sync when modifying.
+# Note: .devcontainer/init-cmd2host.sh in this repo is a symlink
+# to this file for cmd2host's own devcontainer.
 
 set -euo pipefail
 
@@ -30,9 +30,25 @@ SESSION_TOKEN=$(openssl rand -hex 32)
 # Compute BLAKE3 hash using cmd2host binary (token via stdin to avoid ps exposure)
 TOKEN_HASH=$(echo -n "$SESSION_TOKEN" | "$CMD2HOST_BIN" --hash-token)
 
-# Create token file (empty file, mtime used for expiration)
+# Detect current repository from git remote (for repository restriction)
+CURRENT_REPO=""
+if [[ -d ".git" ]]; then
+    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    if [[ -n "$remote_url" ]]; then
+        # Extract owner/repo from GitHub URL
+        # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
+        CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
+        # Validate format (owner/repo) - require alphanumeric start, match cmd-wrapper.sh
+        if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            CURRENT_REPO=""
+        fi
+    fi
+fi
+
+# Create token file with JSON data (mtime used for expiration)
+# JSON format allows future extension for other project-specific data
 mkdir -p "$TOKEN_DIR"
-touch "$TOKEN_DIR/$TOKEN_HASH"
+echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 
 # Ensure .session/ is in .devcontainer/.gitignore
 GITIGNORE_FILE=".devcontainer/.gitignore"

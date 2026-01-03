@@ -23,16 +23,18 @@ fi
 # Token is 64 hex chars only (validated on generation), no escaping needed
 TOKEN_ESCAPED="$TOKEN"
 
-# Detect current repository from git remote (for repository restriction)
+# Detect current repository from git remote for auto -R flag convenience.
+# NOTE: This is NOT used for security validation - repo binding is done at token
+# generation time on the host side. This is purely for UX to auto-add -R flag.
 CURRENT_REPO=""
 remote_url=$(git remote get-url origin 2>/dev/null || echo "")
 if [[ -n "$remote_url" ]]; then
     # Extract owner/repo from GitHub URL
     # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
     CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-    # Validate format and characters: owner/repo with valid GitHub slug characters only
+    # Validate format: owner/repo with alphanumeric start and valid GitHub slug characters
     # This strict validation also prevents JSON injection via malicious git remote URLs
-    if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
         CURRENT_REPO=""
     fi
 fi
@@ -86,7 +88,9 @@ for arg in "${ARGS[@]}"; do
 done
 ARGS_JSON+="]"
 
-REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\",\"current_repo\":\"$CURRENT_REPO\"}"
+# Note: current_repo is NOT sent in request - repo binding is done at token generation
+# time on the host side for security (prevents container spoofing)
+REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\"}"
 
 # Send request to daemon
 RESPONSE=$(echo "$REQUEST" | nc -w 10 "$HOST" "$PORT" 2>/dev/null) || {

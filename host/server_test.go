@@ -48,10 +48,10 @@ func setupServerConfig(t *testing.T, port int) (*Config, *TokenStore) {
 	}
 	tokenStore := &TokenStore{dir: tokenDir}
 
-	// Create a valid test token
+	// Create a valid test token with JSON content
 	hash := hashToken(testToken)
 	tokenPath := filepath.Join(tokenDir, hash)
-	if err := os.WriteFile(tokenPath, []byte{}, 0600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 

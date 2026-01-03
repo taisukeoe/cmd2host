@@ -1,17 +1,31 @@
 // auth.go provides session token authentication for cmd2host.
-// Tokens are BLAKE3 hashed and stored as empty files in ~/.cmd2host/tokens/.
+// Tokens are BLAKE3 hashed and stored as JSON files in ~/.cmd2host/tokens/.
 // Token validity is determined by file mtime (24-hour TTL).
 package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/zeebo/blake3"
 )
+
+// TokenData contains project-specific data stored with the token.
+// This struct is extensible for future use cases beyond repository restriction.
+type TokenData struct {
+	// Repo is the GitHub repository (owner/repo) bound to this token.
+	// Empty string means repo could not be detected at token creation time;
+	// in this case, commands that explicitly specify a repository will be denied,
+	// while repo-agnostic commands (e.g., gh --version) are still allowed.
+	// See validator.go:validateRepository for the enforcement logic.
+	Repo string `json:"repo"`
+	// Future fields can be added here (e.g., workspace path, project ID, etc.)
+}
 
 const (
 	tokenTTL          = 24 * time.Hour
@@ -56,8 +70,15 @@ func isValidTokenFormat(token string) bool {
 
 // IsValid checks if the given token is valid and not expired
 func (ts *TokenStore) IsValid(token string) bool {
+	_, valid := ts.GetTokenData(token)
+	return valid
+}
+
+// GetTokenData validates the token and returns associated project data.
+// Returns the token data and true if valid, empty TokenData and false otherwise.
+func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 	if token == "" || !isValidTokenFormat(token) {
-		return false
+		return TokenData{}, false
 	}
 
 	hashStr := hashToken(token)
@@ -65,10 +86,29 @@ func (ts *TokenStore) IsValid(token string) bool {
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return false // File does not exist
+		return TokenData{}, false // File does not exist
 	}
 
-	return time.Since(info.ModTime()) < tokenTTL
+	// Check TTL
+	if time.Since(info.ModTime()) >= tokenTTL {
+		return TokenData{}, false
+	}
+
+	// Read and parse JSON content
+	content, err := os.ReadFile(path)
+	if err != nil {
+		// Log file system errors for debugging (permission denied, I/O errors, etc.)
+		// Only show first 8 chars of hash to avoid leaking full token hash in logs
+		log.Printf("Warning: failed to read token file %s...: %v", hashStr[:8], err)
+		return TokenData{}, false
+	}
+
+	var data TokenData
+	if err := json.Unmarshal(content, &data); err != nil {
+		return TokenData{}, false
+	}
+
+	return data, true
 }
 
 // CleanupExpired removes expired token files
