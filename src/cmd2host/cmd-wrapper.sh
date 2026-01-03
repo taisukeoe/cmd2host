@@ -92,7 +92,7 @@ RESPONSE=$(echo "$REQUEST" | nc -w 10 "$HOST" "$PORT" 2>/dev/null) || {
     echo "Error: Cannot connect to cmd2host daemon at $HOST:$PORT" >&2
     echo "" >&2
     echo "Make sure cmd2host is installed and running on the host:" >&2
-    echo "  curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos \"owner/repo\"" >&2
+    echo "  curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash" >&2
     echo "" >&2
     echo "Check status: lsof -i :$PORT" >&2
     exit 1

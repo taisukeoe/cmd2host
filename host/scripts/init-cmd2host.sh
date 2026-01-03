@@ -18,7 +18,7 @@ SESSION_TOKEN_FILE=".devcontainer/.session-token"
 # Check if cmd2host is installed
 if [[ ! -x "$CMD2HOST_BIN" ]]; then
     echo "Warning: cmd2host is not installed on host" >&2
-    echo "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --repos \"owner/repo\"" >&2
+    echo "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash" >&2
     echo "Some commands may not work in the container" >&2
     exit 0
 fi

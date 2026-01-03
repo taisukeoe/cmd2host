@@ -38,17 +38,13 @@ test-all: test test-host
 clean:
     rm -rf dist/
 
-# Install daemon locally (for private repo / development)
-install repos:
-    ./host/scripts/install.sh --repos "{{repos}}"
+# Install daemon locally (downloads from GitHub Releases)
+install:
+    ./host/scripts/install.sh
 
 # Install daemon locally, building from source
-install-build repos:
-    ./host/scripts/install.sh --build --repos "{{repos}}"
-
-# Add repos to existing installation
-install-append repos:
-    ./host/scripts/install.sh --repos "{{repos}}" --append
+install-build:
+    ./host/scripts/install.sh --build
 
 # Uninstall daemon
 uninstall:

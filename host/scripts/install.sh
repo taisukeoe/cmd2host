@@ -102,7 +102,8 @@ if [[ "$BUILD_FROM_SOURCE" == "true" ]]; then
         exit 1
     fi
 
-    cd "$SCRIPT_DIR"
+    # Go files are in parent directory (host/), not scripts/
+    cd "$SCRIPT_DIR/.."
     go build -o "$BINARY_PATH" .
     echo "Built: $BINARY_PATH"
 
@@ -115,8 +116,8 @@ elif download_binary "$BINARY_PATH"; then
     # Downloaded from GitHub Releases
     :
 
-elif [[ -f "$SCRIPT_DIR/go.mod" ]]; then
-    # Fall back to building from source
+elif [[ -f "$SCRIPT_DIR/../go.mod" ]]; then
+    # Fall back to building from source (Go files are in parent directory)
     echo "Building cmd2host from source..."
 
     if ! command -v go &> /dev/null; then
@@ -127,7 +128,7 @@ elif [[ -f "$SCRIPT_DIR/go.mod" ]]; then
         exit 1
     fi
 
-    cd "$SCRIPT_DIR"
+    cd "$SCRIPT_DIR/.."
     go build -o "$BINARY_PATH" .
     echo "Built: $BINARY_PATH"
 
@@ -136,7 +137,7 @@ else
     echo ""
     echo "Options:"
     echo "  1. Download manually from: https://github.com/${GITHUB_REPO}/releases"
-    echo "  2. Install Go and run: $0 --build --repos \"...\""
+    echo "  2. Install Go and run: $0 --build"
     exit 1
 fi
 
