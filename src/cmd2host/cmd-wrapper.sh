@@ -23,47 +23,20 @@ fi
 # Token is 64 hex chars only (validated on generation), no escaping needed
 TOKEN_ESCAPED="$TOKEN"
 
-# For gh command: auto-detect repository from git remote if -R/--repo not specified
-ARGS=("$@")
-if [[ "$CMD_NAME" == "gh" ]]; then
-    # Subcommands that work with repositories and support -R flag
-    repo_subcommands="pr issue repo run api"
-    first_arg="${1:-}"
-
-    # Check if this subcommand needs -R
-    needs_repo=false
-    for subcmd in $repo_subcommands; do
-        if [[ "$first_arg" == "$subcmd" ]]; then
-            needs_repo=true
-            break
-        fi
-    done
-
-    if [[ "$needs_repo" == "true" ]]; then
-        # Check if -R or --repo is already specified
-        has_repo_flag=false
-        for arg in "$@"; do
-            if [[ "$arg" == "-R" || "$arg" == "--repo" || "$arg" =~ ^-R.+ || "$arg" =~ ^--repo=.+ ]]; then
-                has_repo_flag=true
-                break
-            fi
-        done
-
-        # Auto-detect repo from git remote if not specified
-        if [[ "$has_repo_flag" == "false" ]]; then
-            remote_url=$(git remote get-url origin 2>/dev/null || echo "")
-            if [[ -n "$remote_url" ]]; then
-                # Extract owner/repo from GitHub URL
-                # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
-                repo=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-                if [[ -n "$repo" && "$repo" =~ ^[^/]+/[^/]+$ ]]; then
-                    # Append -R at the end to preserve subcommand position for validator
-                    ARGS=("$@" "-R" "$repo")
-                fi
-            fi
-        fi
+# Detect current repository from git remote (for repository restriction)
+CURRENT_REPO=""
+remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+if [[ -n "$remote_url" ]]; then
+    # Extract owner/repo from GitHub URL
+    # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
+    CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
+    # Validate format (owner/repo)
+    if [[ ! "$CURRENT_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+        CURRENT_REPO=""
     fi
 fi
+
+ARGS=("$@")
 
 # Build JSON args array
 ARGS_JSON="["
@@ -81,7 +54,7 @@ for arg in "${ARGS[@]}"; do
 done
 ARGS_JSON+="]"
 
-REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\"}"
+REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\",\"current_repo\":\"$CURRENT_REPO\"}"
 
 # Send request to daemon
 RESPONSE=$(echo "$REQUEST" | nc -w 10 "$HOST" "$PORT" 2>/dev/null) || {

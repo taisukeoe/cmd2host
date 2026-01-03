@@ -22,7 +22,7 @@ type ValidationResult struct {
 }
 
 // ValidateCommand checks if a command with given args is allowed
-func (v *Validator) ValidateCommand(cmdName string, args []string) ValidationResult {
+func (v *Validator) ValidateCommand(cmdName string, args []string, currentRepo string) ValidationResult {
 	cmdConfig, exists := v.config.Commands[cmdName]
 	if !exists {
 		return ValidationResult{
@@ -61,7 +61,7 @@ func (v *Validator) ValidateCommand(cmdName string, args []string) ValidationRes
 	}
 
 	// Check repository restriction
-	result := v.validateRepository(cmdName, args)
+	result := v.validateRepository(cmdName, args, currentRepo)
 	if !result.OK {
 		return result
 	}
@@ -69,28 +69,46 @@ func (v *Validator) ValidateCommand(cmdName string, args []string) ValidationRes
 	return ValidationResult{OK: true}
 }
 
-// validateRepository checks if repository in args is in whitelist
-func (v *Validator) validateRepository(cmdName string, args []string) ValidationResult {
-	if len(v.config.allowedReposSet) == 0 {
-		return ValidationResult{OK: true}
-	}
-
+// extractRepositories extracts repository names from command args using configured patterns
+func (v *Validator) extractRepositories(cmdName string, args []string) []string {
 	cmdConfig, exists := v.config.Commands[cmdName]
 	if !exists {
-		return ValidationResult{OK: true}
+		return nil
 	}
 
 	argsStr := strings.Join(args, " ")
+	var repos []string
 
-	for _, re := range cmdConfig.repoArgPatterns {
-		matches := re.FindStringSubmatch(argsStr)
-		if len(matches) > 1 {
-			repo := matches[1]
-			if !v.config.IsRepoAllowed(repo) {
-				return ValidationResult{
-					OK:      false,
-					Message: fmt.Sprintf("Repository '%s' not in whitelist", repo),
-				}
+	for _, pattern := range cmdConfig.repoExtractPatterns {
+		matches := pattern.re.FindStringSubmatch(argsStr)
+		if len(matches) > pattern.groupIndex {
+			repos = append(repos, matches[pattern.groupIndex])
+		}
+	}
+
+	return repos
+}
+
+// validateRepository checks if explicitly specified repositories match the current repo
+func (v *Validator) validateRepository(cmdName string, args []string, currentRepo string) ValidationResult {
+	// If no current repo is specified, skip repo restriction (allow all)
+	if currentRepo == "" {
+		return ValidationResult{OK: true}
+	}
+
+	repos := v.extractRepositories(cmdName, args)
+
+	// If no explicit repo is specified, allow (implicit current repo usage)
+	if len(repos) == 0 {
+		return ValidationResult{OK: true}
+	}
+
+	// Check all explicitly specified repositories
+	for _, repo := range repos {
+		if repo != currentRepo {
+			return ValidationResult{
+				OK:      false,
+				Message: fmt.Sprintf("Repository '%s' not allowed (current: %s)", repo, currentRepo),
 			}
 		}
 	}

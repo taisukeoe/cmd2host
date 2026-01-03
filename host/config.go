@@ -9,27 +9,35 @@ import (
 
 // Config represents the cmd2host configuration
 type Config struct {
-	ListenAddress       string                   `json:"listen_address"`
-	ListenPort          int                      `json:"listen_port"`
-	AllowedRepositories []string                 `json:"allowed_repositories"`
-	Commands            map[string]CommandConfig `json:"commands"`
-
-	// Compiled patterns (not serialized)
-	allowedReposSet map[string]struct{}
+	ListenAddress string                   `json:"listen_address"`
+	ListenPort    int                      `json:"listen_port"`
+	Commands      map[string]CommandConfig `json:"commands"`
 }
 
 // CommandConfig represents per-command configuration
 type CommandConfig struct {
-	Path            string   `json:"path"`
-	Timeout         int      `json:"timeout"`
-	Allowed         []string `json:"allowed"`
-	Denied          []string `json:"denied"`
-	RepoArgPatterns []string `json:"repo_arg_patterns"`
+	Path                string        `json:"path"`
+	Timeout             int           `json:"timeout"`
+	Allowed             []string      `json:"allowed"`
+	Denied              []string      `json:"denied"`
+	RepoExtractPatterns []RepoPattern `json:"repo_extract_patterns"`
 
 	// Compiled patterns (not serialized)
-	allowedPatterns  []*regexp.Regexp
-	deniedPatterns   []*regexp.Regexp
-	repoArgPatterns  []*regexp.Regexp
+	allowedPatterns     []*regexp.Regexp
+	deniedPatterns      []*regexp.Regexp
+	repoExtractPatterns []compiledRepoPattern
+}
+
+// RepoPattern defines a pattern to extract repository from command args
+type RepoPattern struct {
+	Pattern    string `json:"pattern"`
+	GroupIndex int    `json:"group_index"` // defaults to 1
+}
+
+// compiledRepoPattern holds the compiled regex and group index
+type compiledRepoPattern struct {
+	re         *regexp.Regexp
+	groupIndex int
 }
 
 // DefaultConfigPath returns the default config file path
@@ -61,12 +69,6 @@ func LoadConfig(path string) (*Config, error) {
 		config.ListenPort = 9876
 	}
 
-	// Build allowed repos set
-	config.allowedReposSet = make(map[string]struct{})
-	for _, repo := range config.AllowedRepositories {
-		config.allowedReposSet[repo] = struct{}{}
-	}
-
 	// Compile command patterns
 	for name, cmdConfig := range config.Commands {
 		if cmdConfig.Timeout == 0 {
@@ -94,13 +96,20 @@ func LoadConfig(path string) (*Config, error) {
 			cmdConfig.deniedPatterns = append(cmdConfig.deniedPatterns, re)
 		}
 
-		// Compile repo arg patterns
-		for _, pattern := range cmdConfig.RepoArgPatterns {
-			re, err := regexp.Compile(pattern)
+		// Compile repo extract patterns
+		for _, pattern := range cmdConfig.RepoExtractPatterns {
+			re, err := regexp.Compile(pattern.Pattern)
 			if err != nil {
 				return nil, err
 			}
-			cmdConfig.repoArgPatterns = append(cmdConfig.repoArgPatterns, re)
+			groupIndex := pattern.GroupIndex
+			if groupIndex == 0 {
+				groupIndex = 1 // default to group 1
+			}
+			cmdConfig.repoExtractPatterns = append(cmdConfig.repoExtractPatterns, compiledRepoPattern{
+				re:         re,
+				groupIndex: groupIndex,
+			})
 		}
 
 		config.Commands[name] = cmdConfig
@@ -109,11 +118,3 @@ func LoadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
-// IsRepoAllowed checks if a repository is in the whitelist
-func (c *Config) IsRepoAllowed(repo string) bool {
-	if len(c.allowedReposSet) == 0 {
-		return true
-	}
-	_, ok := c.allowedReposSet[repo]
-	return ok
-}

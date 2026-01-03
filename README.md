@@ -20,8 +20,7 @@ DevContainer                      Host Machine (macOS)
 ### 1. Install daemon on host (one-time)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
-  | bash -s -- --repos "owner/repo1,owner/repo2"
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
 ```
 
 ### 2. Add feature and token auth to devcontainer.json
@@ -55,12 +54,7 @@ Copy `host/scripts/init-cmd2host.sh` to your project's `.devcontainer/` director
 ### Install
 
 ```bash
-# Install with specific repositories
-curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
-  | bash -s -- --repos "owner/repo1,owner/repo2"
-
-# Add more repositories later
-~/.cmd2host/install.sh --repos "owner/another-repo" --append
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
 ```
 
 ### Verify
@@ -118,7 +112,7 @@ Token flow:
 
 The daemon validates commands against configurable rules:
 
-- **Allowed repositories**: Only specified repos can be accessed
+- **Current repository only**: Commands can only access the repository detected from the DevContainer's git remote
 - **Command allowlist**: Regex patterns for allowed subcommands
 - **Command denylist**: Regex patterns for blocked subcommands
 
@@ -130,11 +124,21 @@ Default `gh` config (in `~/.cmd2host/config.json`):
     "gh": {
       "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
       "denied": ["[;&|`$]", "^auth (login|logout|token)", "^config"],
-      "repo_arg_patterns": ["--repo[= ]([^ ]+)", "-R[= ]?([^ ]+)"]
+      "repo_extract_patterns": [
+        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
+        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
+        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
+        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
+      ]
     }
   }
 }
 ```
+
+Repository restriction works as follows:
+- The container's wrapper script detects the current repository from `git remote get-url origin`
+- If a command explicitly specifies a different repository (via `-R`, `--repo`, positional argument, or API path), it is denied
+- Commands without explicit repository specification are allowed (they use the implicit current repo)
 
 ## Environment Variables
 
