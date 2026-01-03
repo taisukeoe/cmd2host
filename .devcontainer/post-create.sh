@@ -63,6 +63,12 @@ if [[ -d "$WORKSPACE/mcp-server" ]]; then
     sudo mv /tmp/cmd2host-mcp /usr/local/bin/
     sudo chmod 755 /usr/local/bin/cmd2host-mcp
     echo "Installed: /usr/local/bin/cmd2host-mcp"
+
+    # Copy MCP config (since INSTALLMCPSERVER=false skips this in install.sh)
+    if [[ -f "$WORKSPACE/src/cmd2host/mcp.json" && ! -f "$WORKSPACE/.mcp.json" ]]; then
+        cp "$WORKSPACE/src/cmd2host/mcp.json" "$WORKSPACE/.mcp.json"
+        echo "Created: $WORKSPACE/.mcp.json"
+    fi
 fi
 
 echo ""

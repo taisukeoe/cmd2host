@@ -14,14 +14,14 @@ type ListOperationsInput struct{}
 
 // DescribeOperationInput is the input for cmd2host_describe_operation tool
 type DescribeOperationInput struct {
-	OperationID string `json:"operation_id" jsonschema:"description=The ID of the operation to describe"`
+	OperationID string `json:"operation_id" mcp:"The ID of the operation to describe"`
 }
 
 // RunOperationInput is the input for cmd2host_run_operation tool
 type RunOperationInput struct {
-	OperationID string                 `json:"operation_id" jsonschema:"description=The ID of the operation to run"`
-	Params      map[string]interface{} `json:"params,omitempty" jsonschema:"description=Parameters for the operation"`
-	Flags       []string               `json:"flags,omitempty" jsonschema:"description=Optional flags for the operation (e.g. --state open)"`
+	OperationID string                 `json:"operation_id" mcp:"The ID of the operation to run"`
+	Params      map[string]interface{} `json:"params,omitempty" mcp:"Parameters for the operation"`
+	Flags       []string               `json:"flags,omitempty" mcp:"Optional flags for the operation"`
 }
 
 // ToolHandler manages MCP tool registration and execution

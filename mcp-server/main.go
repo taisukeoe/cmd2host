@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -16,9 +17,10 @@ const version = "0.1.0"
 
 func main() {
 	var (
-		daemonHost = flag.String("host", "host.docker.internal", "cmd2host daemon host")
-		daemonPort = flag.Int("port", 9876, "cmd2host daemon port")
-		token      = flag.String("token", "", "Authentication token (or set CMD2HOST_TOKEN env var)")
+		daemonHost  = flag.String("host", "host.docker.internal", "cmd2host daemon host")
+		daemonPort  = flag.Int("port", 9876, "cmd2host daemon port")
+		token       = flag.String("token", "", "Authentication token")
+		tokenFile   = flag.String("token-file", "", "Path to file containing authentication token")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 	)
 	flag.Parse()
@@ -28,13 +30,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Get token from flag or environment
+	// Get token from flag, file, or environment (in order of precedence)
 	authToken := *token
+	if authToken == "" && *tokenFile != "" {
+		data, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			log.Fatalf("Error reading token file: %v", err)
+		}
+		authToken = strings.TrimSpace(string(data))
+	}
 	if authToken == "" {
 		authToken = os.Getenv("CMD2HOST_TOKEN")
 	}
 	if authToken == "" {
-		log.Fatal("Error: token is required. Use -token flag or set CMD2HOST_TOKEN environment variable")
+		log.Fatal("Error: token is required. Use -token, -token-file, or set CMD2HOST_TOKEN environment variable")
 	}
 
 	// Create client

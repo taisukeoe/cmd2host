@@ -87,7 +87,19 @@ done
 
 # Install MCP server if requested
 if [[ "$INSTALLMCPSERVER" == "true" ]]; then
-    install_mcp_server || echo "MCP server installation skipped"
+    if install_mcp_server; then
+        # Copy MCP config to workspace(s)
+        if [[ -f "$SCRIPT_DIR/mcp.json" && -d "/workspaces" ]]; then
+            for ws in /workspaces/*/; do
+                if [[ -d "$ws" && ! -f "${ws}.mcp.json" ]]; then
+                    cp "$SCRIPT_DIR/mcp.json" "${ws}.mcp.json"
+                    echo "  Created: ${ws}.mcp.json"
+                fi
+            done
+        fi
+    else
+        echo "MCP server installation skipped"
+    fi
 fi
 
 echo ""
