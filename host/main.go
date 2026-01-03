@@ -241,12 +241,10 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, profile 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Set up command with context, reusing prepared command's path and env
+	// Set up command with context, preserving sanitizer configuration
 	cmd := exec.CommandContext(ctx, preparedCmd.Path, preparedCmd.Args[1:]...)
 	cmd.Env = preparedCmd.Env
-	if profile != nil && profile.RepoPath != "" {
-		cmd.Dir = profile.RepoPath
-	}
+	cmd.Dir = preparedCmd.Dir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
