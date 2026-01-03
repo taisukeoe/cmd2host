@@ -443,7 +443,9 @@ func (s *Server) sendListOperationsResponse(conn net.Conn, resp ListOperationsRe
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
-	conn.Write(data)
+	if _, err := conn.Write(data); err != nil {
+		fmt.Println("  -> ERROR writing response:", err)
+	}
 }
 
 // sendDescribeOperationResponse writes a describe operation response to the connection
@@ -453,7 +455,9 @@ func (s *Server) sendDescribeOperationResponse(conn net.Conn, resp DescribeOpera
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
-	conn.Write(data)
+	if _, err := conn.Write(data); err != nil {
+		fmt.Println("  -> ERROR writing response:", err)
+	}
 }
 
 // sendLegacyResponse writes a legacy JSON response to the connection
@@ -463,7 +467,9 @@ func (s *Server) sendLegacyResponse(conn net.Conn, resp ExecuteResult) {
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
-	conn.Write(data)
+	if _, err := conn.Write(data); err != nil {
+		fmt.Println("  -> ERROR writing response:", err)
+	}
 }
 
 // sendOperationResponse writes an operation response to the connection
@@ -473,7 +479,9 @@ func (s *Server) sendOperationResponse(conn net.Conn, resp OperationResponse) {
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
-	conn.Write(data)
+	if _, err := conn.Write(data); err != nil {
+		fmt.Println("  -> ERROR writing response:", err)
+	}
 }
 
 // strPtr returns a pointer to the string

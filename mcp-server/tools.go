@@ -82,8 +82,15 @@ func (h *ToolHandler) handleListOperations(ctx context.Context, req *mcp.CallToo
 				if schema.MinLength > 0 || schema.MaxLength > 0 {
 					sb.WriteString(fmt.Sprintf(" length: %d-%d", schema.MinLength, schema.MaxLength))
 				}
-				if schema.Min > 0 || schema.Max > 0 {
-					sb.WriteString(fmt.Sprintf(" range: %d-%d", schema.Min, schema.Max))
+				if schema.Min != nil || schema.Max != nil {
+					minVal, maxVal := 0, 0
+					if schema.Min != nil {
+						minVal = *schema.Min
+					}
+					if schema.Max != nil {
+						maxVal = *schema.Max
+					}
+					sb.WriteString(fmt.Sprintf(" range: %d-%d", minVal, maxVal))
 				}
 				sb.WriteString("\n")
 			}

@@ -58,8 +58,8 @@ type ParamSchema struct {
 	Pattern   string       `json:"pattern,omitempty"`
 	MinLength int          `json:"minLength,omitempty"`
 	MaxLength int          `json:"maxLength,omitempty"`
-	Min       int          `json:"min,omitempty"`
-	Max       int          `json:"max,omitempty"`
+	Min       *int         `json:"min,omitempty"`
+	Max       *int         `json:"max,omitempty"`
 	Items     *ItemsSchema `json:"items,omitempty"`
 }
 
