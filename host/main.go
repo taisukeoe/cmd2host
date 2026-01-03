@@ -79,8 +79,12 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 
-	// Determine if this is a new-style operation request or legacy command request
-	if _, hasOperation := rawRequest["operation"]; hasOperation {
+	// Determine request type by checking for specific fields
+	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
+		s.handleListOperationsRequest(conn, buf[:n])
+	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
+		s.handleDescribeOperationRequest(conn, buf[:n])
+	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
 		s.handleOperationRequest(conn, buf[:n])
 	} else {
 		s.handleLegacyRequest(conn, buf[:n])
@@ -304,6 +308,152 @@ func truncateOutput(s string, maxBytes int) string {
 		return s
 	}
 	return s[:maxBytes] + "\n... (truncated)"
+}
+
+// handleListOperationsRequest handles requests to list available operations
+func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
+	var req ListOperationsRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		s.sendListOperationsResponse(conn, ListOperationsResponse{
+			Error: fmt.Sprintf("Invalid request: %v", err),
+		})
+		return
+	}
+
+	// Authenticate token
+	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
+	if !valid {
+		time.Sleep(1 * time.Second)
+		fmt.Println("  -> AUTH FAILED (list_operations)")
+		s.sendListOperationsResponse(conn, ListOperationsResponse{
+			Error: "Authentication failed",
+		})
+		return
+	}
+
+	// Get profile from token
+	if tokenData.Profile == "" {
+		s.sendListOperationsResponse(conn, ListOperationsResponse{
+			Error: "Token does not have a profile assigned",
+		})
+		return
+	}
+
+	profile, exists := s.config.GetProfile(tokenData.Profile)
+	if !exists {
+		s.sendListOperationsResponse(conn, ListOperationsResponse{
+			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
+		})
+		return
+	}
+
+	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", tokenData.Profile)
+
+	// Build list of operations available to this profile
+	var ops []OperationInfo
+	for _, opID := range profile.Operations {
+		op, exists := s.config.GetOperation(opID)
+		if !exists {
+			continue
+		}
+		ops = append(ops, OperationInfo{
+			ID:           opID,
+			Command:      op.Command,
+			Description:  op.Description,
+			Params:       op.Params,
+			AllowedFlags: op.AllowedFlags,
+		})
+	}
+
+	s.sendListOperationsResponse(conn, ListOperationsResponse{
+		Operations: ops,
+	})
+}
+
+// handleDescribeOperationRequest handles requests to describe a specific operation
+func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
+	var req DescribeOperationRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: fmt.Sprintf("Invalid request: %v", err),
+		})
+		return
+	}
+
+	// Authenticate token
+	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
+	if !valid {
+		time.Sleep(1 * time.Second)
+		fmt.Println("  -> AUTH FAILED (describe_operation)")
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: "Authentication failed",
+		})
+		return
+	}
+
+	// Get profile from token
+	if tokenData.Profile == "" {
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: "Token does not have a profile assigned",
+		})
+		return
+	}
+
+	profile, exists := s.config.GetProfile(tokenData.Profile)
+	if !exists {
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
+		})
+		return
+	}
+
+	// Check if operation is allowed for this profile
+	if !profile.HasOperation(req.DescribeOperation) {
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: fmt.Sprintf("Operation not allowed: %s", req.DescribeOperation),
+		})
+		return
+	}
+
+	op, exists := s.config.GetOperation(req.DescribeOperation)
+	if !exists {
+		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+			Error: fmt.Sprintf("Operation not found: %s", req.DescribeOperation),
+		})
+		return
+	}
+
+	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", tokenData.Profile, req.DescribeOperation)
+
+	s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
+		Operation: &OperationInfo{
+			ID:           req.DescribeOperation,
+			Command:      op.Command,
+			Description:  op.Description,
+			Params:       op.Params,
+			AllowedFlags: op.AllowedFlags,
+		},
+	})
+}
+
+// sendListOperationsResponse writes a list operations response to the connection
+func (s *Server) sendListOperationsResponse(conn net.Conn, resp ListOperationsResponse) {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		fmt.Println("  -> ERROR marshaling response:", err)
+		return
+	}
+	conn.Write(data)
+}
+
+// sendDescribeOperationResponse writes a describe operation response to the connection
+func (s *Server) sendDescribeOperationResponse(conn net.Conn, resp DescribeOperationResponse) {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		fmt.Println("  -> ERROR marshaling response:", err)
+		return
+	}
+	conn.Write(data)
 }
 
 // sendLegacyResponse writes a legacy JSON response to the connection

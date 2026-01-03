@@ -57,6 +57,30 @@ type OperationResponse struct {
 	DeniedReason *string `json:"denied_reason"`
 }
 
+// ListOperationsRequest requests the list of available operations
+type ListOperationsRequest struct {
+	ListOperations bool   `json:"list_operations"`
+	Token          string `json:"token"`
+}
+
+// ListOperationsResponse contains the list of available operations
+type ListOperationsResponse struct {
+	Operations []OperationInfo `json:"operations"`
+	Error      string          `json:"error,omitempty"`
+}
+
+// DescribeOperationRequest requests details about a specific operation
+type DescribeOperationRequest struct {
+	DescribeOperation string `json:"describe_operation"`
+	Token             string `json:"token"`
+}
+
+// DescribeOperationResponse contains detailed operation info
+type DescribeOperationResponse struct {
+	Operation *OperationInfo `json:"operation,omitempty"`
+	Error     string         `json:"error,omitempty"`
+}
+
 // CompilePatterns compiles regex patterns in parameter schemas
 func (op *Operation) CompilePatterns() error {
 	for name, schema := range op.Params {

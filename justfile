@@ -17,11 +17,31 @@ build-darwin-arm64:
     cd host && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/cmd2host-darwin-arm64 .
 
 # Build all release binaries
-build-all: build-darwin-amd64 build-darwin-arm64
+build-all: build-darwin-amd64 build-darwin-arm64 build-mcp-darwin-amd64 build-mcp-darwin-arm64
 
-# Run unit tests
+# Build MCP server for current platform
+build-mcp:
+    cd mcp-server && go build -o ../dist/cmd2host-mcp .
+
+# Build MCP server for macOS Intel
+build-mcp-darwin-amd64:
+    cd mcp-server && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-darwin-amd64 .
+
+# Build MCP server for macOS Apple Silicon
+build-mcp-darwin-arm64:
+    cd mcp-server && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-darwin-arm64 .
+
+# Build MCP server for Linux amd64 (for containers)
+build-mcp-linux-amd64:
+    cd mcp-server && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-linux-amd64 .
+
+# Run unit tests for host daemon
 test:
     cd host && go test -v ./...
+
+# Run unit tests for MCP server
+test-mcp:
+    cd mcp-server && go test -v ./...
 
 # Run host scenario tests (integration)
 test-host: build
@@ -32,7 +52,7 @@ test-devcontainer:
     devcontainer features test --features cmd2host --base-image mcr.microsoft.com/devcontainers/base:ubuntu
 
 # Run all tests (except devcontainer)
-test-all: test test-host
+test-all: test test-mcp test-host
 
 # Clean build artifacts
 clean:

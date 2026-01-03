@@ -203,18 +203,22 @@ func (c *Config) ListOperationsForProfile(profileName string) ([]OperationInfo, 
 			continue
 		}
 		ops = append(ops, OperationInfo{
-			ID:          opID,
-			Description: op.Description,
-			Command:     op.Command,
+			ID:           opID,
+			Description:  op.Description,
+			Command:      op.Command,
+			Params:       op.Params,
+			AllowedFlags: op.AllowedFlags,
 		})
 	}
 
 	return ops, nil
 }
 
-// OperationInfo provides summary information about an operation
+// OperationInfo provides information about an operation for API responses
 type OperationInfo struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	Command     string `json:"command"`
+	ID           string                 `json:"id"`
+	Command      string                 `json:"command"`
+	Description  string                 `json:"description"`
+	Params       map[string]ParamSchema `json:"params,omitempty"`
+	AllowedFlags []string               `json:"allowed_flags,omitempty"`
 }
