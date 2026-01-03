@@ -33,8 +33,8 @@ if [[ -d ".git" ]]; then
         # Extract owner/repo from GitHub URL
         # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
         CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-        # Validate format (owner/repo)
-        if [[ ! "$CURRENT_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+        # Validate format (owner/repo) - use strict pattern matching cmd-wrapper.sh
+        if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
             CURRENT_REPO=""
         fi
     fi

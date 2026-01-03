@@ -113,6 +113,38 @@ func TestTokenStoreGetTokenData(t *testing.T) {
 	if data.Repo != "" {
 		t.Errorf("Repo = %q, want empty", data.Repo)
 	}
+
+	// Malformed JSON should be treated as invalid
+	token3 := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	hash3 := hashToken(token3)
+	tokenPath3 := filepath.Join(tmpDir, hash3)
+	if err := os.WriteFile(tokenPath3, []byte(`{invalid json}`), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	data, valid = ts.GetTokenData(token3)
+	if valid {
+		t.Error("Token with malformed JSON should be invalid")
+	}
+	if data.Repo != "" {
+		t.Errorf("Repo = %q, want empty for malformed JSON", data.Repo)
+	}
+
+	// Empty file should be treated as invalid
+	token4 := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	hash4 := hashToken(token4)
+	tokenPath4 := filepath.Join(tmpDir, hash4)
+	if err := os.WriteFile(tokenPath4, []byte(``), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	data, valid = ts.GetTokenData(token4)
+	if valid {
+		t.Error("Token with empty file should be invalid")
+	}
+	if data.Repo != "" {
+		t.Errorf("Repo = %q, want empty for empty file", data.Repo)
+	}
 }
 
 func TestTokenStoreExpiredToken(t *testing.T) {

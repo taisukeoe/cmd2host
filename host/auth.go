@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -91,6 +92,8 @@ func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 	// Read and parse JSON content
 	content, err := os.ReadFile(path)
 	if err != nil {
+		// Log file system errors for debugging (permission denied, I/O errors, etc.)
+		log.Printf("Warning: failed to read token file %s: %v", path, err)
 		return TokenData{}, false
 	}
 
