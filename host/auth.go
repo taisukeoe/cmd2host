@@ -96,8 +96,7 @@ func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 
 	var data TokenData
 	if err := json.Unmarshal(content, &data); err != nil {
-		// For backward compatibility with empty files, treat as empty TokenData
-		return TokenData{}, true
+		return TokenData{}, false
 	}
 
 	return data, true

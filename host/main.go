@@ -19,10 +19,9 @@ const (
 
 // Request represents an incoming command request
 type Request struct {
-	Command     string   `json:"command"`
-	Args        []string `json:"args"`
-	Token       string   `json:"token"`
-	CurrentRepo string   `json:"current_repo"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+	Token   string   `json:"token"`
 }
 
 // Server handles TCP connections and command proxying
