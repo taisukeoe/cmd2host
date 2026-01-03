@@ -35,6 +35,32 @@ install_netcat() {
 install_mcp_server() {
     echo "Installing cmd2host-mcp (MCP server)..."
 
+    # Check if we can build from source (for development)
+    # Look for mcp-server directory in common workspace locations
+    local SOURCE_DIR=""
+    for dir in "/workspaces/cmd2host/mcp-server" "${_CONTAINER_SOURCE_DIR:-}/mcp-server"; do
+        if [[ -d "$dir" && -f "$dir/go.mod" ]]; then
+            SOURCE_DIR="$dir"
+            break
+        fi
+    done
+
+    if [[ -n "$SOURCE_DIR" ]]; then
+        echo "  Found source at $SOURCE_DIR, building from source..."
+        if command -v go &>/dev/null; then
+            if (cd "$SOURCE_DIR" && go build -ldflags="-s -w" -o /usr/local/bin/cmd2host-mcp .); then
+                chmod 755 /usr/local/bin/cmd2host-mcp
+                echo "  Built and installed: /usr/local/bin/cmd2host-mcp"
+                return 0
+            else
+                echo "Warning: Failed to build from source, trying release download..."
+            fi
+        else
+            echo "Warning: Go not available, trying release download..."
+        fi
+    fi
+
+    # Fall back to downloading from releases
     # Detect architecture
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -48,7 +74,7 @@ install_mcp_server() {
     esac
 
     # Get latest release version
-    LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    LATEST_VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
     if [[ -z "$LATEST_VERSION" ]]; then
         echo "Warning: Could not determine latest version, skipping MCP server installation"
         return 1
