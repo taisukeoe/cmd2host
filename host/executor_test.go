@@ -31,6 +31,10 @@ func setupExecutorConfig(t *testing.T) *Config {
 			"false": {
 				"path": "false",
 				"timeout": 5
+			},
+			"sh": {
+				"path": "sh",
+				"timeout": 5
 			}
 		}
 	}`
@@ -120,5 +124,27 @@ func TestExecute_UnconfiguredCommand(t *testing.T) {
 	}
 	if !strings.Contains(result.Stderr, "not configured") {
 		t.Errorf("Stderr = %q, want to contain 'not configured'", result.Stderr)
+	}
+}
+
+func TestExecute_StderrOnSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh command not available on Windows")
+	}
+
+	config := setupExecutorConfig(t)
+	executor := NewExecutor(config)
+
+	// Run a command that writes to both stdout and stderr but exits 0
+	result := executor.Execute("sh", []string{"-c", "echo stdout_msg; echo stderr_msg >&2; exit 0"})
+
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	if !strings.Contains(result.Stdout, "stdout_msg") {
+		t.Errorf("Stdout = %q, want to contain 'stdout_msg'", result.Stdout)
+	}
+	if !strings.Contains(result.Stderr, "stderr_msg") {
+		t.Errorf("Stderr = %q, want to contain 'stderr_msg'", result.Stderr)
 	}
 }
