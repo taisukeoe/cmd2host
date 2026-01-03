@@ -28,8 +28,8 @@ type ParamSchema struct {
 	Pattern   string       `json:"pattern,omitempty"`   // Regex pattern for strings
 	MinLength int          `json:"minLength,omitempty"` // Min length for strings
 	MaxLength int          `json:"maxLength,omitempty"` // Max length for strings
-	Min       int          `json:"min,omitempty"`       // Min value for integers
-	Max       int          `json:"max,omitempty"`       // Max value for integers
+	Min       *int         `json:"min,omitempty"`       // Min value for integers (pointer to distinguish unset from 0)
+	Max       *int         `json:"max,omitempty"`       // Max value for integers (pointer to distinguish unset from 0)
 	Items     *ItemsSchema `json:"items,omitempty"`     // For array types
 
 	// Compiled pattern (not serialized)
@@ -125,11 +125,11 @@ func validateParamValue(name string, value ParamValue, schema ParamSchema) error
 		default:
 			return fmt.Errorf("param %s: expected integer, got %T", name, value)
 		}
-		if schema.Min > 0 && intVal < schema.Min {
-			return fmt.Errorf("param %s: value %d below minimum %d", name, intVal, schema.Min)
+		if schema.Min != nil && intVal < *schema.Min {
+			return fmt.Errorf("param %s: value %d below minimum %d", name, intVal, *schema.Min)
 		}
-		if schema.Max > 0 && intVal > schema.Max {
-			return fmt.Errorf("param %s: value %d exceeds maximum %d", name, intVal, schema.Max)
+		if schema.Max != nil && intVal > *schema.Max {
+			return fmt.Errorf("param %s: value %d exceeds maximum %d", name, intVal, *schema.Max)
 		}
 
 	case "array":

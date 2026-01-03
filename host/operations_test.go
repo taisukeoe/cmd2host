@@ -4,12 +4,17 @@ import (
 	"testing"
 )
 
+// intPtr returns a pointer to the int value
+func intPtr(i int) *int {
+	return &i
+}
+
 func TestOperation_ValidateParams(t *testing.T) {
 	op := &Operation{
 		Command:      "gh",
 		ArgsTemplate: []string{"pr", "view", "{number}", "--json", "{fields}"},
 		Params: map[string]ParamSchema{
-			"number": {Type: "integer", Min: 1},
+			"number": {Type: "integer", Min: intPtr(1)},
 			"fields": {Type: "string", Pattern: "^[a-zA-Z,]+$"},
 		},
 	}
@@ -142,7 +147,7 @@ func TestOperation_BuildArgs(t *testing.T) {
 
 func TestOperation_BuildArgs_WithProfileEnv(t *testing.T) {
 	op := &Operation{
-		ArgsTemplate: []string{"-C", "{repo_path}", "add", "--"},
+		ArgsTemplate: []string{"-C", "{repo_path}", "add", "--", "{paths}"},
 		Params: map[string]ParamSchema{
 			"paths": {Type: "array", Items: &ItemsSchema{Type: "string"}},
 		},
@@ -160,9 +165,10 @@ func TestOperation_BuildArgs_WithProfileEnv(t *testing.T) {
 		t.Fatalf("BuildArgs failed: %v", err)
 	}
 
-	expected := []string{"-C", "/home/user/project", "add", "--"}
+	// Verify both profileEnv substitution and array expansion
+	expected := []string{"-C", "/home/user/project", "add", "--", "file1.go", "file2.go"}
 	if len(args) != len(expected) {
-		t.Fatalf("BuildArgs returned %d args, want %d", len(args), len(expected))
+		t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(expected), args)
 	}
 	for i, arg := range args {
 		if arg != expected[i] {
