@@ -1,4 +1,4 @@
-name: Release Host Binary
+name: Release Binaries
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-host:
     runs-on: ubuntu-slim
     strategy:
       matrix:
@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.23'
 
       - name: Build
         env:
@@ -33,7 +33,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           cd host
-          go build -ldflags="-s -w" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
@@ -41,8 +41,44 @@ jobs:
           name: cmd2host-${{ matrix.goos }}-${{ matrix.goarch }}
           path: host/cmd2host-${{ matrix.goos }}-${{ matrix.goarch }}
 
+  build-mcp:
+    runs-on: ubuntu-slim
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd mcp-server
+          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
+        with:
+          name: cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: mcp-server/cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+
   release:
-    needs: build
+    needs: [build-host, build-mcp]
     runs-on: ubuntu-slim
     steps:
       - name: Download all artifacts

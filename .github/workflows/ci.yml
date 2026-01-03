@@ -24,6 +24,7 @@ jobs:
           filters: |
             host:
               - 'host/**'
+              - 'mcp-server/**'
               - 'justfile'
               - 'test/host/**'
               - '.github/workflows/ci.yml'
@@ -47,11 +48,17 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
 
-      - name: Unit Test
+      - name: Unit Test (Host)
         run: just test
 
-      - name: Build
+      - name: Unit Test (MCP Server)
+        run: just test-mcp
+
+      - name: Build Host Daemon
         run: just build
+
+      - name: Build MCP Server
+        run: just build-mcp
 
       - name: Host Scenario Test
         env:

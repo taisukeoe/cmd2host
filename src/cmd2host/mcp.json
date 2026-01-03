@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cmd2host": {
+      "command": "cmd2host-mcp",
+      "args": ["-token-file", "/run/cmd2host-token"]
+    }
+  }
+}

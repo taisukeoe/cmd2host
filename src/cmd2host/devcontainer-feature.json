@@ -1,6 +1,6 @@
 {
   "id": "cmd2host",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Host Command Proxy",
   "description": "Proxy commands (gh, etc.) from container to host machine. Requires cmd2host daemon on host.",
   "documentationURL": "https://github.com/taisukeoe/cmd2host",
@@ -9,6 +9,11 @@
       "type": "string",
       "default": "gh",
       "description": "Comma-separated list of commands to proxy (e.g., 'gh' or 'gh,docker')"
+    },
+    "installMcpServer": {
+      "type": "boolean",
+      "default": true,
+      "description": "Install cmd2host-mcp (MCP server for AI agent integration)"
     }
   },
   "containerEnv": {

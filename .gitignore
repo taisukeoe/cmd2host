@@ -24,3 +24,6 @@ host/cmd2host-*
 # Local test/dev files
 .cmd2host/
 *.local
+
+# Generated MCP config (copied from src/cmd2host/mcp.json by post-create.sh)
+.mcp.json
