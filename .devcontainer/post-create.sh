@@ -56,6 +56,15 @@ if [ -f "$ALIASES_FILE" ] && ! grep -q "source.*\.shell-aliases" "$HOME/.zshrc" 
     echo "Shell aliases configured in .zshrc"
 fi
 
+# Build cmd2host-mcp from source (for development)
+if [[ -d "$WORKSPACE/mcp-server" ]]; then
+    echo "Building cmd2host-mcp from source..."
+    (cd "$WORKSPACE/mcp-server" && go build -ldflags="-s -w" -o /tmp/cmd2host-mcp .)
+    sudo mv /tmp/cmd2host-mcp /usr/local/bin/
+    sudo chmod 755 /usr/local/bin/cmd2host-mcp
+    echo "Installed: /usr/local/bin/cmd2host-mcp"
+fi
+
 echo ""
 echo "======================================"
 echo "Claude Code + Codex CLI devcontainer ready!"

@@ -31,7 +31,8 @@
   // DevContainer spec requires local features to be inside .devcontainer/ directory.
   // Since src/cmd2host/ is outside .devcontainer/, we cannot reference it as a local feature.
   // See: https://github.com/devcontainers/feature-starter/issues/20
-  "postCreateCommand": "bash .devcontainer/post-create.sh && sudo COMMANDS=gh bash src/cmd2host/install.sh",
+  // Note: INSTALLMCPSERVER=false because post-create.sh builds MCP server from source
+  "postCreateCommand": "bash .devcontainer/post-create.sh && sudo COMMANDS=gh INSTALLMCPSERVER=false bash src/cmd2host/install.sh",
   "customizations": {
     "vscode": {
       "extensions": ["golang.go"]
