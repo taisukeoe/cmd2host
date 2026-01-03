@@ -77,8 +77,9 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 
-	// Authenticate token
-	if !s.tokenStore.IsValid(req.Token) {
+	// Authenticate token and get project data
+	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
+	if !valid {
 		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
 		fmt.Println("  -> AUTH FAILED")
 		resp := ExecuteResult{
@@ -96,8 +97,8 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	fmt.Printf("[%s] %s\n", req.Command, strings.Join(req.Args, " "))
 
-	// Validate command
-	result := s.validator.ValidateCommand(req.Command, req.Args, req.CurrentRepo)
+	// Validate command using repo from token (not from request - prevents spoofing)
+	result := s.validator.ValidateCommand(req.Command, req.Args, tokenData.Repo)
 	if !result.OK {
 		fmt.Printf("  -> DENIED: %s\n", result.Message)
 		resp := ExecuteResult{
@@ -153,7 +154,7 @@ func (s *Server) Run() error {
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
 	fmt.Printf("Configured commands: %v\n", s.commandNames())
-	fmt.Println("Repository restriction: current repo only (sent by client)")
+	fmt.Println("Repository restriction: bound to token (set at session init)")
 	fmt.Println()
 
 	for {

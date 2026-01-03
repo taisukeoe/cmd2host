@@ -25,9 +25,25 @@ SESSION_TOKEN=$(openssl rand -hex 32)
 # Compute BLAKE3 hash using cmd2host binary (token via stdin to avoid ps exposure)
 TOKEN_HASH=$(echo -n "$SESSION_TOKEN" | "$CMD2HOST_BIN" --hash-token)
 
-# Create token file (empty file, mtime used for expiration)
+# Detect current repository from git remote (for repository restriction)
+CURRENT_REPO=""
+if [[ -d ".git" ]]; then
+    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+    if [[ -n "$remote_url" ]]; then
+        # Extract owner/repo from GitHub URL
+        # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
+        CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
+        # Validate format (owner/repo)
+        if [[ ! "$CURRENT_REPO" =~ ^[^/]+/[^/]+$ ]]; then
+            CURRENT_REPO=""
+        fi
+    fi
+fi
+
+# Create token file with JSON data (mtime used for expiration)
+# JSON format allows future extension for other project-specific data
 mkdir -p "$TOKEN_DIR"
-touch "$TOKEN_DIR/$TOKEN_HASH"
+echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 
 # Ensure .session/ is in .devcontainer/.gitignore
 GITIGNORE_FILE=".devcontainer/.gitignore"

@@ -23,7 +23,7 @@ fi
 # Token is 64 hex chars only (validated on generation), no escaping needed
 TOKEN_ESCAPED="$TOKEN"
 
-# Detect current repository from git remote (for repository restriction)
+# Detect current repository from git remote (for auto -R flag)
 CURRENT_REPO=""
 remote_url=$(git remote get-url origin 2>/dev/null || echo "")
 if [[ -n "$remote_url" ]]; then
@@ -86,7 +86,9 @@ for arg in "${ARGS[@]}"; do
 done
 ARGS_JSON+="]"
 
-REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\",\"current_repo\":\"$CURRENT_REPO\"}"
+# Note: current_repo is NOT sent in request - repo binding is done at token generation
+# time on the host side for security (prevents container spoofing)
+REQUEST="{\"command\":\"$CMD_NAME\",\"args\":$ARGS_JSON,\"token\":\"$TOKEN_ESCAPED\"}"
 
 # Send request to daemon
 RESPONSE=$(echo "$REQUEST" | nc -w 10 "$HOST" "$PORT" 2>/dev/null) || {

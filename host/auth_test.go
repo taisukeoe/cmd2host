@@ -43,8 +43,8 @@ func TestTokenStoreIsValid(t *testing.T) {
 		t.Error("Non-existent token should be invalid")
 	}
 
-	// Create token file
-	if err := os.WriteFile(tokenPath, []byte{}, 0600); err != nil {
+	// Create token file with JSON content
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
@@ -70,6 +70,51 @@ func TestTokenStoreIsValid(t *testing.T) {
 	}
 }
 
+func TestTokenStoreGetTokenData(t *testing.T) {
+	tmpDir := t.TempDir()
+	ts := &TokenStore{dir: tmpDir}
+
+	token := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hash := hashToken(token)
+	tokenPath := filepath.Join(tmpDir, hash)
+
+	// Token file doesn't exist -> invalid
+	data, valid := ts.GetTokenData(token)
+	if valid {
+		t.Error("Non-existent token should be invalid")
+	}
+
+	// Create token file with JSON content
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	// Token file exists -> valid with repo data
+	data, valid = ts.GetTokenData(token)
+	if !valid {
+		t.Error("Fresh token should be valid")
+	}
+	if data.Repo != "owner/repo" {
+		t.Errorf("Repo = %q, want %q", data.Repo, "owner/repo")
+	}
+
+	// Empty repo in JSON
+	token2 := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	hash2 := hashToken(token2)
+	tokenPath2 := filepath.Join(tmpDir, hash2)
+	if err := os.WriteFile(tokenPath2, []byte(`{"repo":""}`), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	data, valid = ts.GetTokenData(token2)
+	if !valid {
+		t.Error("Token with empty repo should be valid")
+	}
+	if data.Repo != "" {
+		t.Errorf("Repo = %q, want empty", data.Repo)
+	}
+}
+
 func TestTokenStoreExpiredToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	ts := &TokenStore{dir: tmpDir}
@@ -79,8 +124,8 @@ func TestTokenStoreExpiredToken(t *testing.T) {
 	hash := hashToken(token)
 	tokenPath := filepath.Join(tmpDir, hash)
 
-	// Create token file
-	if err := os.WriteFile(tokenPath, []byte{}, 0600); err != nil {
+	// Create token file with JSON content
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
@@ -104,7 +149,7 @@ func TestTokenStoreCleanupExpired(t *testing.T) {
 	freshToken := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	freshHash := hashToken(freshToken)
 	freshPath := filepath.Join(tmpDir, freshHash)
-	if err := os.WriteFile(freshPath, []byte{}, 0600); err != nil {
+	if err := os.WriteFile(freshPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create fresh token file: %v", err)
 	}
 
@@ -112,7 +157,7 @@ func TestTokenStoreCleanupExpired(t *testing.T) {
 	expiredToken := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	expiredHash := hashToken(expiredToken)
 	expiredPath := filepath.Join(tmpDir, expiredHash)
-	if err := os.WriteFile(expiredPath, []byte{}, 0600); err != nil {
+	if err := os.WriteFile(expiredPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create expired token file: %v", err)
 	}
 	oldTime := time.Now().Add(-25 * time.Hour)
@@ -195,11 +240,11 @@ func TestTokenStoreIsValidMalformedTokens(t *testing.T) {
 	tmpDir := t.TempDir()
 	ts := &TokenStore{dir: tmpDir}
 
-	// Create a valid token file to ensure the directory exists
+	// Create a valid token file with JSON content
 	validToken := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	hash := hashToken(validToken)
 	tokenPath := filepath.Join(tmpDir, hash)
-	if err := os.WriteFile(tokenPath, []byte{}, 0600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 

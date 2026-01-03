@@ -34,7 +34,8 @@ trap cleanup EXIT
 
 setup_test_token() {
     mkdir -p "$TOKEN_DIR"
-    touch "$TOKEN_DIR/$TEST_TOKEN_HASH"
+    # Token file contains JSON with repo data (bound at token generation time)
+    echo -n '{"repo":"taisukeoe/cmd2host"}' > "$TOKEN_DIR/$TEST_TOKEN_HASH"
 }
 
 log_pass() {
@@ -103,7 +104,7 @@ test_request() {
     fi
 }
 
-# Scenario tests (all include token)
+# Scenario tests (all include token, repo is bound to token not request)
 test_request \
     "gh --version (allowed)" \
     '{"command":"gh","args":["--version"],"token":"'"$TEST_TOKEN"'"}' \
@@ -111,14 +112,14 @@ test_request \
     "gh version"
 
 test_request \
-    "gh repo view same repo (allowed)" \
-    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "gh repo view same repo (allowed - repo from token)" \
+    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"],"token":"'"$TEST_TOKEN"'"}' \
     "0" \
     ""
 
 test_request \
-    "gh repo view different repo (denied)" \
-    '{"command":"gh","args":["repo","view","other/repo","--json","name"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "gh repo view different repo (denied - repo from token)" \
+    '{"command":"gh","args":["repo","view","other/repo","--json","name"],"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "not allowed"
 
@@ -129,14 +130,14 @@ test_request \
     "Denied by pattern"
 
 test_request \
-    "gh pr list -R disallowed repo" \
-    '{"command":"gh","args":["pr","list","-R","other/repo"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "gh pr list -R disallowed repo (denied - repo from token)" \
+    '{"command":"gh","args":["pr","list","-R","other/repo"],"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "not allowed"
 
 test_request \
-    "gh api repos/other/repo (denied - different repo)" \
-    '{"command":"gh","args":["api","repos/other/repo/pulls"],"token":"'"$TEST_TOKEN"'","current_repo":"taisukeoe/cmd2host"}' \
+    "gh api repos/other/repo (denied - repo from token)" \
+    '{"command":"gh","args":["api","repos/other/repo/pulls"],"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "not allowed"
 

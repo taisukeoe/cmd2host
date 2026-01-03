@@ -1,10 +1,11 @@
 // auth.go provides session token authentication for cmd2host.
-// Tokens are BLAKE3 hashed and stored as empty files in ~/.cmd2host/tokens/.
+// Tokens are BLAKE3 hashed and stored as JSON files in ~/.cmd2host/tokens/.
 // Token validity is determined by file mtime (24-hour TTL).
 package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,13 @@ import (
 
 	"github.com/zeebo/blake3"
 )
+
+// TokenData contains project-specific data stored with the token.
+// This struct is extensible for future use cases beyond repository restriction.
+type TokenData struct {
+	Repo string `json:"repo"`
+	// Future fields can be added here (e.g., workspace path, project ID, etc.)
+}
 
 const (
 	tokenTTL          = 24 * time.Hour
@@ -56,8 +64,15 @@ func isValidTokenFormat(token string) bool {
 
 // IsValid checks if the given token is valid and not expired
 func (ts *TokenStore) IsValid(token string) bool {
+	_, valid := ts.GetTokenData(token)
+	return valid
+}
+
+// GetTokenData validates the token and returns associated project data.
+// Returns the token data and true if valid, empty TokenData and false otherwise.
+func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 	if token == "" || !isValidTokenFormat(token) {
-		return false
+		return TokenData{}, false
 	}
 
 	hashStr := hashToken(token)
@@ -65,10 +80,27 @@ func (ts *TokenStore) IsValid(token string) bool {
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return false // File does not exist
+		return TokenData{}, false // File does not exist
 	}
 
-	return time.Since(info.ModTime()) < tokenTTL
+	// Check TTL
+	if time.Since(info.ModTime()) >= tokenTTL {
+		return TokenData{}, false
+	}
+
+	// Read and parse JSON content
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return TokenData{}, false
+	}
+
+	var data TokenData
+	if err := json.Unmarshal(content, &data); err != nil {
+		// For backward compatibility with empty files, treat as empty TokenData
+		return TokenData{}, true
+	}
+
+	return data, true
 }
 
 // CleanupExpired removes expired token files
