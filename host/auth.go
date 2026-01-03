@@ -18,6 +18,11 @@ import (
 // TokenData contains project-specific data stored with the token.
 // This struct is extensible for future use cases beyond repository restriction.
 type TokenData struct {
+	// Repo is the GitHub repository (owner/repo) bound to this token.
+	// Empty string means repo could not be detected at token creation time;
+	// in this case, commands that explicitly specify a repository will be denied,
+	// while repo-agnostic commands (e.g., gh --version) are still allowed.
+	// See validator.go:validateRepository for the enforcement logic.
 	Repo string `json:"repo"`
 	// Future fields can be added here (e.g., workspace path, project ID, etc.)
 }
