@@ -4,6 +4,8 @@
     "dockerfile": "Dockerfile"
   },
   "workspaceFolder": "/workspaces/cmd2host",
+  // Ensure host.docker.internal works on Linux (Docker 20.10+)
+  "runArgs": ["--add-host=host.docker.internal:host-gateway"],
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "1.25"

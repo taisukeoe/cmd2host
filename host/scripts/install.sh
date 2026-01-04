@@ -166,6 +166,7 @@ cat > "$INSTALL_DIR/config.json" << EOF
 {
   "listen_address": "127.0.0.1",
   "listen_port": 9876,
+  "default_profile": "gh_readonly",
   "profiles": {
     "gh_readonly": {
       "repo": "",
@@ -178,7 +179,7 @@ cat > "$INSTALL_DIR/config.json" << EOF
   "operations": {
     "gh_pr_view": {
       "command": "$GH_PATH",
-      "args_template": ["pr", "view", "{number}"],
+      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
       "params": {
         "number": {"type": "integer", "min": 1, "optional": true}
       },
@@ -187,21 +188,21 @@ cat > "$INSTALL_DIR/config.json" << EOF
     },
     "gh_pr_list": {
       "command": "$GH_PATH",
-      "args_template": ["pr", "list"],
+      "args_template": ["pr", "list", "-R", "{repo}"],
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit"],
       "description": "List pull requests"
     },
     "gh_issue_list": {
       "command": "$GH_PATH",
-      "args_template": ["issue", "list"],
+      "args_template": ["issue", "list", "-R", "{repo}"],
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit"],
       "description": "List issues"
     },
     "gh_issue_view": {
       "command": "$GH_PATH",
-      "args_template": ["issue", "view", "{number}"],
+      "args_template": ["issue", "view", "{number}", "-R", "{repo}"],
       "params": {
         "number": {"type": "integer", "min": 1}
       },
@@ -210,7 +211,7 @@ cat > "$INSTALL_DIR/config.json" << EOF
     },
     "gh_repo_view": {
       "command": "$GH_PATH",
-      "args_template": ["repo", "view"],
+      "args_template": ["repo", "view", "{repo}"],
       "params": {},
       "allowed_flags": ["--json"],
       "description": "View repository information"
