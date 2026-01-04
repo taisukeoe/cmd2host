@@ -90,7 +90,7 @@ func TestLoadConfigDefaultProfileValidation(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.json")
 
 	// Config with default_profile pointing to non-existent profile
-	// Note: This should still load successfully (validation happens at runtime)
+	// This should fail at config load time
 	configContent := `{
 		"default_profile": "nonexistent",
 		"profiles": {},
@@ -101,20 +101,14 @@ func TestLoadConfigDefaultProfileValidation(t *testing.T) {
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	config, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig failed: %v", err)
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("LoadConfig should fail when default_profile references non-existent profile")
 	}
 
-	// Verify default_profile is set even if profile doesn't exist
-	if config.DefaultProfile != "nonexistent" {
-		t.Errorf("DefaultProfile = %q, want %q", config.DefaultProfile, "nonexistent")
-	}
-
-	// GetProfile should return false for non-existent profile
-	_, exists := config.GetProfile("nonexistent")
-	if exists {
-		t.Error("GetProfile should return false for non-existent profile")
+	expectedErr := "default_profile references unknown profile: nonexistent"
+	if err.Error() != expectedErr {
+		t.Errorf("Error = %q, want %q", err.Error(), expectedErr)
 	}
 }
 

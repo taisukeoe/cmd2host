@@ -82,6 +82,13 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	// Validate that default_profile (if specified) exists in the profiles map
+	if config.DefaultProfile != "" {
+		if _, exists := config.Profiles[config.DefaultProfile]; !exists {
+			return nil, fmt.Errorf("default_profile references unknown profile: %s", config.DefaultProfile)
+		}
+	}
+
 	return &config, nil
 }
 
