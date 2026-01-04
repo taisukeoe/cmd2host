@@ -120,29 +120,33 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
-		fmt.Println("  -> No profile in token, operation requests require profile")
+	// Get profile from token (with fallback to default)
+	profileName := tokenData.Profile
+	if profileName == "" {
+		profileName = s.config.DefaultProfile
+	}
+	if profileName == "" {
+		fmt.Println("  -> No profile in token and no default_profile configured")
 		s.sendOperationResponse(conn, OperationResponse{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
-			DeniedReason: strPtr("Token does not have a profile assigned"),
+			DeniedReason: strPtr("Token does not have a profile assigned and no default_profile configured"),
 		})
 		return
 	}
 
-	profile, exists := s.config.GetProfile(tokenData.Profile)
+	profile, exists := s.config.GetProfile(profileName)
 	if !exists {
-		fmt.Printf("  -> Profile not found: %s\n", tokenData.Profile)
+		fmt.Printf("  -> Profile not found: %s\n", profileName)
 		s.sendOperationResponse(conn, OperationResponse{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
-			DeniedReason: strPtr(fmt.Sprintf("Profile not found: %s", tokenData.Profile)),
+			DeniedReason: strPtr(fmt.Sprintf("Profile not found: %s", profileName)),
 		})
 		return
 	}
 
-	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, tokenData.Profile, req.Params)
+	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, profileName, req.Params)
 
 	// Validate operation
 	op, result := s.validator.ValidateOperation(req, profile)
@@ -158,6 +162,10 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 
 	// Build arguments from template
 	profileEnv := profile.GetEnvForOperation()
+	// Inject token's repo into template expansion
+	if tokenData.Repo != "" {
+		profileEnv["repo"] = tokenData.Repo
+	}
 	args, err := op.BuildArgs(req.Params, req.Flags, profileEnv)
 	if err != nil {
 		fmt.Printf("  -> ARG BUILD FAILED: %v\n", err)
@@ -334,23 +342,27 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
+	// Get profile from token (with fallback to default)
+	profileName := tokenData.Profile
+	if profileName == "" {
+		profileName = s.config.DefaultProfile
+	}
+	if profileName == "" {
 		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: "Token does not have a profile assigned",
+			Error: "Token does not have a profile assigned and no default_profile configured",
 		})
 		return
 	}
 
-	profile, exists := s.config.GetProfile(tokenData.Profile)
+	profile, exists := s.config.GetProfile(profileName)
 	if !exists {
 		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
+			Error: fmt.Sprintf("Profile not found: %s", profileName),
 		})
 		return
 	}
 
-	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", tokenData.Profile)
+	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", profileName)
 
 	// Build list of operations available to this profile
 	var ops []OperationInfo
@@ -394,18 +406,22 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
+	// Get profile from token (with fallback to default)
+	profileName := tokenData.Profile
+	if profileName == "" {
+		profileName = s.config.DefaultProfile
+	}
+	if profileName == "" {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: "Token does not have a profile assigned",
+			Error: "Token does not have a profile assigned and no default_profile configured",
 		})
 		return
 	}
 
-	profile, exists := s.config.GetProfile(tokenData.Profile)
+	profile, exists := s.config.GetProfile(profileName)
 	if !exists {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
+			Error: fmt.Sprintf("Profile not found: %s", profileName),
 		})
 		return
 	}
@@ -426,7 +442,7 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", tokenData.Profile, req.DescribeOperation)
+	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", profileName, req.DescribeOperation)
 
 	s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 		Operation: &OperationInfo{

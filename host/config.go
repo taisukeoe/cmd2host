@@ -10,11 +10,12 @@ import (
 
 // Config represents the cmd2host configuration
 type Config struct {
-	ListenAddress string                 `json:"listen_address"`
-	ListenPort    int                    `json:"listen_port"`
-	Profiles      map[string]*Profile    `json:"profiles,omitempty"`   // New: profile definitions
-	Operations    map[string]*Operation  `json:"operations,omitempty"` // New: operation definitions
-	Commands      map[string]CommandConfig `json:"commands,omitempty"` // Legacy: for backward compat
+	ListenAddress  string                   `json:"listen_address"`
+	ListenPort     int                      `json:"listen_port"`
+	DefaultProfile string                   `json:"default_profile,omitempty"` // Default profile for tokens without explicit profile
+	Profiles       map[string]*Profile      `json:"profiles,omitempty"`        // New: profile definitions
+	Operations     map[string]*Operation    `json:"operations,omitempty"`      // New: operation definitions
+	Commands       map[string]CommandConfig `json:"commands,omitempty"`        // Legacy: for backward compat
 
 	// Output limits
 	MaxStdoutBytes int `json:"max_stdout_bytes,omitempty"` // Default: 1MB
