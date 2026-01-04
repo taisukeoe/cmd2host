@@ -110,6 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `commands` | string | `gh` | Comma-separated list of commands to proxy |
+| `installMcpServer` | boolean | `true` | Install cmd2host-mcp (MCP server for AI agent integration) |
 
 ### Example: Multiple commands
 
@@ -118,6 +119,19 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
   "features": {
     "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
       "commands": "gh,docker"
+    }
+  }
+}
+```
+
+### Example: Disable MCP server installation
+
+```json
+{
+  "features": {
+    "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
+      "commands": "gh",
+      "installMcpServer": false
     }
   }
 }
@@ -248,7 +262,10 @@ just test                    # Run unit tests (daemon)
 just test-mcp                # Run unit tests (MCP server)
 just test-host               # Run host scenario tests
 just test-devcontainer       # Run devcontainer feature test
-just test-all                # Run all tests
+just test-e2e                # Run E2E tests (daemon + devcontainer + MCP)
+just test-e2e-clean          # Run E2E tests with clean install
+just test-e2e-quick          # Run E2E tests without rebuilding
+just test-all                # Run all tests (unit + host scenario)
 ```
 
 ## License

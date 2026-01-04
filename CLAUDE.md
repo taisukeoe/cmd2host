@@ -40,7 +40,7 @@ Two validation modes:
 ## Key Files
 
 ### Container side
-- `src/cmd2host/devcontainer-feature.json` - Feature definition and options
+- `src/cmd2host/devcontainer-feature.json` - Feature definition and options (`commands`, `installMcpServer`)
 - `src/cmd2host/install.sh` - Container-side install (runs during devcontainer build)
 - `src/cmd2host/cmd-wrapper.sh` - Command wrapper that sends JSON requests via netcat
 - `src/cmd2host/mcp.json` - MCP server configuration template
@@ -65,6 +65,7 @@ Two validation modes:
 - `justfile` - Build and test commands
 - `test/host/` - Host daemon scenario tests
 - `test/cmd2host/` - DevContainer feature tests
+- `test/e2e/` - End-to-end tests (daemon + devcontainer + MCP integration)
 
 ## Development Commands (just)
 
@@ -82,6 +83,9 @@ just test                    # Run Go unit tests (daemon)
 just test-mcp                # Run Go unit tests (MCP server)
 just test-host               # Run host scenario tests (integration)
 just test-devcontainer       # Run devcontainer feature test
+just test-e2e                # Run E2E tests (daemon + devcontainer + MCP)
+just test-e2e-clean          # Run E2E tests with clean install
+just test-e2e-quick          # Run E2E tests without rebuilding
 just test-all                # Run all tests (unit + host scenario)
 
 # Cleanup
@@ -103,6 +107,13 @@ just test-host
 ### DevContainer Feature test:
 ```bash
 just test-devcontainer
+```
+
+### E2E tests (daemon + devcontainer + MCP):
+```bash
+just test-e2e              # Full E2E test
+just test-e2e-clean        # Clean install test
+just test-e2e-quick        # Quick test (skip build and devcontainer startup)
 ```
 
 ## Local Development
