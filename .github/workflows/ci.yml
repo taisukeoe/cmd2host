@@ -116,16 +116,13 @@ jobs:
         uses: actions/cache@db2fc96e519bbacec33eb41d937f5d04214b5d77 # ratchet:actions/cache@v4
         with:
           path: ~/.npm
-          key: ${{ runner.os }}-npm-devcontainer-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-npm-devcontainer-global
           restore-keys: |
             ${{ runner.os }}-npm-devcontainer-
             ${{ runner.os }}-npm-
 
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # ratchet:docker/setup-buildx-action@v3
 
       - name: Pre-pull base images to speed up devcontainer build
         run: |
