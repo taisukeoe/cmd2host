@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 )
 
 // Config represents the cmd2host configuration
 type Config struct {
-	ListenAddress  string                   `json:"listen_address"`
-	ListenPort     int                      `json:"listen_port"`
-	DefaultProfile string                   `json:"default_profile,omitempty"` // Default profile for tokens without explicit profile
-	Profiles       map[string]*Profile      `json:"profiles,omitempty"`        // New: profile definitions
-	Operations     map[string]*Operation    `json:"operations,omitempty"`      // New: operation definitions
-	Commands       map[string]CommandConfig `json:"commands,omitempty"`        // Legacy: for backward compat
+	ListenAddress  string                `json:"listen_address"`
+	ListenPort     int                   `json:"listen_port"`
+	DefaultProfile string                `json:"default_profile,omitempty"` // Default profile for tokens without explicit profile
+	Profiles       map[string]*Profile   `json:"profiles,omitempty"`        // Profile definitions
+	Operations     map[string]*Operation `json:"operations,omitempty"`      // Operation definitions
 
 	// Output limits
 	MaxStdoutBytes int `json:"max_stdout_bytes,omitempty"` // Default: 1MB
@@ -23,32 +21,6 @@ type Config struct {
 
 	// Execution limits
 	DefaultTimeout int `json:"default_timeout,omitempty"` // Default: 60 seconds
-}
-
-// CommandConfig represents per-command configuration (legacy format)
-type CommandConfig struct {
-	Path                string        `json:"path"`
-	Timeout             int           `json:"timeout"`
-	Allowed             []string      `json:"allowed"`
-	Denied              []string      `json:"denied"`
-	RepoExtractPatterns []RepoPattern `json:"repo_extract_patterns"`
-
-	// Compiled patterns (not serialized)
-	allowedPatterns     []*regexp.Regexp
-	deniedPatterns      []*regexp.Regexp
-	repoExtractPatterns []compiledRepoPattern
-}
-
-// RepoPattern defines a pattern to extract repository from command args
-type RepoPattern struct {
-	Pattern    string `json:"pattern"`
-	GroupIndex int    `json:"group_index"` // defaults to 1
-}
-
-// compiledRepoPattern holds the compiled regex and group index
-type compiledRepoPattern struct {
-	re         *regexp.Regexp
-	groupIndex int
 }
 
 // DefaultConfigPath returns the default config file path
@@ -110,58 +82,7 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	// Legacy: Compile command patterns (for backward compatibility)
-	for name, cmdConfig := range config.Commands {
-		if cmdConfig.Timeout == 0 {
-			cmdConfig.Timeout = config.DefaultTimeout
-		}
-		if cmdConfig.Path == "" {
-			cmdConfig.Path = name
-		}
-
-		// Compile allowed patterns
-		for _, pattern := range cmdConfig.Allowed {
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				return nil, err
-			}
-			cmdConfig.allowedPatterns = append(cmdConfig.allowedPatterns, re)
-		}
-
-		// Compile denied patterns
-		for _, pattern := range cmdConfig.Denied {
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				return nil, err
-			}
-			cmdConfig.deniedPatterns = append(cmdConfig.deniedPatterns, re)
-		}
-
-		// Compile repo extract patterns
-		for _, pattern := range cmdConfig.RepoExtractPatterns {
-			re, err := regexp.Compile(pattern.Pattern)
-			if err != nil {
-				return nil, err
-			}
-			groupIndex := pattern.GroupIndex
-			if groupIndex == 0 {
-				groupIndex = 1 // default to group 1
-			}
-			cmdConfig.repoExtractPatterns = append(cmdConfig.repoExtractPatterns, compiledRepoPattern{
-				re:         re,
-				groupIndex: groupIndex,
-			})
-		}
-
-		config.Commands[name] = cmdConfig
-	}
-
 	return &config, nil
-}
-
-// IsLegacyMode returns true if config uses legacy command format
-func (c *Config) IsLegacyMode() bool {
-	return len(c.Commands) > 0 && len(c.Operations) == 0
 }
 
 // GetOperation returns an operation by ID

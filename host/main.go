@@ -24,18 +24,10 @@ const (
 	maxReadSize = 65536
 )
 
-// Request represents an incoming command request (legacy format)
-type Request struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-	Token   string   `json:"token"`
-}
-
 // Server handles TCP connections and command proxying
 type Server struct {
 	config     *Config
 	validator  *Validator
-	executor   *Executor
 	tokenStore *TokenStore
 	listener   net.Listener
 }
@@ -49,7 +41,6 @@ func NewServer(config *Config) (*Server, error) {
 	return &Server{
 		config:     config,
 		validator:  NewValidator(config),
-		executor:   NewExecutor(config),
 		tokenStore: tokenStore,
 	}, nil
 }
@@ -75,9 +66,9 @@ func (s *Server) handleClient(conn net.Conn) {
 	var rawRequest map[string]json.RawMessage
 	if err := json.Unmarshal(buf[:n], &rawRequest); err != nil {
 		fmt.Println("  -> Invalid JSON:", err)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("Invalid JSON: %v", err),
+		s.sendOperationResponse(conn, OperationResponse{
+			ExitCode:     1,
+			DeniedReason: strPtr(fmt.Sprintf("Invalid JSON: %v", err)),
 		})
 		return
 	}
@@ -90,7 +81,11 @@ func (s *Server) handleClient(conn net.Conn) {
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
 		s.handleOperationRequest(conn, buf[:n])
 	} else {
-		s.handleLegacyRequest(conn, buf[:n])
+		fmt.Println("  -> Unknown request type (missing 'operation' field)")
+		s.sendOperationResponse(conn, OperationResponse{
+			ExitCode:     1,
+			DeniedReason: strPtr("Unknown request type: missing 'operation' field"),
+		})
 	}
 }
 
@@ -187,55 +182,6 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		Stdout:    resp.Stdout,
 		Stderr:    resp.Stderr,
 	})
-}
-
-// handleLegacyRequest handles old-style command requests
-func (s *Server) handleLegacyRequest(conn net.Conn, data []byte) {
-	var req Request
-	if err := json.Unmarshal(data, &req); err != nil {
-		fmt.Println("  -> Invalid JSON:", err)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
-	}
-
-	// Authenticate token and get project data
-	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
-	if !valid {
-		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
-		fmt.Println("  -> AUTH FAILED")
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   "Authentication failed",
-		})
-		return
-	}
-
-	// Default command
-	if req.Command == "" {
-		req.Command = "gh"
-	}
-
-	fmt.Printf("[%s] %s\n", req.Command, strings.Join(req.Args, " "))
-
-	// Validate command using repo from token (not from request - prevents spoofing)
-	result := s.validator.ValidateCommand(req.Command, req.Args, tokenData.Repo)
-	if !result.OK {
-		fmt.Printf("  -> DENIED: %s\n", result.Message)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   result.Message,
-		})
-		return
-	}
-
-	// Execute command
-	resp := s.executor.Execute(req.Command, req.Args)
-	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
-
-	s.sendLegacyResponse(conn, resp)
 }
 
 // executeWithSanitization executes a command with sanitized environment
@@ -479,18 +425,6 @@ func (s *Server) sendDescribeOperationResponse(conn net.Conn, resp DescribeOpera
 	}
 }
 
-// sendLegacyResponse writes a legacy JSON response to the connection
-func (s *Server) sendLegacyResponse(conn net.Conn, resp ExecuteResult) {
-	data, err := json.Marshal(resp)
-	if err != nil {
-		fmt.Println("  -> ERROR marshaling response:", err)
-		return
-	}
-	if _, err := conn.Write(data); err != nil {
-		fmt.Println("  -> ERROR writing response:", err)
-	}
-}
-
 // sendOperationResponse writes an operation response to the connection
 func (s *Server) sendOperationResponse(conn net.Conn, resp OperationResponse) {
 	data, err := json.Marshal(resp)
@@ -535,10 +469,9 @@ func (s *Server) Run() error {
 	s.listener = listener
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
-	if s.config.IsLegacyMode() {
-		fmt.Printf("Mode: Legacy (commands: %v)\n", s.commandNames())
-	} else {
-		fmt.Printf("Mode: Operation-based (profiles: %v)\n", s.profileNames())
+	fmt.Printf("Profiles: %v\n", s.profileNames())
+	if s.config.DefaultProfile != "" {
+		fmt.Printf("Default profile: %s\n", s.config.DefaultProfile)
 	}
 	fmt.Println("Repository restriction: bound to token (set at session init)")
 	fmt.Println()
@@ -562,15 +495,6 @@ func (s *Server) Shutdown() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-}
-
-// commandNames returns a list of configured command names (legacy)
-func (s *Server) commandNames() []string {
-	names := make([]string, 0, len(s.config.Commands))
-	for name := range s.config.Commands {
-		names = append(names, name)
-	}
-	return names
 }
 
 // profileNames returns a list of configured profile names
