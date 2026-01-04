@@ -166,18 +166,61 @@ cat > "$INSTALL_DIR/config.json" << EOF
 {
   "listen_address": "127.0.0.1",
   "listen_port": 9876,
-  "commands": {
-    "gh": {
-      "path": "$GH_PATH",
-      "timeout": 60,
-      "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
-      "denied": ["[;&|\`\$]", "^auth (login|logout|token)", "^config"],
-      "repo_extract_patterns": [
-        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
-        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
-        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
-        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
-      ]
+  "profiles": {
+    "gh_readonly": {
+      "repo": "",
+      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
+      "env": {
+        "GH_PROMPT_DISABLED": "1"
+      }
+    }
+  },
+  "operations": {
+    "gh_pr_view": {
+      "command": "$GH_PATH",
+      "args_template": ["pr", "view", "{number}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--repo", "-R"],
+      "description": "View a pull request"
+    },
+    "gh_pr_list": {
+      "command": "$GH_PATH",
+      "args_template": ["pr", "list"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit", "--repo", "-R"],
+      "description": "List pull requests"
+    },
+    "gh_issue_list": {
+      "command": "$GH_PATH",
+      "args_template": ["issue", "list"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit", "--repo", "-R"],
+      "description": "List issues"
+    },
+    "gh_issue_view": {
+      "command": "$GH_PATH",
+      "args_template": ["issue", "view", "{number}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--repo", "-R"],
+      "description": "View an issue"
+    },
+    "gh_repo_view": {
+      "command": "$GH_PATH",
+      "args_template": ["repo", "view"],
+      "params": {},
+      "allowed_flags": ["--json", "--repo", "-R"],
+      "description": "View repository information"
+    },
+    "gh_auth_status": {
+      "command": "$GH_PATH",
+      "args_template": ["auth", "status"],
+      "params": {},
+      "allowed_flags": [],
+      "description": "Check authentication status"
     }
   }
 }

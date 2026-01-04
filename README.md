@@ -38,9 +38,9 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 
 ```json
 {
-  "initializeCommand": ".devcontainer/init-cmd2host.sh",
+  "initializeCommand": "CMD2HOST_PROFILE=gh_readonly .devcontainer/init-cmd2host.sh",
   "mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/.session-token,target=/run/cmd2host-token,type=bind,readonly"
+    "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly"
   ],
   "features": {
     "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
@@ -78,7 +78,7 @@ Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP clien
 ### 5. Add to .gitignore
 
 ```
-.devcontainer/.session-token
+.devcontainer/.session/
 ```
 
 ## Host Setup
@@ -148,29 +148,34 @@ The daemon validates commands against configurable rules:
 - **Command allowlist**: Regex patterns for allowed subcommands
 - **Command denylist**: Regex patterns for blocked subcommands
 
-Default `gh` config (in `~/.cmd2host/config.json`):
+Default config (in `~/.cmd2host/config.json`) uses operation mode with pre-approved templates:
 
 ```json
 {
-  "commands": {
-    "gh": {
-      "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run "],
-      "denied": ["[;&|`$]", "^auth (login|logout|token)", "^config"],
-      "repo_extract_patterns": [
-        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
-        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
-        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
-        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
-      ]
+  "profiles": {
+    "gh_readonly": {
+      "repo": "",
+      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
+      "env": {"GH_PROMPT_DISABLED": "1"}
+    }
+  },
+  "operations": {
+    "gh_pr_view": {
+      "command": "/opt/homebrew/bin/gh",
+      "args_template": ["pr", "view", "{number}"],
+      "params": {"number": {"type": "integer", "min": 1}},
+      "allowed_flags": ["--json", "--repo", "-R"],
+      "description": "View a pull request"
     }
   }
 }
 ```
 
-Repository restriction works as follows:
-- The container's wrapper script detects the current repository from `git remote get-url origin`
-- If a command explicitly specifies a different repository (via `-R`, `--repo`, positional argument, or API path), it is denied
-- Commands without explicit repository specification are allowed (they use the implicit current repo)
+To use operation mode, set `CMD2HOST_PROFILE` when running `init-cmd2host.sh`:
+
+```bash
+CMD2HOST_PROFILE=gh_readonly .devcontainer/init-cmd2host.sh
+```
 
 ### Auto Repository Flag
 

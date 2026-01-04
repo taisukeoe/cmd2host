@@ -48,7 +48,12 @@ fi
 # Create token file with JSON data (mtime used for expiration)
 # JSON format allows future extension for other project-specific data
 mkdir -p "$TOKEN_DIR"
-echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
+PROFILE="${CMD2HOST_PROFILE:-}"
+if [ -n "$PROFILE" ]; then
+    echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"
+else
+    echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
+fi
 
 # Ensure .session/ is in .devcontainer/.gitignore
 GITIGNORE_FILE=".devcontainer/.gitignore"
