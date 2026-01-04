@@ -115,6 +115,27 @@ cleanup_daemon() {
     fi
 }
 
+# Wait for daemon to be ready (retry loop with exponential backoff)
+wait_for_daemon() {
+    local max_attempts="${1:-10}"
+    local attempt=1
+    local delay=1
+
+    while [[ $attempt -le $max_attempts ]]; do
+        if lsof -i :9876 > /dev/null 2>&1; then
+            return 0
+        fi
+        log_info "Waiting for daemon... (attempt $attempt/$max_attempts)"
+        sleep "$delay"
+        ((attempt++))
+        # Exponential backoff: 1, 2, 4, 4, 4... (cap at 4 seconds)
+        if [[ $delay -lt 4 ]]; then
+            ((delay *= 2))
+        fi
+    done
+    return 1
+}
+
 stop_daemon() {
     if [[ "$OS_TYPE" == "Darwin" ]]; then
         launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
@@ -137,7 +158,11 @@ start_daemon() {
         "$BINARY_PATH" &
         DAEMON_PID=$!
         trap cleanup_daemon EXIT
-        sleep 2
+    fi
+    # Wait for daemon to be ready
+    if ! wait_for_daemon 10; then
+        log_fail "Daemon failed to start within timeout"
+        return 1
     fi
 }
 
@@ -243,9 +268,9 @@ fi
 # Step 2: Verify daemon
 # ===================
 log_step "Step 2: Verifying daemon..."
-sleep 1  # Give daemon time to start
 
-if lsof -i :9876 > /dev/null 2>&1; then
+# Use retry loop to wait for daemon (handles slow CI environments)
+if wait_for_daemon 10; then
     DETECTED_PID=$(lsof -t -i :9876 | head -1)
     log_pass "Daemon running on port 9876 (PID: $DETECTED_PID)"
 else
