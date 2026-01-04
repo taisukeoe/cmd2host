@@ -204,10 +204,10 @@ if ! $SKIP_BUILD; then
             # Detect gh path
             GH_PATH=$(which gh 2>/dev/null || echo "gh")
 
-            # Create config
+            # Create config (0.0.0.0 for container access in CI)
             cat > "$INSTALL_DIR/config.json" << EOF
 {
-  "listen_address": "127.0.0.1",
+  "listen_address": "0.0.0.0",
   "listen_port": 9876,
   "default_profile": "gh_readonly",
   "profiles": {
@@ -297,6 +297,22 @@ fi
 # ===================
 log_step "Step 5: Testing MCP operations..."
 
+# Determine host address for container-to-host communication
+if [[ "$OS_TYPE" == "Darwin" ]]; then
+    HOST_ADDR="host.docker.internal"
+else
+    # Linux: Try host.docker.internal first, fallback to Docker bridge gateway
+    HOST_ADDR="host.docker.internal"
+    # Test connectivity
+    if ! devcontainer exec --workspace-folder . bash -c "nc -z -w 2 host.docker.internal 9876" 2>/dev/null; then
+        log_warn "host.docker.internal not reachable, trying Docker bridge gateway..."
+        # Get Docker bridge gateway IP
+        DOCKER_GATEWAY=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || echo "172.17.0.1")
+        HOST_ADDR="$DOCKER_GATEWAY"
+        log_info "Using $HOST_ADDR"
+    fi
+fi
+
 # Helper function for MCP tests
 test_mcp_operation() {
     local name="$1"
@@ -307,7 +323,7 @@ test_mcp_operation() {
     local response
     response=$(devcontainer exec --workspace-folder . bash -c "
         TOKEN=\$(cat /run/cmd2host-token)
-        echo '$request' | sed \"s/\\\$TOKEN/\$TOKEN/g\" | nc -w $timeout host.docker.internal 9876
+        echo '$request' | sed \"s/\\\$TOKEN/\$TOKEN/g\" | nc -w $timeout $HOST_ADDR 9876
     " 2>&1)
 
     if echo "$response" | grep -q "$expected_pattern"; then
