@@ -97,6 +97,9 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: true
+    env:
+      # Enable Docker BuildKit for cache mount support
+      DOCKER_BUILDKIT: 1
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
 
@@ -124,10 +127,15 @@ jobs:
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      - name: Pre-pull base images to speed up devcontainer build
-        run: |
-          docker pull ubuntu:latest
-          docker pull mcr.microsoft.com/vscode/devcontainers/base:ubuntu
+      - name: Cache Docker BuildKit layers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # ratchet:actions/cache@v4
+        with:
+          path: |
+            ~/.docker/buildkit-cache
+            /var/lib/docker/buildkit
+          key: ${{ runner.os }}-buildkit-${{ hashFiles('.devcontainer/**') }}
+          restore-keys: |
+            ${{ runner.os }}-buildkit-
 
       - name: Build MCP server for Linux
         run: just build-mcp-linux-amd64
