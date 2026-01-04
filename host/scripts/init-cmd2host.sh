@@ -11,6 +11,26 @@
 
 set -euo pipefail
 
+# JSON helper functions using Python3 (available by default on macOS)
+json_has_profile() {
+    local config_file="$1"
+    local profile="$2"
+    python3 -c "
+import json, sys
+config = json.load(open('$config_file'))
+sys.exit(0 if '$profile' in config.get('profiles', {}) else 1)
+" 2>/dev/null
+}
+
+json_list_profiles() {
+    local config_file="$1"
+    python3 -c "
+import json
+config = json.load(open('$config_file'))
+print(', '.join(config.get('profiles', {}).keys()) or '(none)')
+" 2>/dev/null
+}
+
 CMD2HOST_BIN="${HOME}/.cmd2host/cmd2host"
 TOKEN_DIR="${HOME}/.cmd2host/tokens"
 SESSION_DIR=".devcontainer/.session"
@@ -54,18 +74,9 @@ CONFIG_FILE="${HOME}/.cmd2host/config.json"
 # Validate profile exists in config
 if [[ -n "$PROFILE" ]]; then
     if [[ -f "$CONFIG_FILE" ]]; then
-        # Check if profile exists in config using jq when available
-        if command -v jq >/dev/null 2>&1; then
-            if ! jq -e --arg profile "$PROFILE" '.profiles[$profile]' "$CONFIG_FILE" >/dev/null 2>&1; then
-                echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
-                echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
-            fi
-        else
-            # Fallback: best-effort grep check if jq is not installed
-            if ! grep -q "\"$PROFILE\"" "$CONFIG_FILE" 2>/dev/null; then
-                echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
-                echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
-            fi
+        if ! json_has_profile "$CONFIG_FILE" "$PROFILE"; then
+            echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
+            echo "Available profiles: $(json_list_profiles "$CONFIG_FILE")" >&2
         fi
     fi
     echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"
