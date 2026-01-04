@@ -180,10 +180,10 @@ cat > "$INSTALL_DIR/config.json" << EOF
       "command": "$GH_PATH",
       "args_template": ["pr", "view", "{number}"],
       "params": {
-        "number": {"type": "integer", "min": 1}
+        "number": {"type": "integer", "min": 1, "optional": true}
       },
       "allowed_flags": ["--json"],
-      "description": "View a pull request"
+      "description": "View a pull request (by number, or current branch if omitted)"
     },
     "gh_pr_list": {
       "command": "$GH_PATH",

@@ -49,7 +49,17 @@ fi
 # JSON format allows future extension for other project-specific data
 mkdir -p "$TOKEN_DIR"
 PROFILE="${CMD2HOST_PROFILE:-}"
+CONFIG_FILE="${HOME}/.cmd2host/config.json"
+
+# Validate profile exists in config
 if [[ -n "$PROFILE" ]]; then
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # Check if profile exists in config (simple grep check)
+        if ! grep -q "\"$PROFILE\"" "$CONFIG_FILE" 2>/dev/null; then
+            echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
+            echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
+        fi
+    fi
     echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 else
     echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"

@@ -25,6 +25,7 @@ type ItemsSchema struct {
 // ParamSchema defines validation rules for a parameter
 type ParamSchema struct {
 	Type      string       `json:"type"`                // "string", "integer", "array"
+	Optional  bool         `json:"optional,omitempty"`  // If true, parameter can be omitted
 	Pattern   string       `json:"pattern,omitempty"`   // Regex pattern for strings
 	MinLength int          `json:"minLength,omitempty"` // Min length for strings
 	MaxLength int          `json:"maxLength,omitempty"` // Max length for strings
@@ -243,6 +244,10 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 
 			value, exists := params[paramName]
 			if !exists {
+				// Check if parameter is optional
+				if schema, hasSchema := op.Params[paramName]; hasSchema && schema.Optional {
+					continue // Skip optional parameter
+				}
 				return nil, fmt.Errorf("missing required parameter: %s", paramName)
 			}
 

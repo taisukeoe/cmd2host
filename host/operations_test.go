@@ -177,6 +177,49 @@ func TestOperation_BuildArgs_WithProfileEnv(t *testing.T) {
 	}
 }
 
+func TestOperation_BuildArgs_OptionalParam(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"pr", "view", "{number}"},
+		Params: map[string]ParamSchema{
+			"number": {Type: "integer", Optional: true},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		params   map[string]ParamValue
+		expected []string
+	}{
+		{
+			name:     "with optional param provided",
+			params:   map[string]ParamValue{"number": float64(123)},
+			expected: []string{"pr", "view", "123"},
+		},
+		{
+			name:     "without optional param",
+			params:   map[string]ParamValue{},
+			expected: []string{"pr", "view"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := op.BuildArgs(tt.params, nil, nil)
+			if err != nil {
+				t.Fatalf("BuildArgs failed: %v", err)
+			}
+			if len(args) != len(tt.expected) {
+				t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(tt.expected), args)
+			}
+			for i, arg := range args {
+				if arg != tt.expected[i] {
+					t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
 func TestOperation_ValidateArrayParams(t *testing.T) {
 	op := &Operation{
 		Params: map[string]ParamSchema{
