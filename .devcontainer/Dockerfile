@@ -1,7 +1,11 @@
 FROM ubuntu:latest
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
+# Install dependencies (use cache mount for apt to speed up rebuilds)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+    apt-get update && apt-get install -y \
     curl \
     git \
     jq \
@@ -10,8 +14,7 @@ RUN apt-get update && apt-get install -y \
     zsh \
     python3 \
     ripgrep \
-    netcat-openbsd \
-    && rm -rf /var/lib/apt/lists/*
+    netcat-openbsd
 
 # Create non-root user (handle case where GID/UID 1000 already exists in base image)
 ARG USERNAME=vscode

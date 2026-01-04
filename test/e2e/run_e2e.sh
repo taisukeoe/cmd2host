@@ -289,18 +289,18 @@ if ! $SKIP_DEVCONTAINER; then
     if devcontainer up --workspace-folder . > /tmp/devcontainer-up.log 2>&1; then
         log_pass "Devcontainer started"
     else
+        log_fail "Devcontainer failed"
+        echo ""
+        echo "=== devcontainer up log (last 50 lines) ==="
+        tail -50 /tmp/devcontainer-up.log
+        echo "==========================================="
+        echo ""
         # Check for keychain error
         if grep -q "keychain" /tmp/devcontainer-up.log; then
-            log_fail "Devcontainer failed - keychain locked"
-            echo ""
+            echo "Hint: Keychain may be locked (macOS only)"
             echo "  Run: security -v unlock-keychain ~/Library/Keychains/login.keychain-db"
-            echo "  Then retry: $0"
-            exit 1
-        else
-            log_fail "Devcontainer failed"
-            echo "  See: /tmp/devcontainer-up.log"
-            exit 1
         fi
+        exit 1
     fi
 else
     log_step "Step 3: Skipping devcontainer startup (--skip-devcontainer)"
