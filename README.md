@@ -13,6 +13,17 @@ DevContainer                      Host Machine (macOS)
 |   ↓              | <---------- |   ↓              |
 | JSON req/resp    |             | gh (real CLI)    |
 +------------------+             +------------------+
+
+      OR
+
++------------------+             +------------------+
+| AI Agent         |             | cmd2host daemon  |
+|   ↓              |   TCP:9876  |   ↓              |
+| cmd2host-mcp     | ----------> | cmd2host (Go)    |
+| (MCP server)     | <---------- |   ↓              |
+|   ↓              |             | gh (real CLI)    |
+| Operations API   |             |                  |
++------------------+             +------------------+
 ```
 
 ## Quick Start
@@ -43,7 +54,28 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 
 Copy `host/scripts/init-cmd2host.sh` to your project's `.devcontainer/` directory.
 
-### 4. Add to .gitignore
+### 4. (Optional) Enable MCP server for AI agents
+
+Add MCP server configuration to your `.devcontainer/devcontainer.json`:
+
+```json
+{
+  "customizations": {
+    "claude-code": {
+      "mcpServers": {
+        "cmd2host": {
+          "command": "cmd2host-mcp",
+          "args": ["-token-file", "/run/cmd2host-token"]
+        }
+      }
+    }
+  }
+}
+```
+
+Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
+
+### 5. Add to .gitignore
 
 ```
 .devcontainer/.session-token
@@ -144,6 +176,45 @@ Repository restriction works as follows:
 
 For `gh` subcommands that require repository context (`pr`, `issue`, `run`), the wrapper automatically adds `-R <current_repo>` if not already specified. This ensures commands work correctly since the host daemon doesn't have access to the container's git context.
 
+## MCP Server Integration
+
+The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact with the cmd2host daemon using pre-approved operation templates.
+
+### Features
+
+- **Type-safe operations**: Pre-approved command templates with typed parameters
+- **Profile-based policies**: Fine-grained control over what operations are allowed
+  - Repository restriction (binds token to specific repo)
+  - Branch allowlist (regex patterns)
+  - Path denylist (glob patterns)
+  - Git config overrides
+- **AI-friendly**: Provides structured operations instead of raw shell access
+
+### Available MCP Tools
+
+- `cmd2host_list_operations` - List all available operations for the current session
+- `cmd2host_describe_operation` - Get detailed schema for a specific operation
+- `cmd2host_run_operation` - Execute an operation with typed parameters
+
+### Example Operations
+
+- `gh_pr_view` - View a pull request by number
+- `gh_pr_list` - List pull requests with filters
+- `gh_issue_create` - Create a new issue
+- `git_show` - Show commit or file contents
+- `git_log` - View commit history
+
+### Installation
+
+The MCP server binary (`cmd2host-mcp`) is automatically installed in the DevContainer when the feature is enabled. It connects to the same cmd2host daemon on the host.
+
+### Security
+
+MCP server requests use the same token authentication as direct wrapper commands. However, instead of regex-based validation, operations are validated against:
+1. Pre-approved operation templates
+2. Profile-based policies (repo, branch, path restrictions)
+3. Parameter type checking and validation
+
 ## Environment Variables
 
 Set automatically by the feature:
@@ -159,12 +230,20 @@ Set automatically by the feature:
 Requires [just](https://github.com/casey/just) command runner.
 
 ```bash
-just                    # Show available commands
-just build              # Build for current platform
-just test               # Run unit tests
-just test-host          # Run host scenario tests
-just test-devcontainer  # Run devcontainer feature test
-just test-all           # Run all tests
+just                         # Show available commands
+
+# Building
+just build                   # Build daemon for current platform
+just build-mcp               # Build MCP server for current platform
+just build-all               # Build all release binaries
+just build-mcp-linux-amd64   # Build MCP server for Linux (containers)
+
+# Testing
+just test                    # Run unit tests (daemon)
+just test-mcp                # Run unit tests (MCP server)
+just test-host               # Run host scenario tests
+just test-devcontainer       # Run devcontainer feature test
+just test-all                # Run all tests
 ```
 
 ## License

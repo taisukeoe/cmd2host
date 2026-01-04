@@ -8,23 +8,60 @@ cmd2host is a DevContainer Feature that proxies CLI commands (e.g., `gh`) from a
 
 ## Architecture
 
-Two-part system:
+Three-part system:
 1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs wrapper scripts
 2. **Host side** (`host/`): Go daemon that receives and executes commands
+3. **MCP server** (`mcp-server/`): Model Context Protocol server for AI agent integration
 
-Communication flow:
-- Wrapper script (`cmd-wrapper.sh`) → JSON over TCP:9876 → `cmd2host` (Go binary) → actual CLI → response
+Communication flows:
+- **Direct wrapper**: `cmd-wrapper.sh` → JSON over TCP:9876 → `cmd2host` daemon → actual CLI → response
+- **MCP integration**: AI agent → `cmd2host-mcp` (MCP server) → JSON over TCP:9876 → `cmd2host` daemon → actual CLI → response
+
+## Security Model
+
+### Token Authentication
+- **256-bit tokens**: Cryptographically secure, generated per DevContainer session
+- **24-hour TTL**: Tokens expire automatically
+- **BLAKE3 hashing**: Tokens are hashed before storage
+- **Brute-force protection**: 1-second delay on authentication failure
+
+### Command Validation
+Two validation modes:
+1. **Legacy mode** (`config.json`): Regex-based allowlist/denylist for direct wrapper commands
+2. **Operation mode** (MCP server): Pre-approved operation templates with typed parameters and profile-based policies
+
+**Profile-based policies** (for operation mode):
+- Repository restriction (binds token to specific repo)
+- Branch allowlist (regex patterns)
+- Path denylist (glob patterns)
+- Git config overrides
+- Environment variables
 
 ## Key Files
 
+### Container side
 - `src/cmd2host/devcontainer-feature.json` - Feature definition and options
 - `src/cmd2host/install.sh` - Container-side install (runs during devcontainer build)
 - `src/cmd2host/cmd-wrapper.sh` - Command wrapper that sends JSON requests via netcat
+- `src/cmd2host/mcp.json` - MCP server configuration template
+
+### Host daemon
 - `host/main.go` - TCP server entry point
-- `host/config.go` - Configuration loading
-- `host/validator.go` - Command validation logic
+- `host/config.go` - Configuration loading (legacy mode)
+- `host/validator.go` - Command validation logic (legacy mode)
+- `host/operations.go` - Operation template definitions and parameter handling
+- `host/profile.go` - Profile-based policy validation
+- `host/auth.go` - Token authentication and management
 - `host/executor.go` - Command execution
 - `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
+
+### MCP server
+- `mcp-server/main.go` - MCP server entry point
+- `mcp-server/client.go` - Client for communicating with cmd2host daemon
+- `mcp-server/tools.go` - MCP tool implementations (list_operations, describe_operation, run_operation)
+- `mcp-server/types.go` - Shared type definitions
+
+### Testing
 - `justfile` - Build and test commands
 - `test/host/` - Host daemon scenario tests
 - `test/cmd2host/` - DevContainer feature tests
@@ -32,14 +69,23 @@ Communication flow:
 ## Development Commands (just)
 
 ```bash
-just                    # Show available commands
-just build              # Build for current platform (to dist/)
-just build-all          # Build darwin-amd64 + darwin-arm64
-just test               # Run Go unit tests
-just test-host          # Run host scenario tests (integration)
-just test-devcontainer  # Run devcontainer feature test
-just test-all           # Run unit + host scenario tests
-just clean              # Remove dist/
+just                         # Show available commands
+
+# Building
+just build                   # Build daemon for current platform (to dist/)
+just build-mcp               # Build MCP server for current platform
+just build-all               # Build all release binaries (daemon + MCP for darwin-amd64/arm64)
+just build-mcp-linux-amd64   # Build MCP server for Linux (for containers)
+
+# Testing
+just test                    # Run Go unit tests (daemon)
+just test-mcp                # Run Go unit tests (MCP server)
+just test-host               # Run host scenario tests (integration)
+just test-devcontainer       # Run devcontainer feature test
+just test-all                # Run all tests (unit + host scenario)
+
+# Cleanup
+just clean                   # Remove dist/
 ```
 
 ## Testing
@@ -87,24 +133,76 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 ./host/scripts/install.sh --build
 ```
 
-## Security Model
+## Protocols
 
-The daemon validates commands via `config.json`:
-- `commands.<cmd>.allowed` - Regex patterns for allowed subcommands
-- `commands.<cmd>.denied` - Regex patterns for blocked subcommands (checked first)
-- `commands.<cmd>.repo_extract_patterns` - Regexes to extract repo from args for current-repo validation
-
-## Protocol
-
+### Legacy Command Protocol (for direct wrapper)
 Request (JSON over TCP):
 ```json
-{"command": "gh", "args": ["pr", "list", "-R", "owner/repo"]}
+{
+  "command": "gh",
+  "args": ["pr", "list", "-R", "owner/repo"],
+  "token": "session-token"
+}
 ```
 
 Response:
 ```json
-{"exit_code": 0, "stdout": "...", "stderr": "..."}
+{
+  "exit_code": 0,
+  "stdout": "...",
+  "stderr": "..."
+}
 ```
+
+### Operation Protocol (for MCP server)
+Request (JSON over TCP):
+```json
+{
+  "request_id": "unique-id",
+  "operation": "gh_pr_view",
+  "params": {"number": 123},
+  "flags": ["--json"],
+  "token": "session-token"
+}
+```
+
+Response:
+```json
+{
+  "request_id": "unique-id",
+  "exit_code": 0,
+  "stdout": "...",
+  "stderr": "..."
+}
+```
+
+## MCP Server Integration
+
+The MCP server (`cmd2host-mcp`) provides AI agents with tools to interact with the cmd2host daemon:
+
+### Available MCP Tools
+- `cmd2host_list_operations` - List all available operations for the current session
+- `cmd2host_describe_operation` - Get detailed schema for a specific operation
+- `cmd2host_run_operation` - Execute an operation with typed parameters
+
+### DevContainer Configuration
+Add to `.devcontainer/devcontainer.json`:
+```json
+{
+  "customizations": {
+    "claude-code": {
+      "mcpServers": {
+        "cmd2host": {
+          "command": "cmd2host-mcp",
+          "args": ["-token-file", "/run/cmd2host-token"]
+        }
+      }
+    }
+  }
+}
+```
+
+Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
 
 ## Releasing
 
