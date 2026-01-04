@@ -204,7 +204,9 @@ if ! $SKIP_BUILD; then
             # Detect gh path
             GH_PATH=$(which gh 2>/dev/null || echo "gh")
 
-            # Create config (0.0.0.0 for container access in CI)
+            # Create config for CI environment
+            # SECURITY NOTE: listen_address is 0.0.0.0 to allow container-to-host communication.
+            # This is safe in CI where the runner is isolated. Do NOT use 0.0.0.0 in production.
             cat > "$INSTALL_DIR/config.json" << EOF
 {
   "listen_address": "0.0.0.0",

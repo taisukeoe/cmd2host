@@ -1,7 +1,7 @@
 ---
 name: testing-cmd2host-e2e
 description: Run end-to-end tests for cmd2host MCP integration. Use when testing cmd2host daemon, devcontainer, or MCP operations like gh_pr_view/gh_pr_list. (project)
-allowed-tools: "Bash(just build:*) Bash(just test-host:*) Bash(./test/host/run_tests.sh:*) Bash(./test/e2e/run_e2e.sh:*)"
+allowed-tools: "Bash(just build:*) Bash(just test-host:*) Bash(just test-e2e:*) Bash(./test/host/run_tests.sh:*) Bash(./test/e2e/run_e2e.sh:*)"
 ---
 
 # Testing cmd2host E2E
