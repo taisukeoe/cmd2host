@@ -51,7 +51,19 @@ test-host: build
 test-devcontainer:
     devcontainer features test --features cmd2host --base-image mcr.microsoft.com/devcontainers/base:ubuntu
 
-# Run all tests (except devcontainer)
+# Run E2E tests (daemon + devcontainer + MCP)
+test-e2e:
+    ./test/e2e/run_e2e.sh
+
+# Run E2E tests with clean install (uninstall -> install)
+test-e2e-clean:
+    ./test/e2e/run_e2e.sh --clean
+
+# Run E2E tests without rebuilding daemon
+test-e2e-quick:
+    ./test/e2e/run_e2e.sh --skip-build --skip-devcontainer
+
+# Run all tests (except devcontainer and e2e)
 test-all: test test-mcp test-host
 
 # Clean build artifacts
