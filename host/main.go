@@ -115,28 +115,14 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token (with fallback to default)
-	profileName := tokenData.Profile
-	if profileName == "" {
-		profileName = s.config.DefaultProfile
-	}
-	if profileName == "" {
-		fmt.Println("  -> No profile in token and no default_profile configured")
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
+		fmt.Printf("  -> %v\n", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
-			DeniedReason: strPtr("Token does not have a profile assigned and no default_profile configured"),
-		})
-		return
-	}
-
-	profile, exists := s.config.GetProfile(profileName)
-	if !exists {
-		fmt.Printf("  -> Profile not found: %s\n", profileName)
-		s.sendOperationResponse(conn, OperationResponse{
-			RequestID:    req.RequestID,
-			ExitCode:     1,
-			DeniedReason: strPtr(fmt.Sprintf("Profile not found: %s", profileName)),
+			DeniedReason: strPtr(err.Error()),
 		})
 		return
 	}
@@ -288,22 +274,11 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token (with fallback to default)
-	profileName := tokenData.Profile
-	if profileName == "" {
-		profileName = s.config.DefaultProfile
-	}
-	if profileName == "" {
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
 		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: "Token does not have a profile assigned and no default_profile configured",
-		})
-		return
-	}
-
-	profile, exists := s.config.GetProfile(profileName)
-	if !exists {
-		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: fmt.Sprintf("Profile not found: %s", profileName),
+			Error: err.Error(),
 		})
 		return
 	}
@@ -352,22 +327,11 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token (with fallback to default)
-	profileName := tokenData.Profile
-	if profileName == "" {
-		profileName = s.config.DefaultProfile
-	}
-	if profileName == "" {
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: "Token does not have a profile assigned and no default_profile configured",
-		})
-		return
-	}
-
-	profile, exists := s.config.GetProfile(profileName)
-	if !exists {
-		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: fmt.Sprintf("Profile not found: %s", profileName),
+			Error: err.Error(),
 		})
 		return
 	}
@@ -442,6 +406,22 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// resolveProfile resolves the profile for a token, using default_profile as fallback
+func (s *Server) resolveProfile(tokenData TokenData) (*Profile, string, error) {
+	profileName := tokenData.Profile
+	if profileName == "" {
+		profileName = s.config.DefaultProfile
+	}
+	if profileName == "" {
+		return nil, "", fmt.Errorf("token does not have a profile assigned and no default_profile configured")
+	}
+	profile, exists := s.config.GetProfile(profileName)
+	if !exists {
+		return nil, "", fmt.Errorf("profile not found: %s", profileName)
+	}
+	return profile, profileName, nil
+}
+
 // Run starts the TCP server
 func (s *Server) Run() error {
 	// Cleanup expired tokens on startup
@@ -469,7 +449,9 @@ func (s *Server) Run() error {
 	s.listener = listener
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
-	fmt.Printf("Profiles: %v\n", s.profileNames())
+	if names := s.profileNames(); len(names) > 0 {
+		fmt.Printf("Profiles: %v\n", names)
+	}
 	if s.config.DefaultProfile != "" {
 		fmt.Printf("Default profile: %s\n", s.config.DefaultProfile)
 	}
