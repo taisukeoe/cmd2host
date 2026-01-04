@@ -113,7 +113,7 @@ jobs:
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
 
       - name: Cache npm global packages
-        uses: actions/cache@db2fc96e519bbacec33eb41d937f5d04214b5d77 # ratchet:actions/cache@v4
+        uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-npm-devcontainer-global
