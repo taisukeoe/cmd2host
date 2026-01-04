@@ -268,6 +268,67 @@ func TestOperation_BuildArgs_OptionalParam(t *testing.T) {
 	}
 }
 
+func TestOperation_BuildArgs_WithRepoInjection(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"pr", "view", "{number}", "-R", "{repo}"},
+		Params: map[string]ParamSchema{
+			"number": {Type: "integer", Min: intPtr(1)},
+		},
+	}
+
+	params := map[string]ParamValue{
+		"number": float64(123),
+	}
+	// Simulate repo injection from tokenData.Repo
+	profileEnv := map[string]string{
+		"repo": "owner/repo-name",
+	}
+
+	args, err := op.BuildArgs(params, nil, profileEnv)
+	if err != nil {
+		t.Fatalf("BuildArgs failed: %v", err)
+	}
+
+	expected := []string{"pr", "view", "123", "-R", "owner/repo-name"}
+	if len(args) != len(expected) {
+		t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(expected), args)
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
+}
+
+func TestOperation_BuildArgs_WithRepoInjectionAndFlags(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"pr", "list", "-R", "{repo}"},
+		Params:       map[string]ParamSchema{},
+		AllowedFlags: []string{"--json", "--state"},
+	}
+
+	params := map[string]ParamValue{}
+	profileEnv := map[string]string{
+		"repo": "taisukeoe/cmd2host",
+	}
+	flags := []string{"--json", "title,state", "--state", "open"}
+
+	args, err := op.BuildArgs(params, flags, profileEnv)
+	if err != nil {
+		t.Fatalf("BuildArgs failed: %v", err)
+	}
+
+	expected := []string{"pr", "list", "-R", "taisukeoe/cmd2host", "--json", "title,state", "--state", "open"}
+	if len(args) != len(expected) {
+		t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(expected), args)
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
+}
+
 func TestOperation_ValidateArrayParams(t *testing.T) {
 	op := &Operation{
 		Params: map[string]ParamSchema{
