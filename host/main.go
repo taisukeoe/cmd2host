@@ -24,18 +24,10 @@ const (
 	maxReadSize = 65536
 )
 
-// Request represents an incoming command request (legacy format)
-type Request struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-	Token   string   `json:"token"`
-}
-
 // Server handles TCP connections and command proxying
 type Server struct {
 	config     *Config
 	validator  *Validator
-	executor   *Executor
 	tokenStore *TokenStore
 	listener   net.Listener
 }
@@ -49,7 +41,6 @@ func NewServer(config *Config) (*Server, error) {
 	return &Server{
 		config:     config,
 		validator:  NewValidator(config),
-		executor:   NewExecutor(config),
 		tokenStore: tokenStore,
 	}, nil
 }
@@ -75,9 +66,9 @@ func (s *Server) handleClient(conn net.Conn) {
 	var rawRequest map[string]json.RawMessage
 	if err := json.Unmarshal(buf[:n], &rawRequest); err != nil {
 		fmt.Println("  -> Invalid JSON:", err)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("Invalid JSON: %v", err),
+		s.sendOperationResponse(conn, OperationResponse{
+			ExitCode:     1,
+			DeniedReason: strPtr(fmt.Sprintf("Invalid JSON: %v", err)),
 		})
 		return
 	}
@@ -90,7 +81,11 @@ func (s *Server) handleClient(conn net.Conn) {
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
 		s.handleOperationRequest(conn, buf[:n])
 	} else {
-		s.handleLegacyRequest(conn, buf[:n])
+		fmt.Println("  -> Unknown request type (missing 'operation' field)")
+		s.sendOperationResponse(conn, OperationResponse{
+			ExitCode:     1,
+			DeniedReason: strPtr("Unknown request type: missing 'operation' field"),
+		})
 	}
 }
 
@@ -120,29 +115,19 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
-		fmt.Println("  -> No profile in token, operation requests require profile")
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
+		fmt.Printf("  -> %v\n", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
-			DeniedReason: strPtr("Token does not have a profile assigned"),
+			DeniedReason: strPtr(err.Error()),
 		})
 		return
 	}
 
-	profile, exists := s.config.GetProfile(tokenData.Profile)
-	if !exists {
-		fmt.Printf("  -> Profile not found: %s\n", tokenData.Profile)
-		s.sendOperationResponse(conn, OperationResponse{
-			RequestID:    req.RequestID,
-			ExitCode:     1,
-			DeniedReason: strPtr(fmt.Sprintf("Profile not found: %s", tokenData.Profile)),
-		})
-		return
-	}
-
-	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, tokenData.Profile, req.Params)
+	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, profileName, req.Params)
 
 	// Validate operation
 	op, result := s.validator.ValidateOperation(req, profile)
@@ -158,6 +143,10 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 
 	// Build arguments from template
 	profileEnv := profile.GetEnvForOperation()
+	// Inject token's repo into template expansion
+	if tokenData.Repo != "" {
+		profileEnv["repo"] = tokenData.Repo
+	}
 	args, err := op.BuildArgs(req.Params, req.Flags, profileEnv)
 	if err != nil {
 		fmt.Printf("  -> ARG BUILD FAILED: %v\n", err)
@@ -179,55 +168,6 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		Stdout:    resp.Stdout,
 		Stderr:    resp.Stderr,
 	})
-}
-
-// handleLegacyRequest handles old-style command requests
-func (s *Server) handleLegacyRequest(conn net.Conn, data []byte) {
-	var req Request
-	if err := json.Unmarshal(data, &req); err != nil {
-		fmt.Println("  -> Invalid JSON:", err)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("Invalid JSON: %v", err),
-		})
-		return
-	}
-
-	// Authenticate token and get project data
-	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
-	if !valid {
-		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
-		fmt.Println("  -> AUTH FAILED")
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   "Authentication failed",
-		})
-		return
-	}
-
-	// Default command
-	if req.Command == "" {
-		req.Command = "gh"
-	}
-
-	fmt.Printf("[%s] %s\n", req.Command, strings.Join(req.Args, " "))
-
-	// Validate command using repo from token (not from request - prevents spoofing)
-	result := s.validator.ValidateCommand(req.Command, req.Args, tokenData.Repo)
-	if !result.OK {
-		fmt.Printf("  -> DENIED: %s\n", result.Message)
-		s.sendLegacyResponse(conn, ExecuteResult{
-			ExitCode: 1,
-			Stderr:   result.Message,
-		})
-		return
-	}
-
-	// Execute command
-	resp := s.executor.Execute(req.Command, req.Args)
-	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
-
-	s.sendLegacyResponse(conn, resp)
 }
 
 // executeWithSanitization executes a command with sanitized environment
@@ -334,23 +274,16 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
 		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: "Token does not have a profile assigned",
+			Error: err.Error(),
 		})
 		return
 	}
 
-	profile, exists := s.config.GetProfile(tokenData.Profile)
-	if !exists {
-		s.sendListOperationsResponse(conn, ListOperationsResponse{
-			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
-		})
-		return
-	}
-
-	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", tokenData.Profile)
+	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", profileName)
 
 	// Build list of operations available to this profile
 	var ops []OperationInfo
@@ -394,18 +327,11 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Get profile from token
-	if tokenData.Profile == "" {
+	// Resolve profile from token (with fallback to default)
+	profile, profileName, err := s.resolveProfile(tokenData)
+	if err != nil {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: "Token does not have a profile assigned",
-		})
-		return
-	}
-
-	profile, exists := s.config.GetProfile(tokenData.Profile)
-	if !exists {
-		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
-			Error: fmt.Sprintf("Profile not found: %s", tokenData.Profile),
+			Error: err.Error(),
 		})
 		return
 	}
@@ -426,7 +352,7 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", tokenData.Profile, req.DescribeOperation)
+	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", profileName, req.DescribeOperation)
 
 	s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 		Operation: &OperationInfo{
@@ -463,18 +389,6 @@ func (s *Server) sendDescribeOperationResponse(conn net.Conn, resp DescribeOpera
 	}
 }
 
-// sendLegacyResponse writes a legacy JSON response to the connection
-func (s *Server) sendLegacyResponse(conn net.Conn, resp ExecuteResult) {
-	data, err := json.Marshal(resp)
-	if err != nil {
-		fmt.Println("  -> ERROR marshaling response:", err)
-		return
-	}
-	if _, err := conn.Write(data); err != nil {
-		fmt.Println("  -> ERROR writing response:", err)
-	}
-}
-
 // sendOperationResponse writes an operation response to the connection
 func (s *Server) sendOperationResponse(conn net.Conn, resp OperationResponse) {
 	data, err := json.Marshal(resp)
@@ -490,6 +404,22 @@ func (s *Server) sendOperationResponse(conn net.Conn, resp OperationResponse) {
 // strPtr returns a pointer to the string
 func strPtr(s string) *string {
 	return &s
+}
+
+// resolveProfile resolves the profile for a token, using default_profile as fallback
+func (s *Server) resolveProfile(tokenData TokenData) (*Profile, string, error) {
+	profileName := tokenData.Profile
+	if profileName == "" {
+		profileName = s.config.DefaultProfile
+	}
+	if profileName == "" {
+		return nil, "", fmt.Errorf("token does not have a profile assigned and no default_profile configured")
+	}
+	profile, exists := s.config.GetProfile(profileName)
+	if !exists {
+		return nil, "", fmt.Errorf("profile not found: %s", profileName)
+	}
+	return profile, profileName, nil
 }
 
 // Run starts the TCP server
@@ -519,10 +449,11 @@ func (s *Server) Run() error {
 	s.listener = listener
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
-	if s.config.IsLegacyMode() {
-		fmt.Printf("Mode: Legacy (commands: %v)\n", s.commandNames())
-	} else {
-		fmt.Printf("Mode: Operation-based (profiles: %v)\n", s.profileNames())
+	if names := s.profileNames(); len(names) > 0 {
+		fmt.Printf("Profiles: %v\n", names)
+	}
+	if s.config.DefaultProfile != "" {
+		fmt.Printf("Default profile: %s\n", s.config.DefaultProfile)
 	}
 	fmt.Println("Repository restriction: bound to token (set at session init)")
 	fmt.Println()
@@ -546,15 +477,6 @@ func (s *Server) Shutdown() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-}
-
-// commandNames returns a list of configured command names (legacy)
-func (s *Server) commandNames() []string {
-	names := make([]string, 0, len(s.config.Commands))
-	for name := range s.config.Commands {
-		names = append(names, name)
-	}
-	return names
 }
 
 // profileNames returns a list of configured profile names
