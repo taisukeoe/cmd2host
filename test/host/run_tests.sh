@@ -76,8 +76,8 @@ echo ""
 echo "Running scenario tests..."
 echo ""
 
-# Test helper
-test_request() {
+# Test helper for operation protocol
+test_operation() {
     local name="$1"
     local request="$2"
     local expected_exit_code="$3"
@@ -104,65 +104,97 @@ test_request() {
     fi
 }
 
-# Scenario tests (all include token, repo is bound to token not request)
-test_request \
-    "gh --version (allowed)" \
-    '{"command":"gh","args":["--version"],"token":"'"$TEST_TOKEN"'"}' \
+# Test helper for list_operations
+test_list_operations() {
+    local name="$1"
+    local request="$2"
+    local expected_pattern="$3"
+
+    local response
+    response=$(echo "$request" | nc -w 5 localhost $PORT 2>/dev/null || echo '{"error":"connection failed"}')
+
+    if echo "$response" | grep -q "$expected_pattern"; then
+        log_pass "$name"
+    else
+        log_fail "$name" "pattern '$expected_pattern'" "$response"
+    fi
+}
+
+# =====================
+# Operation tests
+# =====================
+
+# Test: gh_version (allowed operation, no params)
+test_operation \
+    "gh_version (allowed operation)" \
+    '{"operation":"gh_version","params":{},"token":"'"$TEST_TOKEN"'"}' \
     "0" \
     "gh version"
 
-test_request \
-    "gh repo view same repo (allowed - repo from token)" \
-    '{"command":"gh","args":["repo","view","taisukeoe/cmd2host","--json","name"],"token":"'"$TEST_TOKEN"'"}' \
+# Test: gh_pr_list with repo injection from token
+test_operation \
+    "gh_pr_list with repo injection" \
+    '{"operation":"gh_pr_list","params":{},"flags":["--limit","1"],"token":"'"$TEST_TOKEN"'"}' \
     "0" \
     ""
 
-test_request \
-    "gh repo view different repo (denied - repo from token)" \
-    '{"command":"gh","args":["repo","view","other/repo","--json","name"],"token":"'"$TEST_TOKEN"'"}' \
+# Test: gh_pr_view with valid params
+test_operation \
+    "gh_pr_view with valid params" \
+    '{"operation":"gh_pr_view","params":{"number":11},"token":"'"$TEST_TOKEN"'"}' \
+    "0" \
+    ""
+
+# Test: operation not in profile
+test_operation \
+    "operation not in profile (denied)" \
+    '{"operation":"git_add","params":{"paths":["file.txt"]},"token":"'"$TEST_TOKEN"'"}' \
+    "1" \
+    "Unknown operation"
+
+# Test: invalid params (number below min)
+test_operation \
+    "invalid params (number below min)" \
+    '{"operation":"gh_pr_view","params":{"number":0},"token":"'"$TEST_TOKEN"'"}' \
+    "1" \
+    "below minimum"
+
+# Test: disallowed flag
+test_operation \
+    "disallowed flag" \
+    '{"operation":"gh_pr_list","params":{},"flags":["--web"],"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "not allowed"
 
-test_request \
-    "gh config list (denied pattern)" \
-    '{"command":"gh","args":["config","list"],"token":"'"$TEST_TOKEN"'"}' \
+# Test: unknown operation
+test_operation \
+    "unknown operation" \
+    '{"operation":"unknown_op","params":{},"token":"'"$TEST_TOKEN"'"}' \
     "1" \
-    "Denied by pattern"
+    "Unknown operation"
 
-test_request \
-    "gh pr list -R disallowed repo (denied - repo from token)" \
-    '{"command":"gh","args":["pr","list","-R","other/repo"],"token":"'"$TEST_TOKEN"'"}' \
-    "1" \
-    "not allowed"
+# =====================
+# list_operations tests
+# =====================
 
-test_request \
-    "gh api repos/other/repo (denied - repo from token)" \
-    '{"command":"gh","args":["api","repos/other/repo/pulls"],"token":"'"$TEST_TOKEN"'"}' \
-    "1" \
-    "not allowed"
+test_list_operations \
+    "list_operations returns available ops" \
+    '{"list_operations":true,"token":"'"$TEST_TOKEN"'"}' \
+    "gh_version"
 
-test_request \
-    "gh auth login (denied pattern)" \
-    '{"command":"gh","args":["auth","login"],"token":"'"$TEST_TOKEN"'"}' \
-    "1" \
-    "Denied by pattern"
+# =====================
+# Authentication tests
+# =====================
 
-test_request \
-    "command injection attempt" \
-    '{"command":"gh","args":["pr","list","; rm -rf /"],"token":"'"$TEST_TOKEN"'"}' \
-    "1" \
-    "Denied by pattern"
-
-# Authentication failure tests
-test_request \
+test_operation \
     "auth failure - no token" \
-    '{"command":"gh","args":["--version"]}' \
+    '{"operation":"gh_version","params":{}}' \
     "1" \
     "Authentication failed"
 
-test_request \
+test_operation \
     "auth failure - wrong token" \
-    '{"command":"gh","args":["--version"],"token":"wrong-token"}' \
+    '{"operation":"gh_version","params":{},"token":"wrong-token"}' \
     "1" \
     "Authentication failed"
 

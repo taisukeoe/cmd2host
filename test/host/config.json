@@ -1,17 +1,37 @@
 {
   "listen_address": "127.0.0.1",
   "listen_port": 19876,
-  "commands": {
-    "gh": {
-      "timeout": 60,
-      "allowed": ["^pr ", "^issue ", "^auth status$", "^api repos/", "^repo view", "^run ", "^--version$"],
-      "denied": ["[;&|`$]", "^auth (login|logout|token)", "^config"],
-      "repo_extract_patterns": [
-        {"pattern": "--repo[= ]([^ ]+)", "group_index": 1},
-        {"pattern": "-R[= ]?([^ ]+)", "group_index": 1},
-        {"pattern": "^repo (view|clone|fork) ([^/ ]+/[^/ ]+)", "group_index": 2},
-        {"pattern": "^api repos/([^/ ]+/[^/ ]+)", "group_index": 1}
-      ]
+  "default_profile": "gh_readonly",
+  "profiles": {
+    "gh_readonly": {
+      "operations": ["gh_pr_view", "gh_pr_list", "gh_version"],
+      "env": {
+        "GH_PROMPT_DISABLED": "1"
+      }
+    }
+  },
+  "operations": {
+    "gh_version": {
+      "command": "gh",
+      "args_template": ["--version"],
+      "params": {},
+      "description": "Show gh CLI version"
+    },
+    "gh_pr_view": {
+      "command": "gh",
+      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json"],
+      "description": "View a pull request"
+    },
+    "gh_pr_list": {
+      "command": "gh",
+      "args_template": ["pr", "list", "-R", "{repo}"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit"],
+      "description": "List pull requests"
     }
   }
 }
