@@ -42,14 +42,12 @@ ENV PATH="$VOLTA_HOME/bin:$PATH"
 
 USER $USERNAME
 
-# Install Volta and Codex CLI (use cache mount for volta downloads)
-RUN --mount=type=cache,target=/home/vscode/.volta/tmp,uid=1000,gid=1000 \
-    curl https://get.volta.sh | bash \
+# Install Volta and Codex CLI
+RUN curl https://get.volta.sh | bash \
     && $VOLTA_HOME/bin/volta install node@lts \
     && $VOLTA_HOME/bin/volta install @openai/codex
 
-# Install Claude Code (use cache mount for npm/download cache)
-RUN --mount=type=cache,target=/home/vscode/.cache,uid=1000,gid=1000 \
-    curl -fsSL https://claude.ai/install.sh | bash
+# Install Claude Code
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 WORKDIR /workspaces
