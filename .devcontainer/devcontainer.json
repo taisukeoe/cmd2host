@@ -1,10 +1,7 @@
 {
   "name": "cmd2host-devcontainer",
   "build": {
-    "dockerfile": "Dockerfile",
-    "options": [
-      "--build-arg", "BUILDKIT_INLINE_CACHE=1"
-    ]
+    "dockerfile": "Dockerfile"
   },
   "workspaceFolder": "/workspaces/cmd2host",
   // Ensure host.docker.internal works on Linux (Docker 20.10+)
