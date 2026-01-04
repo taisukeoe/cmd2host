@@ -49,7 +49,7 @@ fi
 # JSON format allows future extension for other project-specific data
 mkdir -p "$TOKEN_DIR"
 PROFILE="${CMD2HOST_PROFILE:-}"
-if [ -n "$PROFILE" ]; then
+if [[ -n "$PROFILE" ]]; then
     echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 else
     echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"

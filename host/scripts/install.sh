@@ -182,21 +182,21 @@ cat > "$INSTALL_DIR/config.json" << EOF
       "params": {
         "number": {"type": "integer", "min": 1}
       },
-      "allowed_flags": ["--json", "--repo", "-R"],
+      "allowed_flags": ["--json"],
       "description": "View a pull request"
     },
     "gh_pr_list": {
       "command": "$GH_PATH",
       "args_template": ["pr", "list"],
       "params": {},
-      "allowed_flags": ["--json", "--state", "--limit", "--repo", "-R"],
+      "allowed_flags": ["--json", "--state", "--limit"],
       "description": "List pull requests"
     },
     "gh_issue_list": {
       "command": "$GH_PATH",
       "args_template": ["issue", "list"],
       "params": {},
-      "allowed_flags": ["--json", "--state", "--limit", "--repo", "-R"],
+      "allowed_flags": ["--json", "--state", "--limit"],
       "description": "List issues"
     },
     "gh_issue_view": {
@@ -205,14 +205,14 @@ cat > "$INSTALL_DIR/config.json" << EOF
       "params": {
         "number": {"type": "integer", "min": 1}
       },
-      "allowed_flags": ["--json", "--repo", "-R"],
+      "allowed_flags": ["--json"],
       "description": "View an issue"
     },
     "gh_repo_view": {
       "command": "$GH_PATH",
       "args_template": ["repo", "view"],
       "params": {},
-      "allowed_flags": ["--json", "--repo", "-R"],
+      "allowed_flags": ["--json"],
       "description": "View repository information"
     },
     "gh_auth_status": {

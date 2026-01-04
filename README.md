@@ -164,7 +164,7 @@ Default config (in `~/.cmd2host/config.json`) uses operation mode with pre-appro
       "command": "/opt/homebrew/bin/gh",
       "args_template": ["pr", "view", "{number}"],
       "params": {"number": {"type": "integer", "min": 1}},
-      "allowed_flags": ["--json", "--repo", "-R"],
+      "allowed_flags": ["--json"],
       "description": "View a pull request"
     }
   }
