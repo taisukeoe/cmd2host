@@ -51,7 +51,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.23'
+          cache: true
+          cache-dependency-path: |
+            host/go.sum
+            mcp-server/go.sum
 
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
@@ -99,13 +103,34 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.23'
+          cache: true
+          cache-dependency-path: |
+            host/go.sum
+            mcp-server/go.sum
 
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
 
+      - name: Cache npm global packages
+        uses: actions/cache@db2fc96e519bbacec33eb41d937f5d04214b5d77 # ratchet:actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-devcontainer-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-devcontainer-
+            ${{ runner.os }}-npm-
+
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # ratchet:docker/setup-buildx-action@v3
+
+      - name: Pre-pull base images to speed up devcontainer build
+        run: |
+          docker pull ubuntu:latest
+          docker pull mcr.microsoft.com/vscode/devcontainers/base:ubuntu
 
       - name: Build MCP server for Linux
         run: just build-mcp-linux-amd64
