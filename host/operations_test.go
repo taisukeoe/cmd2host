@@ -72,6 +72,54 @@ func TestOperation_ValidateParams(t *testing.T) {
 	}
 }
 
+func TestOperation_ValidateParams_Optional(t *testing.T) {
+	op := &Operation{
+		Params: map[string]ParamSchema{
+			"number":   {Type: "integer", Min: intPtr(1), Optional: true},
+			"required": {Type: "string"},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		params  map[string]ParamValue
+		wantErr bool
+	}{
+		{
+			name: "optional param provided",
+			params: map[string]ParamValue{
+				"number":   float64(123),
+				"required": "value",
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional param omitted",
+			params: map[string]ParamValue{
+				"required": "value",
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional param invalid when provided",
+			params: map[string]ParamValue{
+				"number":   float64(0), // below min
+				"required": "value",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := op.ValidateParams(tt.params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOperation_ValidateFlags(t *testing.T) {
 	op := &Operation{
 		AllowedFlags: []string{"--state", "--limit"},
@@ -174,6 +222,49 @@ func TestOperation_BuildArgs_WithProfileEnv(t *testing.T) {
 		if arg != expected[i] {
 			t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, expected[i])
 		}
+	}
+}
+
+func TestOperation_BuildArgs_OptionalParam(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"pr", "view", "{number}"},
+		Params: map[string]ParamSchema{
+			"number": {Type: "integer", Optional: true},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		params   map[string]ParamValue
+		expected []string
+	}{
+		{
+			name:     "with optional param provided",
+			params:   map[string]ParamValue{"number": float64(123)},
+			expected: []string{"pr", "view", "123"},
+		},
+		{
+			name:     "without optional param",
+			params:   map[string]ParamValue{},
+			expected: []string{"pr", "view"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := op.BuildArgs(tt.params, nil, nil)
+			if err != nil {
+				t.Fatalf("BuildArgs failed: %v", err)
+			}
+			if len(args) != len(tt.expected) {
+				t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(tt.expected), args)
+			}
+			for i, arg := range args {
+				if arg != tt.expected[i] {
+					t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, tt.expected[i])
+				}
+			}
+		})
 	}
 }
 
