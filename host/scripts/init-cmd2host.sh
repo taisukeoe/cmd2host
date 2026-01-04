@@ -54,10 +54,18 @@ CONFIG_FILE="${HOME}/.cmd2host/config.json"
 # Validate profile exists in config
 if [[ -n "$PROFILE" ]]; then
     if [[ -f "$CONFIG_FILE" ]]; then
-        # Check if profile exists in config (simple grep check)
-        if ! grep -q "\"$PROFILE\"" "$CONFIG_FILE" 2>/dev/null; then
-            echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
-            echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
+        # Check if profile exists in config using jq when available
+        if command -v jq >/dev/null 2>&1; then
+            if ! jq -e --arg profile "$PROFILE" '.profiles[$profile]' "$CONFIG_FILE" >/dev/null 2>&1; then
+                echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
+                echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
+            fi
+        else
+            # Fallback: best-effort grep check if jq is not installed
+            if ! grep -q "\"$PROFILE\"" "$CONFIG_FILE" 2>/dev/null; then
+                echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
+                echo "Available profiles can be checked with: jq '.profiles | keys' $CONFIG_FILE" >&2
+            fi
         fi
     fi
     echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"

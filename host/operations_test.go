@@ -72,6 +72,54 @@ func TestOperation_ValidateParams(t *testing.T) {
 	}
 }
 
+func TestOperation_ValidateParams_Optional(t *testing.T) {
+	op := &Operation{
+		Params: map[string]ParamSchema{
+			"number":   {Type: "integer", Min: intPtr(1), Optional: true},
+			"required": {Type: "string"},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		params  map[string]ParamValue
+		wantErr bool
+	}{
+		{
+			name: "optional param provided",
+			params: map[string]ParamValue{
+				"number":   float64(123),
+				"required": "value",
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional param omitted",
+			params: map[string]ParamValue{
+				"required": "value",
+			},
+			wantErr: false,
+		},
+		{
+			name: "optional param invalid when provided",
+			params: map[string]ParamValue{
+				"number":   float64(0), // below min
+				"required": "value",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := op.ValidateParams(tt.params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOperation_ValidateFlags(t *testing.T) {
 	op := &Operation{
 		AllowedFlags: []string{"--state", "--limit"},
