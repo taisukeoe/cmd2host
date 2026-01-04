@@ -244,8 +244,8 @@ log_step "Step 2: Verifying daemon..."
 sleep 1  # Give daemon time to start
 
 if lsof -i :9876 > /dev/null 2>&1; then
-    DAEMON_PID=$(lsof -t -i :9876 | head -1)
-    log_pass "Daemon running on port 9876 (PID: $DAEMON_PID)"
+    DETECTED_PID=$(lsof -t -i :9876 | head -1)
+    log_pass "Daemon running on port 9876 (PID: $DETECTED_PID)"
 else
     log_fail "Daemon not running on port 9876"
     echo "  Check: lsof -i :9876"
