@@ -56,7 +56,10 @@ func (s *Server) handleClient(conn net.Conn) {
 	// - Handles TCP packet fragmentation (waits for complete JSON object)
 	// - Prevents memory exhaustion via size limit
 	// - Doesn't require client to close connection
-	decoder := json.NewDecoder(io.LimitReader(conn, maxReadSize))
+	//
+	// We buffer the raw bytes so we can reuse them for type detection and handler parsing
+	var buf bytes.Buffer
+	decoder := json.NewDecoder(io.TeeReader(io.LimitReader(conn, maxReadSize), &buf))
 
 	// Decode into raw message map to detect request type
 	var rawRequest map[string]json.RawMessage
@@ -72,20 +75,16 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 
-	// Re-encode for handlers (they expect []byte)
-	buf, err := json.Marshal(rawRequest)
-	if err != nil {
-		fmt.Println("  -> JSON re-encode error:", err)
-		return
-	}
+	// Use buffered bytes for handlers (same data, no re-encoding)
+	data := buf.Bytes()
 
 	// Determine request type by checking for specific fields
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
-		s.handleListOperationsRequest(conn, buf)
+		s.handleListOperationsRequest(conn, data)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
-		s.handleDescribeOperationRequest(conn, buf)
+		s.handleDescribeOperationRequest(conn, data)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
-		s.handleOperationRequest(conn, buf)
+		s.handleOperationRequest(conn, data)
 	} else {
 		fmt.Println("  -> Unknown request type (missing 'operation' field)")
 		s.sendOperationResponse(conn, OperationResponse{
