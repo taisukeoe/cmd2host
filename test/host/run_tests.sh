@@ -151,11 +151,10 @@ test_operation \
     "gh version"
 
 # Test: gh_pr_list with repo injection from token
-test_operation \
-    "gh_pr_list with repo injection" \
-    '{"operation":"gh_pr_list","params":{},"flags":["--limit=1"],"token":"'"$TEST_TOKEN"'"}' \
-    "0" \
-    ""
+# Uses test_operation_executed because actual gh command may fail in CI (no GH_TOKEN inherited)
+test_operation_executed \
+    "gh_pr_list with repo injection (executed)" \
+    '{"operation":"gh_pr_list","params":{},"flags":["--limit=1"],"token":"'"$TEST_TOKEN"'"}'
 
 # Test: gh_pr_view with valid params (may fail in CI due to API permissions, but should not be denied)
 test_operation_executed \
