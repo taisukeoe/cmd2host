@@ -52,19 +52,20 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Set read deadline
 	conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-	// Read request
-	buf := make([]byte, maxReadSize)
-	n, err := conn.Read(buf)
+	// Read request until EOF (client closes connection after sending)
+	// Use LimitReader to prevent memory exhaustion
+	buf, err := io.ReadAll(io.LimitReader(conn, maxReadSize))
 	if err != nil {
-		if err != io.EOF {
-			fmt.Println("  -> ERROR reading:", err)
-		}
+		fmt.Println("  -> ERROR reading:", err)
 		return
+	}
+	if len(buf) == 0 {
+		return // Empty request, nothing to do
 	}
 
 	// Try to detect request type by peeking at JSON
 	var rawRequest map[string]json.RawMessage
-	if err := json.Unmarshal(buf[:n], &rawRequest); err != nil {
+	if err := json.Unmarshal(buf, &rawRequest); err != nil {
 		fmt.Println("  -> Invalid JSON:", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			ExitCode:     1,
@@ -75,11 +76,11 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	// Determine request type by checking for specific fields
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
-		s.handleListOperationsRequest(conn, buf[:n])
+		s.handleListOperationsRequest(conn, buf)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
-		s.handleDescribeOperationRequest(conn, buf[:n])
+		s.handleDescribeOperationRequest(conn, buf)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
-		s.handleOperationRequest(conn, buf[:n])
+		s.handleOperationRequest(conn, buf)
 	} else {
 		fmt.Println("  -> Unknown request type (missing 'operation' field)")
 		s.sendOperationResponse(conn, OperationResponse{
@@ -127,7 +128,8 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, profileName, req.Params)
+	// Log operation request (params omitted to avoid logging sensitive data like PR body)
+	fmt.Printf("[OP:%s] profile=%s request_id=%s\n", req.Operation, profileName, req.RequestID)
 
 	// Validate operation
 	op, result := s.validator.ValidateOperation(req, profile)

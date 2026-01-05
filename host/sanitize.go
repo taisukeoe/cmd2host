@@ -40,9 +40,9 @@ var baseEnvVars = []string{
 	// GPG for commit signing
 	"GPG_AGENT_INFO",
 	"GPG_TTY",
-	// GitHub CLI token
-	"GH_TOKEN",
-	"GITHUB_TOKEN",
+	// Note: GH_TOKEN/GITHUB_TOKEN are intentionally NOT inherited.
+	// gh CLI should use SSH auth via SSH_AUTH_SOCK.
+	// If a token is needed, set it explicitly in profile's env field.
 }
 
 // BuildEnv builds the final environment array for exec.Cmd
