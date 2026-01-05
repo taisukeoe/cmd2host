@@ -12,6 +12,25 @@ import (
 // testToken must be 64 hex chars to pass format validation
 const testToken = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
+// writeAndCloseWrite writes data to conn and closes the write side to signal EOF to the server.
+// This ensures clean connection handling and signals the server that no more data will be sent.
+func writeAndCloseWrite(t *testing.T, conn net.Conn, data []byte) {
+	t.Helper()
+	_, err := conn.Write(data)
+	if err != nil {
+		t.Fatalf("Failed to write: %v", err)
+	}
+	// Close write side to signal EOF to server
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if err := tcpConn.CloseWrite(); err != nil {
+			t.Fatalf("Failed to CloseWrite: %v", err)
+		}
+	} else {
+		// Non-TCP connection (shouldn't happen in tests, but handle gracefully)
+		t.Log("Warning: connection is not TCP, cannot half-close")
+	}
+}
+
 // setupServerConfigWithOperations creates a config with operations and profiles for testing
 func setupServerConfigWithOperations(t *testing.T) (*Config, *TokenStore, string) {
 	t.Helper()
@@ -110,11 +129,7 @@ func TestServer_ListOperations(t *testing.T) {
 			Token:          testToken,
 		}
 		reqData, _ := json.Marshal(req)
-
-		_, err = conn.Write(reqData)
-		if err != nil {
-			t.Fatalf("Failed to write: %v", err)
-		}
+		writeAndCloseWrite(t, conn, reqData)
 
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 65536)
@@ -153,11 +168,7 @@ func TestServer_ListOperations(t *testing.T) {
 			Token:          "invalid-token",
 		}
 		reqData, _ := json.Marshal(req)
-
-		_, err = conn.Write(reqData)
-		if err != nil {
-			t.Fatalf("Failed to write: %v", err)
-		}
+		writeAndCloseWrite(t, conn, reqData)
 
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 65536)
@@ -216,11 +227,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			Token:             testToken,
 		}
 		reqData, _ := json.Marshal(req)
-
-		_, err = conn.Write(reqData)
-		if err != nil {
-			t.Fatalf("Failed to write: %v", err)
-		}
+		writeAndCloseWrite(t, conn, reqData)
 
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 65536)
@@ -261,11 +268,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			Token:             testToken,
 		}
 		reqData, _ := json.Marshal(req)
-
-		_, err = conn.Write(reqData)
-		if err != nil {
-			t.Fatalf("Failed to write: %v", err)
-		}
+		writeAndCloseWrite(t, conn, reqData)
 
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 65536)
@@ -296,11 +299,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			Token:             "invalid-token",
 		}
 		reqData, _ := json.Marshal(req)
-
-		_, err = conn.Write(reqData)
-		if err != nil {
-			t.Fatalf("Failed to write: %v", err)
-		}
+		writeAndCloseWrite(t, conn, reqData)
 
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		buf := make([]byte, 65536)

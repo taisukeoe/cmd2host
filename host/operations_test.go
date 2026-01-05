@@ -122,7 +122,7 @@ func TestOperation_ValidateParams_Optional(t *testing.T) {
 
 func TestOperation_ValidateFlags(t *testing.T) {
 	op := &Operation{
-		AllowedFlags: []string{"--state", "--limit"},
+		AllowedFlags: []string{"--state", "--limit", "--json"},
 	}
 
 	tests := []struct {
@@ -131,24 +131,34 @@ func TestOperation_ValidateFlags(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "allowed flags",
-			flags:   []string{"--state", "open", "--limit", "10"},
+			name:    "allowed flags with equals format",
+			flags:   []string{"--state=open", "--limit=10"},
 			wantErr: false,
 		},
 		{
-			name:    "allowed flag with equals",
-			flags:   []string{"--state=open"},
+			name:    "allowed boolean flag",
+			flags:   []string{"--json"},
 			wantErr: false,
+		},
+		{
+			name:    "separate value format rejected",
+			flags:   []string{"--state", "open"},
+			wantErr: true, // "open" is not a valid flag format
 		},
 		{
 			name:    "disallowed flag",
-			flags:   []string{"--format", "json"},
+			flags:   []string{"--format=json"},
 			wantErr: true,
 		},
 		{
 			name:    "empty flags",
 			flags:   []string{},
 			wantErr: false,
+		},
+		{
+			name:    "bypass attempt blocked",
+			flags:   []string{"--state", "--repo=evil/evil"},
+			wantErr: true, // --repo is not allowed
 		},
 	}
 

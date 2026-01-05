@@ -184,7 +184,9 @@ func validateParamValue(name string, value ParamValue, schema ParamSchema) error
 	return nil
 }
 
-// ValidateFlags validates that all provided flags are in the allowed list
+// ValidateFlags validates that all provided flags are in the allowed list.
+// Flags must be in --flag or --flag=value format. Separate value arguments
+// (e.g., --state open) are not supported - use --state=open instead.
 func (op *Operation) ValidateFlags(flags []string) error {
 	if len(op.AllowedFlags) == 0 && len(flags) > 0 {
 		return fmt.Errorf("no flags allowed for this operation")
@@ -195,26 +197,16 @@ func (op *Operation) ValidateFlags(flags []string) error {
 		allowedSet[f] = true
 	}
 
-	skipNext := false
 	for _, flag := range flags {
-		// Skip flag values (the element after a flag like --state)
-		if skipNext {
-			skipNext = false
-			continue
-		}
-
-		// Skip elements that don't look like flags (don't start with -)
+		// Every element must be a flag (start with -)
 		if !strings.HasPrefix(flag, "-") {
-			continue
+			return fmt.Errorf("invalid flag format: %s (use --flag=value, not --flag value)", flag)
 		}
 
 		// Extract flag name (handle --flag=value)
 		flagName := flag
 		if idx := strings.Index(flag, "="); idx > 0 {
 			flagName = flag[:idx]
-		} else {
-			// Flag without =, next element is the value
-			skipNext = true
 		}
 
 		if !allowedSet[flagName] {

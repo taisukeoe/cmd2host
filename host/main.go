@@ -52,19 +52,31 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Set read deadline
 	conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-	// Read request
-	buf := make([]byte, maxReadSize)
-	n, err := conn.Read(buf)
-	if err != nil {
-		if err != io.EOF {
-			fmt.Println("  -> ERROR reading:", err)
-		}
-		return
-	}
+	// Use json.Decoder with LimitReader for robust reading:
+	// - Handles TCP packet fragmentation (waits for complete JSON object)
+	// - Prevents memory exhaustion via size limit
+	// - Doesn't require client to close connection
+	//
+	// We buffer the raw bytes so we can reuse them for type detection and handler parsing
+	var buf bytes.Buffer
+	decoder := json.NewDecoder(io.TeeReader(io.LimitReader(conn, maxReadSize), &buf))
 
-	// Try to detect request type by peeking at JSON
+	// Decode into raw message map to detect request type
 	var rawRequest map[string]json.RawMessage
-	if err := json.Unmarshal(buf[:n], &rawRequest); err != nil {
+	if err := decoder.Decode(&rawRequest); err != nil {
+		if err == io.EOF {
+			return // Empty request, nothing to do
+		}
+		// Check if request was truncated by LimitReader
+		if int64(buf.Len()) >= maxReadSize {
+			msg := fmt.Sprintf("Request too large (exceeded %d bytes)", maxReadSize)
+			fmt.Println("  ->", msg)
+			s.sendOperationResponse(conn, OperationResponse{
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
 		fmt.Println("  -> Invalid JSON:", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			ExitCode:     1,
@@ -73,13 +85,16 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 
+	// Use buffered bytes for handlers (same data, no re-encoding)
+	data := buf.Bytes()
+
 	// Determine request type by checking for specific fields
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
-		s.handleListOperationsRequest(conn, buf[:n])
+		s.handleListOperationsRequest(conn, data)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
-		s.handleDescribeOperationRequest(conn, buf[:n])
+		s.handleDescribeOperationRequest(conn, data)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
-		s.handleOperationRequest(conn, buf[:n])
+		s.handleOperationRequest(conn, data)
 	} else {
 		fmt.Println("  -> Unknown request type (missing 'operation' field)")
 		s.sendOperationResponse(conn, OperationResponse{
@@ -127,7 +142,8 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[OP:%s] profile=%s params=%v\n", req.Operation, profileName, req.Params)
+	// Log operation request (params omitted to avoid logging sensitive data like PR body)
+	fmt.Printf("[OP:%s] profile=%s request_id=%s\n", req.Operation, profileName, req.RequestID)
 
 	// Validate operation
 	op, result := s.validator.ValidateOperation(req, profile)
