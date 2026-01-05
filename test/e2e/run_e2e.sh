@@ -371,11 +371,11 @@ test_mcp_operation \
     '{"operation":"list_operations","list_operations":true,"token":"$TOKEN"}' \
     "gh_pr_view"
 
-# Test 5.2: gh_pr_list
+# Test 5.2: gh_pr_list (use --limit=1 format, check not denied - actual gh may fail without GH_TOKEN)
 test_mcp_operation \
-    "gh_pr_list executes successfully" \
-    '{"operation":"gh_pr_list","params":{},"flags":["--limit","1"],"token":"$TOKEN"}' \
-    '"exit_code":0' \
+    "gh_pr_list executes (not denied)" \
+    '{"operation":"gh_pr_list","params":{},"flags":["--limit=1"],"token":"$TOKEN"}' \
+    '"denied_reason":null' \
     10
 
 # Test 5.3: gh_pr_view (PR #11 as known good PR)
