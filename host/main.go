@@ -67,6 +67,16 @@ func (s *Server) handleClient(conn net.Conn) {
 		if err == io.EOF {
 			return // Empty request, nothing to do
 		}
+		// Check if request was truncated by LimitReader
+		if int64(buf.Len()) >= maxReadSize {
+			msg := fmt.Sprintf("Request too large (exceeded %d bytes)", maxReadSize)
+			fmt.Println("  ->", msg)
+			s.sendOperationResponse(conn, OperationResponse{
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
 		fmt.Println("  -> Invalid JSON:", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			ExitCode:     1,

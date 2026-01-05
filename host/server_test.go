@@ -12,16 +12,22 @@ import (
 // testToken must be 64 hex chars to pass format validation
 const testToken = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
-// writeAndCloseWrite writes data to conn and closes the write side to signal EOF to the server
+// writeAndCloseWrite writes data to conn and closes the write side to signal EOF to the server.
+// This ensures clean connection handling and signals the server that no more data will be sent.
 func writeAndCloseWrite(t *testing.T, conn net.Conn, data []byte) {
 	t.Helper()
 	_, err := conn.Write(data)
 	if err != nil {
 		t.Fatalf("Failed to write: %v", err)
 	}
-	// Close write side to signal EOF to server (required for io.ReadAll)
+	// Close write side to signal EOF to server
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.CloseWrite()
+		if err := tcpConn.CloseWrite(); err != nil {
+			t.Fatalf("Failed to CloseWrite: %v", err)
+		}
+	} else {
+		// Non-TCP connection (shouldn't happen in tests, but handle gracefully)
+		t.Log("Warning: connection is not TCP, cannot half-close")
 	}
 }
 
