@@ -153,7 +153,7 @@ test_operation \
 # Test: gh_pr_list with repo injection from token
 test_operation \
     "gh_pr_list with repo injection" \
-    '{"operation":"gh_pr_list","params":{},"flags":["--limit","1"],"token":"'"$TEST_TOKEN"'"}' \
+    '{"operation":"gh_pr_list","params":{},"flags":["--limit=1"],"token":"'"$TEST_TOKEN"'"}' \
     "0" \
     ""
 

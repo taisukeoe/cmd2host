@@ -52,25 +52,30 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Set read deadline
 	conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-	// Read request until EOF (client closes connection after sending)
-	// Use LimitReader to prevent memory exhaustion
-	buf, err := io.ReadAll(io.LimitReader(conn, maxReadSize))
-	if err != nil {
-		fmt.Println("  -> ERROR reading:", err)
-		return
-	}
-	if len(buf) == 0 {
-		return // Empty request, nothing to do
-	}
+	// Use json.Decoder with LimitReader for robust reading:
+	// - Handles TCP packet fragmentation (waits for complete JSON object)
+	// - Prevents memory exhaustion via size limit
+	// - Doesn't require client to close connection
+	decoder := json.NewDecoder(io.LimitReader(conn, maxReadSize))
 
-	// Try to detect request type by peeking at JSON
+	// Decode into raw message map to detect request type
 	var rawRequest map[string]json.RawMessage
-	if err := json.Unmarshal(buf, &rawRequest); err != nil {
+	if err := decoder.Decode(&rawRequest); err != nil {
+		if err == io.EOF {
+			return // Empty request, nothing to do
+		}
 		fmt.Println("  -> Invalid JSON:", err)
 		s.sendOperationResponse(conn, OperationResponse{
 			ExitCode:     1,
 			DeniedReason: strPtr(fmt.Sprintf("Invalid JSON: %v", err)),
 		})
+		return
+	}
+
+	// Re-encode for handlers (they expect []byte)
+	buf, err := json.Marshal(rawRequest)
+	if err != nil {
+		fmt.Println("  -> JSON re-encode error:", err)
 		return
 	}
 
