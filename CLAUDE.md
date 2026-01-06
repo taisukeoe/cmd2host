@@ -4,18 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cmd2host is a DevContainer Feature that proxies CLI commands (e.g., `gh`) from a container to the host machine via TCP. This enables using host-installed tools with their credentials inside DevContainers.
+cmd2host is a DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`) on the host machine via MCP (Model Context Protocol). This allows AI agents running inside DevContainers to use host-installed tools with their credentials.
 
 ## Architecture
 
 Three-part system:
-1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs wrapper scripts
+1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs MCP server and wrapper scripts
 2. **Host side** (`host/`): Go daemon that receives and executes commands
 3. **MCP server** (`mcp-server/`): Model Context Protocol server for AI agent integration
 
-Communication flows:
-- **Direct wrapper**: `cmd-wrapper.sh` → JSON over TCP:9876 → `cmd2host` daemon → actual CLI → response
-- **MCP integration**: AI agent → `cmd2host-mcp` (MCP server) → JSON over TCP:9876 → `cmd2host` daemon → actual CLI → response
+Communication flow:
+```
+AI Agent → cmd2host-mcp (MCP server) → JSON over TCP:9876 → cmd2host daemon → actual CLI → response
+```
+
+Note: The wrapper scripts (e.g., `gh`) installed in the container do not execute commands directly. They display an error message guiding users to use MCP tools instead.
 
 ## Security Model
 
@@ -26,11 +29,9 @@ Communication flows:
 - **Brute-force protection**: 1-second delay on authentication failure
 
 ### Command Validation
-Two validation modes:
-1. **Legacy mode** (`config.json`): Regex-based allowlist/denylist for direct wrapper commands
-2. **Operation mode** (MCP server): Pre-approved operation templates with typed parameters and profile-based policies
+Commands are validated using **operation mode**: pre-approved operation templates with typed parameters and profile-based policies.
 
-**Profile-based policies** (for operation mode):
+**Profile-based policies**:
 - Repository restriction (binds token to specific repo)
 - Branch allowlist (regex patterns)
 - Path denylist (glob patterns)
@@ -42,13 +43,13 @@ Two validation modes:
 ### Container side
 - `src/cmd2host/devcontainer-feature.json` - Feature definition and options (`commands`, `installMcpServer`)
 - `src/cmd2host/install.sh` - Container-side install (runs during devcontainer build)
-- `src/cmd2host/cmd-wrapper.sh` - Command wrapper that sends JSON requests via netcat
+- `src/cmd2host/cmd-wrapper.sh` - Wrapper that displays MCP usage instructions (does not execute commands)
 - `src/cmd2host/mcp.json` - MCP server configuration template
 
 ### Host daemon
 - `host/main.go` - TCP server entry point
-- `host/config.go` - Configuration loading (legacy mode)
-- `host/validator.go` - Command validation logic (legacy mode)
+- `host/config.go` - Configuration loading
+- `host/validator.go` - Command validation logic
 - `host/operations.go` - Operation template definitions and parameter handling
 - `host/profile.go` - Profile-based policy validation
 - `host/auth.go` - Token authentication and management
@@ -128,10 +129,11 @@ just build
 ./dist/cmd2host ~/.cmd2host/config.json
 ```
 
-### Test wrapper without daemon:
+### Test MCP server connection:
 ```bash
-# In container, check connection
-echo '{"command":"gh","args":["--version"]}' | nc host.docker.internal 9876
+# In container, test list_operations
+TOKEN=$(cat /run/cmd2host-token)
+echo '{"list_operations":true,"token":"'"$TOKEN"'"}' | nc host.docker.internal 9876
 ```
 
 ## Installation
@@ -144,29 +146,11 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 ./host/scripts/install.sh --build
 ```
 
-## Protocols
+## Protocol
 
-### Legacy Command Protocol (for direct wrapper)
-Request (JSON over TCP):
-```json
-{
-  "command": "gh",
-  "args": ["pr", "list", "-R", "owner/repo"],
-  "token": "session-token"
-}
-```
+### Operation Protocol (JSON over TCP)
 
-Response:
-```json
-{
-  "exit_code": 0,
-  "stdout": "...",
-  "stderr": "..."
-}
-```
-
-### Operation Protocol (for MCP server)
-Request (JSON over TCP):
+Request:
 ```json
 {
   "request_id": "unique-id",
@@ -187,12 +171,24 @@ Response:
 }
 ```
 
+### List Operations Request
+
+```json
+{
+  "list_operations": true,
+  "prefix": "gh_pr",
+  "token": "session-token"
+}
+```
+
+The optional `prefix` parameter filters operations by ID prefix (e.g., `"gh"` returns all gh operations, `"gh_pr"` returns only PR operations).
+
 ## MCP Server Integration
 
 The MCP server (`cmd2host-mcp`) provides AI agents with tools to interact with the cmd2host daemon:
 
 ### Available MCP Tools
-- `cmd2host_list_operations` - List all available operations for the current session
+- `cmd2host_list_operations` - List available operations (optional `prefix` filter, e.g., `"gh_pr"`)
 - `cmd2host_describe_operation` - Get detailed schema for a specific operation
 - `cmd2host_run_operation` - Execute an operation with typed parameters
 

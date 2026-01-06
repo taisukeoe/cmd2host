@@ -61,6 +61,7 @@ type OperationResponse struct {
 // ListOperationsRequest requests the list of available operations
 type ListOperationsRequest struct {
 	ListOperations bool   `json:"list_operations"`
+	Prefix         string `json:"prefix,omitempty"` // Filter by operation ID prefix (e.g., "gh", "gh_pr")
 	Token          string `json:"token"`
 }
 

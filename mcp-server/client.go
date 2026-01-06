@@ -73,10 +73,16 @@ func (c *Client) sendAndReceive(request interface{}, response interface{}) error
 	return nil
 }
 
-// ListOperations returns the list of available operations for the token
-func (c *Client) ListOperations() (*ListOperationsResponse, error) {
+// ListOperations returns the list of available operations for the token.
+// Optional prefix parameter filters operations by ID prefix (e.g., "gh", "gh_pr").
+func (c *Client) ListOperations(prefix ...string) (*ListOperationsResponse, error) {
+	p := ""
+	if len(prefix) > 0 {
+		p = prefix[0]
+	}
 	req := ListOperationsRequest{
 		ListOperations: true,
+		Prefix:         p,
 		Token:          c.token,
 	}
 
