@@ -205,6 +205,59 @@ func TestClient_RunOperation(t *testing.T) {
 	}
 }
 
+func TestClient_ListOperationsWithPrefix(t *testing.T) {
+	// Start a mock server that verifies prefix is sent
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to create listener: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().(*net.TCPAddr)
+
+	receivedPrefix := ""
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read request
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+
+		var req ListOperationsRequest
+		json.Unmarshal(buf[:n], &req)
+		receivedPrefix = req.Prefix
+
+		// Send response
+		resp := ListOperationsResponse{
+			Operations: []OperationInfo{
+				{ID: "gh_pr_view", Description: "View PR"},
+				{ID: "gh_pr_list", Description: "List PRs"},
+			},
+		}
+		data, _ := json.Marshal(resp)
+		conn.Write(data)
+	}()
+
+	client := NewClient("127.0.0.1", addr.Port, "test-token")
+	resp, err := client.ListOperations("gh_pr")
+	if err != nil {
+		t.Fatalf("ListOperations failed: %v", err)
+	}
+
+	// Verify prefix was sent in request
+	if receivedPrefix != "gh_pr" {
+		t.Errorf("Expected prefix 'gh_pr' to be sent, got '%s'", receivedPrefix)
+	}
+
+	if len(resp.Operations) != 2 {
+		t.Errorf("Expected 2 operations, got %d", len(resp.Operations))
+	}
+}
+
 func TestClient_Timeout(t *testing.T) {
 	// Start a server that doesn't respond
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

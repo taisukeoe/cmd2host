@@ -13,11 +13,13 @@ fi
 cat >&2 <<EOF
 ERROR: '$CMD_NAME' cannot be executed inside this container due to lack of credentials/permissions.
 
-Use the MCP server (cmd2host) to execute this command on the host machine:
+Use the cmd2host MCP server tools to execute this command on the host machine:
 
-1. Use 'cmd2host_list_operations' with prefix='$PREFIX' to see available operations
-2. Use 'cmd2host_describe_operation' to get operation details
-3. Use 'cmd2host_run_operation' to execute operations
+1. cmd2host_list_operations(prefix='$PREFIX') - List available operations
+2. cmd2host_describe_operation(operation_id) - Get operation details and parameters
+3. cmd2host_run_operation(operation_id, params, flags) - Execute an operation
+
+These are MCP (Model Context Protocol) tools available through your MCP client.
 
 Attempted command: $CMD_NAME $ARGS
 

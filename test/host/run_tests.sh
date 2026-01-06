@@ -198,6 +198,56 @@ test_list_operations \
     '{"list_operations":true,"token":"'"$TEST_TOKEN"'"}' \
     "gh_version"
 
+# Test: list_operations with prefix filter
+test_list_operations \
+    "list_operations with prefix 'gh_pr' returns only gh_pr operations" \
+    '{"list_operations":true,"prefix":"gh_pr","token":"'"$TEST_TOKEN"'"}' \
+    "gh_pr_list"
+
+# Test: list_operations with prefix filter excludes non-matching
+test_list_operations_excludes() {
+    local name="$1"
+    local request="$2"
+    local excluded_pattern="$3"
+
+    local response
+    response=$(echo "$request" | nc -w 5 localhost $PORT 2>/dev/null || echo '{"error":"connection failed"}')
+
+    if echo "$response" | grep -q "$excluded_pattern"; then
+        log_fail "$name" "pattern '$excluded_pattern' to be excluded" "$response"
+    else
+        log_pass "$name"
+    fi
+}
+
+test_list_operations_excludes \
+    "list_operations with prefix 'gh_pr' excludes gh_version" \
+    '{"list_operations":true,"prefix":"gh_pr","token":"'"$TEST_TOKEN"'"}' \
+    "gh_version"
+
+# Test: list_operations with non-matching prefix returns empty
+test_list_operations_empty() {
+    local name="$1"
+    local request="$2"
+
+    local response
+    response=$(echo "$request" | nc -w 5 localhost $PORT 2>/dev/null || echo '{"error":"connection failed"}')
+
+    local op_count
+    # Handle both null and empty array: null -> 0, [] -> 0
+    op_count=$(echo "$response" | python3 -c "import sys,json; ops=json.load(sys.stdin).get('operations'); print(0 if ops is None else len(ops))" 2>/dev/null || echo "-1")
+
+    if [[ "$op_count" == "0" ]]; then
+        log_pass "$name"
+    else
+        log_fail "$name" "0 operations" "$op_count operations ($response)"
+    fi
+}
+
+test_list_operations_empty \
+    "list_operations with non-matching prefix returns empty" \
+    '{"list_operations":true,"prefix":"docker","token":"'"$TEST_TOKEN"'"}'
+
 # =====================
 # Authentication tests
 # =====================
