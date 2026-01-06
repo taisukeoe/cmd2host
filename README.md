@@ -1,21 +1,11 @@
 # cmd2host
 
-DevContainer Feature that proxies commands (e.g., `gh`) from container to host machine.
+DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`) on the host machine via MCP.
 
 ## Architecture
 
 ```
 DevContainer                      Host Machine (macOS)
-+------------------+             +------------------+
-| gh (wrapper)     |   TCP:9876  | cmd2host daemon  |
-|   ↓              | ----------> |   ↓              |
-| cmd-wrapper.sh   |             | cmd2host (Go)    |
-|   ↓              | <---------- |   ↓              |
-| JSON req/resp    |             | gh (real CLI)    |
-+------------------+             +------------------+
-
-      OR
-
 +------------------+             +------------------+
 | AI Agent         |             | cmd2host daemon  |
 |   ↓              |   TCP:9876  |   ↓              |
@@ -25,6 +15,8 @@ DevContainer                      Host Machine (macOS)
 | Operations API   |             |                  |
 +------------------+             +------------------+
 ```
+
+Note: Wrapper scripts (e.g., `gh`) are installed but display MCP usage instructions instead of executing commands directly.
 
 ## Quick Start
 
@@ -54,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 
 Copy `host/scripts/init-cmd2host.sh` to your project's `.devcontainer/` directory.
 
-### 4. (Optional) Enable MCP server for AI agents
+### 4. Configure MCP server for AI agents
 
 Add MCP server configuration to your `.devcontainer/devcontainer.json`:
 
@@ -156,13 +148,13 @@ Token flow:
 
 ### Command Validation
 
-The daemon validates commands against configurable rules:
+Commands are validated using operation mode with pre-approved templates:
 
-- **Current repository only**: Commands can only access the repository detected from the DevContainer's git remote
-- **Command allowlist**: Regex patterns for allowed subcommands
-- **Command denylist**: Regex patterns for blocked subcommands
+- **Profile-based policies**: Repository restriction, branch allowlist, path denylist
+- **Typed parameters**: Parameters are validated against schemas
+- **Allowed flags**: Only pre-approved flags can be used
 
-Default config (in `~/.cmd2host/config.json`) uses operation mode with pre-approved templates:
+Default config (in `~/.cmd2host/config.json`):
 
 ```json
 {
@@ -185,15 +177,11 @@ Default config (in `~/.cmd2host/config.json`) uses operation mode with pre-appro
 }
 ```
 
-To use operation mode, set `CMD2HOST_PROFILE` when running `init-cmd2host.sh`:
+To use a specific profile, set `CMD2HOST_PROFILE` when running `init-cmd2host.sh`:
 
 ```bash
 CMD2HOST_PROFILE=gh_readonly .devcontainer/init-cmd2host.sh
 ```
-
-### Auto Repository Flag
-
-For `gh` subcommands that require repository context (`pr`, `issue`, `run`), the wrapper automatically adds `-R <current_repo>` if not already specified. This ensures commands work correctly since the host daemon doesn't have access to the container's git context.
 
 ## MCP Server Integration
 
@@ -211,7 +199,7 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 
 ### Available MCP Tools
 
-- `cmd2host_list_operations` - List all available operations for the current session
+- `cmd2host_list_operations` - List available operations (optional `prefix` filter, e.g., `"gh_pr"`)
 - `cmd2host_describe_operation` - Get detailed schema for a specific operation
 - `cmd2host_run_operation` - Execute an operation with typed parameters
 
@@ -229,7 +217,7 @@ The MCP server binary (`cmd2host-mcp`) is automatically installed in the DevCont
 
 ### Security
 
-MCP server requests use the same token authentication as direct wrapper commands. However, instead of regex-based validation, operations are validated against:
+MCP server requests use token authentication. Operations are validated against:
 1. Pre-approved operation templates
 2. Profile-based policies (repo, branch, path restrictions)
 3. Parameter type checking and validation
