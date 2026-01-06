@@ -4,11 +4,8 @@
 CMD_NAME="$(basename "$0")"
 ARGS="$*"
 
-# Build prefix suggestion matching operation naming convention (e.g., gh_pr, gh_issue)
+# Use command name as prefix for filtering operations
 PREFIX="$CMD_NAME"
-if [[ -n "$1" ]]; then
-    PREFIX="${CMD_NAME}_${1}"
-fi
 
 cat >&2 <<EOF
 ERROR: '$CMD_NAME' cannot be executed inside this container due to lack of credentials/permissions.
