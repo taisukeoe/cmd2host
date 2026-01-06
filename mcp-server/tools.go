@@ -9,8 +9,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// ListOperationsInput is the input for cmd2host_list_operations tool (no params needed)
-type ListOperationsInput struct{}
+// ListOperationsInput is the input for cmd2host_list_operations tool
+type ListOperationsInput struct {
+	Prefix string `json:"prefix,omitempty" mcp:"Filter operations by ID prefix (e.g., 'gh' for all gh operations, 'gh_pr' for PR operations only)"`
+}
 
 // DescribeOperationInput is the input for cmd2host_describe_operation tool
 type DescribeOperationInput struct {
@@ -57,7 +59,7 @@ func (h *ToolHandler) RegisterTools(server *mcp.Server) {
 
 // handleListOperations lists all available operations
 func (h *ToolHandler) handleListOperations(ctx context.Context, req *mcp.CallToolRequest, input ListOperationsInput) (*mcp.CallToolResult, any, error) {
-	resp, err := h.client.ListOperations()
+	resp, err := h.client.ListOperations(input.Prefix)
 	if err != nil {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{

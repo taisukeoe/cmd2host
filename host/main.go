@@ -304,6 +304,10 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 	// Build list of operations available to this profile
 	var ops []OperationInfo
 	for _, opID := range profile.Operations {
+		// Apply prefix filter if specified
+		if req.Prefix != "" && !strings.HasPrefix(opID, req.Prefix) {
+			continue
+		}
 		op, exists := s.config.GetOperation(opID)
 		if !exists {
 			continue

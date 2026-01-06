@@ -66,7 +66,7 @@ func TestClient_ListOperations(t *testing.T) {
 	}()
 
 	client := NewClient("127.0.0.1", addr.Port, "test-token")
-	resp, err := client.ListOperations()
+	resp, err := client.ListOperations() // No prefix - list all
 	if err != nil {
 		t.Fatalf("ListOperations failed: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestClient_Timeout(t *testing.T) {
 	// This should timeout (but we can't easily test the 60s timeout, so we rely on the deadline)
 	// The test just ensures the code path works
 	start := time.Now()
-	_, err = client.ListOperations()
+	_, err = client.ListOperations("gh") // Test with prefix
 	elapsed := time.Since(start)
 
 	// Should fail due to connection being closed or timeout
