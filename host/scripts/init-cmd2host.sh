@@ -11,26 +11,6 @@
 
 set -euo pipefail
 
-# JSON helper functions using Python3 (available by default on macOS)
-json_has_profile() {
-    local config_file="$1"
-    local profile="$2"
-    python3 -c "
-import json, sys
-config = json.load(open('$config_file'))
-sys.exit(0 if '$profile' in config.get('profiles', {}) else 1)
-" 2>/dev/null
-}
-
-json_list_profiles() {
-    local config_file="$1"
-    python3 -c "
-import json
-config = json.load(open('$config_file'))
-print(', '.join(config.get('profiles', {}).keys()) or '(none)')
-" 2>/dev/null
-}
-
 CMD2HOST_BIN="${HOME}/.cmd2host/cmd2host"
 TOKEN_DIR="${HOME}/.cmd2host/tokens"
 SESSION_DIR=".devcontainer/.session"
@@ -67,22 +47,9 @@ fi
 
 # Create token file with JSON data (mtime used for expiration)
 # JSON format allows future extension for other project-specific data
+# Token is bound to repo; project config is loaded from ~/.cmd2host/projects/<project-id>/
 mkdir -p "$TOKEN_DIR"
-PROFILE="${CMD2HOST_PROFILE:-}"
-CONFIG_FILE="${HOME}/.cmd2host/config.json"
-
-# Validate profile exists in config
-if [[ -n "$PROFILE" ]]; then
-    if [[ -f "$CONFIG_FILE" ]]; then
-        if ! json_has_profile "$CONFIG_FILE" "$PROFILE"; then
-            echo "Warning: profile '$PROFILE' not found in $CONFIG_FILE" >&2
-            echo "Available profiles: $(json_list_profiles "$CONFIG_FILE")" >&2
-        fi
-    fi
-    echo -n "{\"repo\":\"$CURRENT_REPO\",\"profile\":\"$PROFILE\"}" > "$TOKEN_DIR/$TOKEN_HASH"
-else
-    echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
-fi
+echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 
 # Ensure .session/ is in .devcontainer/.gitignore
 GITIGNORE_FILE=".devcontainer/.gitignore"

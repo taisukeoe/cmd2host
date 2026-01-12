@@ -229,31 +229,40 @@ if ! $SKIP_BUILD; then
             # Detect gh path
             GH_PATH=$(which gh 2>/dev/null || echo "gh")
 
-            # Create config for CI environment
+            # Create daemon config for CI environment
             # SECURITY NOTE: listen_address is 0.0.0.0 to allow container-to-host communication.
             # This is safe in CI where the runner is isolated. Do NOT use 0.0.0.0 in production.
-            cat > "$INSTALL_DIR/config.json" << EOF
+            cat > "$INSTALL_DIR/daemon.json" << EOF
 {
   "listen_address": "0.0.0.0",
-  "listen_port": 9876,
-  "default_profile": "gh_readonly",
-  "profiles": {
-    "gh_readonly": {
-      "repo": "",
-      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
-      "env": {"GH_PROMPT_DISABLED": "1"}
-    }
-  },
-  "operations": {
-    "gh_pr_view": {"command": "$GH_PATH", "args_template": ["pr", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1, "optional": true}}, "allowed_flags": ["--json"]},
-    "gh_pr_list": {"command": "$GH_PATH", "args_template": ["pr", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"]},
-    "gh_issue_list": {"command": "$GH_PATH", "args_template": ["issue", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"]},
-    "gh_issue_view": {"command": "$GH_PATH", "args_template": ["issue", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1}}, "allowed_flags": ["--json"]},
-    "gh_repo_view": {"command": "$GH_PATH", "args_template": ["repo", "view", "{repo}"], "params": {}, "allowed_flags": ["--json"]},
-    "gh_auth_status": {"command": "$GH_PATH", "args_template": ["auth", "status"], "params": {}, "allowed_flags": []}
-  }
+  "listen_port": 9876
 }
 EOF
+
+            # Create project config for taisukeoe/cmd2host
+            PROJECT_ID="taisukeoe_cmd2host"
+            PROJECT_DIR="$INSTALL_DIR/projects/$PROJECT_ID"
+            mkdir -p "$PROJECT_DIR"
+
+            cat > "$PROJECT_DIR/config.json" << EOF
+{
+  "repo": "taisukeoe/cmd2host",
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
+  "operations": {
+    "gh_pr_view": {"command": "$GH_PATH", "args_template": ["pr", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1, "optional": true}}, "allowed_flags": ["--json"], "description": "View a pull request"},
+    "gh_pr_list": {"command": "$GH_PATH", "args_template": ["pr", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List pull requests"},
+    "gh_issue_list": {"command": "$GH_PATH", "args_template": ["issue", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List issues"},
+    "gh_issue_view": {"command": "$GH_PATH", "args_template": ["issue", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1}}, "allowed_flags": ["--json"], "description": "View an issue"},
+    "gh_repo_view": {"command": "$GH_PATH", "args_template": ["repo", "view", "{repo}"], "params": {}, "allowed_flags": ["--json"], "description": "View repository info"},
+    "gh_auth_status": {"command": "$GH_PATH", "args_template": ["auth", "status"], "params": {}, "allowed_flags": [], "description": "Check auth status"}
+  },
+  "env": {"GH_PROMPT_DISABLED": "1"}
+}
+EOF
+
+            # Approve the project config
+            "$BINARY_PATH" config approve "$PROJECT_ID"
+            log_info "Project config approved for $PROJECT_ID"
 
             # Start daemon
             start_daemon
@@ -399,7 +408,8 @@ if [[ $FAILED -gt 0 ]]; then
     echo ""
     echo "Troubleshooting tips:"
     echo "  - Check daemon log: ~/.cmd2host/cmd2host.log"
-    echo "  - Check config: ~/.cmd2host/config.json"
+    echo "  - Check daemon config: ~/.cmd2host/daemon.json"
+    echo "  - Check project config: ~/.cmd2host/projects/<project-id>/config.json"
     echo "  - Verify token: devcontainer exec --workspace-folder . cat /run/cmd2host-token"
     exit 1
 fi
