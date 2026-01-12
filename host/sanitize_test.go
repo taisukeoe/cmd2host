@@ -133,10 +133,10 @@ func TestSanitizedEnv_InheritsBaseEnvVars(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGH(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		Repo: "owner/repo",
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGH(env)
@@ -192,12 +192,12 @@ func TestCommandSanitizer_SanitizeForGH_NoRepo(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		GitConfig: map[string]string{
 			"user.name": "Test",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGit(env)
@@ -238,14 +238,14 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		Repo:     "owner/repo",
 		RepoPath: "/path/to/repo",
 		Env: map[string]string{
 			"CUSTOM_VAR": "value",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 
 	cmd := sanitizer.PrepareCommand("gh", []string{"pr", "list"})
 
@@ -278,13 +278,13 @@ func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		RepoPath: "/path/to/repo",
 		GitConfig: map[string]string{
 			"user.name": "Test User",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 
 	cmd := sanitizer.PrepareCommand("git", []string{"status"})
 

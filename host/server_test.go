@@ -31,16 +31,27 @@ func writeAndCloseWrite(t *testing.T, conn net.Conn, data []byte) {
 	}
 }
 
-// setupServerConfigWithOperations creates a config with operations and profiles for testing
-func setupServerConfigWithOperations(t *testing.T) (*Config, *TokenStore, string) {
+// setupServerWithProject creates a test server with project-based configuration
+func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
 
-	configContent := `{
-		"listen_address": "127.0.0.1",
-		"listen_port": 0,
+	// Override HOME for project config loading
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	// Create project directory and config
+	projectID := "owner_repo"
+	projectDir := filepath.Join(tmpDir, ".cmd2host", "projects", projectID)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project dir: %v", err)
+	}
+
+	projectConfigContent := `{
+		"repo": "owner/repo",
+		"allowed_operations": ["test_op"],
 		"operations": {
 			"test_op": {
 				"command": "echo",
@@ -56,48 +67,47 @@ func setupServerConfigWithOperations(t *testing.T) (*Config, *TokenStore, string
 				"args_template": ["other"],
 				"description": "Other operation"
 			}
-		},
-		"profiles": {
-			"test_profile": {
-				"operations": ["test_op"]
-			}
 		}
 	}`
 
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
+	configPath := filepath.Join(projectDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(projectConfigContent), 0644); err != nil {
+		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	config, err := LoadConfig(configPath)
-	if err != nil {
-		t.Fatalf("LoadConfig failed: %v", err)
+	// Approve the config
+	if err := ApproveConfig(projectID); err != nil {
+		t.Fatalf("Failed to approve config: %v", err)
 	}
 
 	// Create token store in temp directory
-	tokenDir := filepath.Join(tmpDir, "tokens")
+	tokenDir := filepath.Join(tmpDir, ".cmd2host", "tokens")
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("Failed to create token dir: %v", err)
 	}
 	tokenStore := &TokenStore{dir: tokenDir}
 
-	// Create a test token with profile assigned
+	// Create a test token with repo assigned
 	hash := hashToken(testToken)
 	tokenPath := filepath.Join(tokenDir, hash)
-	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo","profile":"test_profile"}`), 0600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
-	return config, tokenStore, tmpDir
-}
+	// Create daemon config
+	daemonConfig := defaultDaemonConfig()
 
-func TestServer_ListOperations(t *testing.T) {
-	config, tokenStore, _ := setupServerConfigWithOperations(t)
-
-	server, err := NewServer(config)
+	server, err := NewServer(daemonConfig)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 	server.tokenStore = tokenStore
+
+	return server, tokenStore, tmpDir
+}
+
+func TestServer_ListOperations(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -147,7 +157,7 @@ func TestServer_ListOperations(t *testing.T) {
 			t.Errorf("Expected no error, got: %s", resp.Error)
 		}
 
-		// Should only return test_op (from test_profile)
+		// Should only return test_op (from allowed_operations)
 		if len(resp.Operations) != 1 {
 			t.Errorf("Expected 1 operation, got %d", len(resp.Operations))
 		}
@@ -189,13 +199,7 @@ func TestServer_ListOperations(t *testing.T) {
 }
 
 func TestServer_DescribeOperation(t *testing.T) {
-	config, tokenStore, _ := setupServerConfigWithOperations(t)
-
-	server, err := NewServer(config)
-	if err != nil {
-		t.Fatalf("Failed to create server: %v", err)
-	}
-	server.tokenStore = tokenStore
+	server, _, _ := setupServerWithProject(t)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -255,14 +259,14 @@ func TestServer_DescribeOperation(t *testing.T) {
 		}
 	})
 
-	t.Run("operation not in profile", func(t *testing.T) {
+	t.Run("operation not allowed", func(t *testing.T) {
 		conn, err := net.DialTimeout("tcp", addr, time.Second)
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
 
-		// other_op exists but is not in test_profile
+		// other_op exists but is not in allowed_operations
 		req := DescribeOperationRequest{
 			DescribeOperation: "other_op",
 			Token:             testToken,

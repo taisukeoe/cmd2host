@@ -6,129 +6,59 @@ import (
 	"testing"
 )
 
-func TestLoadConfigWithDefaultProfile(t *testing.T) {
+func TestLoadDaemonConfig(t *testing.T) {
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
+	configPath := filepath.Join(tmpDir, "daemon.json")
 
 	configContent := `{
 		"listen_address": "127.0.0.1",
 		"listen_port": 9876,
-		"default_profile": "gh_readonly",
-		"profiles": {
-			"gh_readonly": {
-				"operations": ["gh_pr_view", "gh_pr_list"]
-			}
-		},
-		"operations": {
-			"gh_pr_view": {
-				"command": "gh",
-				"args_template": ["pr", "view", "{number}", "-R", "{repo}"],
-				"params": {
-					"number": {"type": "integer", "min": 1}
-				},
-				"description": "View a pull request"
-			},
-			"gh_pr_list": {
-				"command": "gh",
-				"args_template": ["pr", "list", "-R", "{repo}"],
-				"description": "List pull requests"
-			}
-		}
+		"max_stdout_bytes": 2097152,
+		"max_stderr_bytes": 131072,
+		"default_timeout": 120
 	}`
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	config, err := LoadConfig(configPath)
+	config, err := LoadDaemonConfig(configPath)
 	if err != nil {
-		t.Fatalf("LoadConfig failed: %v", err)
+		t.Fatalf("LoadDaemonConfig failed: %v", err)
 	}
 
-	// Verify basic fields
+	// Verify fields
 	if config.ListenAddress != "127.0.0.1" {
 		t.Errorf("ListenAddress = %q, want %q", config.ListenAddress, "127.0.0.1")
 	}
 	if config.ListenPort != 9876 {
 		t.Errorf("ListenPort = %d, want %d", config.ListenPort, 9876)
 	}
-
-	// Verify default_profile is loaded
-	if config.DefaultProfile != "gh_readonly" {
-		t.Errorf("DefaultProfile = %q, want %q", config.DefaultProfile, "gh_readonly")
+	if config.MaxStdoutBytes != 2097152 {
+		t.Errorf("MaxStdoutBytes = %d, want %d", config.MaxStdoutBytes, 2097152)
 	}
-
-	// Verify profile exists
-	profile, exists := config.GetProfile("gh_readonly")
-	if !exists {
-		t.Fatal("gh_readonly profile not found")
+	if config.MaxStderrBytes != 131072 {
+		t.Errorf("MaxStderrBytes = %d, want %d", config.MaxStderrBytes, 131072)
 	}
-	if len(profile.Operations) != 2 {
-		t.Errorf("gh_readonly operations = %d, want 2", len(profile.Operations))
-	}
-
-	// Verify operations exist
-	op, exists := config.GetOperation("gh_pr_view")
-	if !exists {
-		t.Fatal("gh_pr_view operation not found")
-	}
-	if op.Description != "View a pull request" {
-		t.Errorf("gh_pr_view description = %q, want %q", op.Description, "View a pull request")
-	}
-
-	// Verify {repo} placeholder can be in args_template
-	if len(op.ArgsTemplate) != 5 {
-		t.Fatalf("gh_pr_view args_template length = %d, want 5", len(op.ArgsTemplate))
-	}
-	if op.ArgsTemplate[3] != "-R" || op.ArgsTemplate[4] != "{repo}" {
-		t.Errorf("gh_pr_view args_template should contain -R {repo}, got %v", op.ArgsTemplate)
+	if config.DefaultTimeout != 120 {
+		t.Errorf("DefaultTimeout = %d, want %d", config.DefaultTimeout, 120)
 	}
 }
 
-func TestLoadConfigDefaultProfileValidation(t *testing.T) {
+func TestLoadDaemonConfigDefaults(t *testing.T) {
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
+	configPath := filepath.Join(tmpDir, "daemon.json")
 
-	// Config with default_profile pointing to non-existent profile
-	// This should fail at config load time
-	configContent := `{
-		"default_profile": "nonexistent",
-		"profiles": {},
-		"operations": {}
-	}`
+	// Minimal config
+	configContent := `{}`
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	_, err := LoadConfig(configPath)
-	if err == nil {
-		t.Fatal("LoadConfig should fail when default_profile references non-existent profile")
-	}
-
-	expectedErr := "default_profile references unknown profile: nonexistent"
-	if err.Error() != expectedErr {
-		t.Errorf("Error = %q, want %q", err.Error(), expectedErr)
-	}
-}
-
-func TestLoadConfigDefaults(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.json")
-
-	// Minimal config with profiles
-	configContent := `{
-		"profiles": {},
-		"operations": {}
-	}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
-	}
-
-	config, err := LoadConfig(configPath)
+	config, err := LoadDaemonConfig(configPath)
 	if err != nil {
-		t.Fatalf("LoadConfig failed: %v", err)
+		t.Fatalf("LoadDaemonConfig failed: %v", err)
 	}
 
 	// Verify defaults
@@ -140,5 +70,30 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if config.DefaultTimeout != 60 {
 		t.Errorf("Default timeout = %d, want 60", config.DefaultTimeout)
+	}
+	if config.MaxStdoutBytes != 1024*1024 {
+		t.Errorf("Default MaxStdoutBytes = %d, want %d", config.MaxStdoutBytes, 1024*1024)
+	}
+	if config.MaxStderrBytes != 64*1024 {
+		t.Errorf("Default MaxStderrBytes = %d, want %d", config.MaxStderrBytes, 64*1024)
+	}
+}
+
+func TestLoadDaemonConfigMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "nonexistent.json")
+
+	// Should return default config when file doesn't exist
+	config, err := LoadDaemonConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig should succeed with missing file: %v", err)
+	}
+
+	// Verify defaults are applied
+	if config.ListenAddress != "127.0.0.1" {
+		t.Errorf("Default ListenAddress = %q, want %q", config.ListenAddress, "127.0.0.1")
+	}
+	if config.ListenPort != 9876 {
+		t.Errorf("Default ListenPort = %d, want %d", config.ListenPort, 9876)
 	}
 }

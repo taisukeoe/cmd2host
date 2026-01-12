@@ -29,14 +29,16 @@ Note: The wrapper scripts (e.g., `gh`) installed in the container do not execute
 - **Brute-force protection**: 1-second delay on authentication failure
 
 ### Command Validation
-Commands are validated using **operation mode**: pre-approved operation templates with typed parameters and profile-based policies.
+Commands are validated using **operation mode**: pre-approved operation templates with typed parameters and project-based policies.
 
-**Profile-based policies**:
-- Repository restriction (binds token to specific repo)
+**Project-based policies** (per-project config in `~/.cmd2host/projects/<project-id>/`):
+- Repository binding (token → repo → project config)
+- Default deny (only `allowed_operations` can execute)
 - Branch allowlist (regex patterns)
 - Path denylist (glob patterns)
 - Git config overrides
 - Environment variables
+- Config hash verification (changes require explicit approval)
 
 ## Key Files
 
@@ -47,14 +49,20 @@ Commands are validated using **operation mode**: pre-approved operation template
 - `src/cmd2host/mcp.json` - MCP server configuration template
 
 ### Host daemon
-- `host/main.go` - TCP server entry point
-- `host/config.go` - Configuration loading
-- `host/validator.go` - Command validation logic
+- `host/main.go` - TCP server entry point, CLI commands
+- `host/config.go` - Daemon configuration loading
+- `host/project.go` - Project configuration, approval, constraints validation
+- `host/validator.go` - Operation validation logic
 - `host/operations.go` - Operation template definitions and parameter handling
-- `host/profile.go` - Profile-based policy validation
+- `host/sanitize.go` - Command sanitization (env vars, git config)
 - `host/auth.go` - Token authentication and management
 - `host/executor.go` - Command execution
 - `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
+
+### Templates
+- `templates/readonly.json` - Read-only operations template
+- `templates/github_write.json` - GitHub write operations template
+- `templates/git_write.json` - Git push operations template (with strict constraints)
 
 ### MCP server
 - `mcp-server/main.go` - MCP server entry point
@@ -126,7 +134,13 @@ just build
 
 ### Test daemon manually:
 ```bash
-./dist/cmd2host ~/.cmd2host/config.json
+# Start daemon (reads config from ~/.cmd2host/)
+./dist/cmd2host
+
+# CLI commands
+./dist/cmd2host projects                    # List projects
+./dist/cmd2host config diff <project-id>    # Show config status
+./dist/cmd2host config approve <project-id> # Approve config
 ```
 
 ### Test MCP server connection:
