@@ -16,7 +16,7 @@
   "operations": {
     "git_fetch": {
       "command": "git",
-      "args_template": ["-C", "{repo_path}", "fetch", "origin"],
+      "args_template": ["fetch", "origin"],
       "params": {},
       "description": "Fetch from origin remote"
     },

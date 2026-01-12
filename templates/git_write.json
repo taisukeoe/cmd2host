@@ -17,13 +17,13 @@
   "operations": {
     "git_fetch": {
       "command": "git",
-      "args_template": ["-C", "{repo_path}", "fetch", "origin"],
+      "args_template": ["fetch", "origin"],
       "params": {},
       "description": "Fetch from origin remote"
     },
     "git_push": {
       "command": "git",
-      "args_template": ["-C", "{repo_path}", "push", "--no-verify", "origin", "{branch}"],
+      "args_template": ["push", "--no-verify", "origin", "{branch}"],
       "params": {
         "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
       },
