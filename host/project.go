@@ -31,7 +31,7 @@ type ProjectConfig struct {
 // Constraints defines policy constraints for a project
 type Constraints struct {
 	BranchAllow      []string `json:"branch_allow,omitempty"`       // Regex patterns for allowed branches
-	RemoteHostsAllow []string `json:"remote_hosts_allow,omitempty"` // Allowed remote hosts (e.g., github.com)
+	RemoteHostsAllow []string `json:"remote_hosts_allow,omitempty"` // TODO: Not yet implemented. For git push URL validation (prevent .git/config remote URL tampering)
 	PathDeny         []string `json:"path_deny,omitempty"`          // Glob patterns for denied paths
 }
 

@@ -75,7 +75,7 @@ cmd2host config approve owner_repo
 
 ```json
 {
-  "initializeCommand": ".devcontainer/init-cmd2host.sh owner/repo",
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
   "mounts": [
     "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly"
   ],
