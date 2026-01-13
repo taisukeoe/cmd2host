@@ -4,7 +4,6 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$PROJECT_ROOT/dist/cmd2host"
-CONFIG="$SCRIPT_DIR/config.json"
 PORT=19876
 PASSED=0
 FAILED=0
@@ -17,6 +16,11 @@ TEST_TOKEN="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 TEST_TOKEN_HASH="b12d91bcebcbecea463bbd02edb632317f0e50c80f1bfa54204a7aee68baf857"
 TOKEN_DIR="$HOME/.cmd2host/tokens"
 
+# Project config setup
+PROJECT_ID="taisukeoe_cmd2host"
+PROJECT_DIR="$HOME/.cmd2host/projects/$PROJECT_ID"
+DAEMON_CONFIG_DIR="$HOME/.cmd2host"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,8 +31,18 @@ cleanup() {
         kill "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
-    # Clean up test token
-    rm -f "$TOKEN_DIR/$TEST_TOKEN_HASH"
+    # Clean up test token (with safety checks)
+    if [[ -n "$TOKEN_DIR" && -n "$TEST_TOKEN_HASH" && "$TOKEN_DIR" == *".cmd2host/tokens" ]]; then
+        rm -f "$TOKEN_DIR/$TEST_TOKEN_HASH"
+    fi
+    # Clean up test project config (with safety checks)
+    if [[ -n "$PROJECT_DIR" && "$PROJECT_DIR" == *".cmd2host/projects/"* ]]; then
+        rm -rf "$PROJECT_DIR"
+    fi
+    # Clean up test daemon config (with safety checks)
+    if [[ -n "$DAEMON_CONFIG_DIR" && "$DAEMON_CONFIG_DIR" == *".cmd2host" ]]; then
+        rm -f "$DAEMON_CONFIG_DIR/daemon.json"
+    fi
 }
 trap cleanup EXIT
 
@@ -36,6 +50,54 @@ setup_test_token() {
     mkdir -p "$TOKEN_DIR"
     # Token file contains JSON with repo data (bound at token generation time)
     echo -n '{"repo":"taisukeoe/cmd2host"}' > "$TOKEN_DIR/$TEST_TOKEN_HASH"
+}
+
+setup_daemon_config() {
+    mkdir -p "$DAEMON_CONFIG_DIR"
+    # Create daemon config with test port
+    cat > "$DAEMON_CONFIG_DIR/daemon.json" <<EOF
+{
+  "listen_address": "127.0.0.1",
+  "listen_port": $PORT
+}
+EOF
+}
+
+setup_project_config() {
+    mkdir -p "$PROJECT_DIR"
+    # Create project config with operations
+    cat > "$PROJECT_DIR/config.json" <<'EOF'
+{
+  "repo": "taisukeoe/cmd2host",
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version"],
+  "operations": {
+    "gh_version": {
+      "command": "gh",
+      "args_template": ["--version"],
+      "params": {},
+      "description": "Show gh CLI version"
+    },
+    "gh_pr_view": {
+      "command": "gh",
+      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json"],
+      "description": "View a pull request"
+    },
+    "gh_pr_list": {
+      "command": "gh",
+      "args_template": ["pr", "list", "-R", "{repo}"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit"],
+      "description": "List pull requests"
+    }
+  }
+}
+EOF
+    # Approve the config
+    "$BINARY" config approve "$PROJECT_ID"
 }
 
 log_pass() {
@@ -56,13 +118,21 @@ if [[ ! -f "$BINARY" ]]; then
     (cd "$PROJECT_ROOT" && just build)
 fi
 
+# Setup daemon config with test port
+echo "Setting up daemon config..."
+setup_daemon_config
+
 # Setup test token before starting daemon
 echo "Setting up test token..."
 setup_test_token
 
+# Setup project config
+echo "Setting up project config..."
+setup_project_config
+
 # Start daemon
 echo "Starting daemon on port $PORT..."
-"$BINARY" "$CONFIG" &
+"$BINARY" &
 DAEMON_PID=$!
 sleep 1
 
@@ -161,9 +231,9 @@ test_operation_executed \
     "gh_pr_view with valid params (executed)" \
     '{"operation":"gh_pr_view","params":{"number":11},"token":"'"$TEST_TOKEN"'"}'
 
-# Test: operation not in profile
+# Test: operation not in allowed_operations
 test_operation \
-    "operation not in profile (denied)" \
+    "operation not in allowed_operations (denied)" \
     '{"operation":"git_add","params":{"paths":["file.txt"]},"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "Unknown operation"

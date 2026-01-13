@@ -133,10 +133,10 @@ func TestSanitizedEnv_InheritsBaseEnvVars(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGH(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		Repo: "owner/repo",
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGH(env)
@@ -192,12 +192,12 @@ func TestCommandSanitizer_SanitizeForGH_NoRepo(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		GitConfig: map[string]string{
 			"user.name": "Test",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGit(env)
@@ -237,15 +237,74 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 	}
 }
 
+func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
+	project := &ProjectConfig{
+		GitConfig: map[string]string{
+			"user.name": "Test",
+		},
+	}
+	sanitizer := NewCommandSanitizer(project)
+	env := NewSanitizedEnv()
+
+	sanitizer.SanitizeForGitPushStrict(env)
+
+	result := env.BuildEnv()
+
+	// Check strict push-specific environment variables
+	checks := map[string]bool{
+		// Base git sanitization
+		"GIT_TERMINAL_PROMPT=0":        false,
+		"GIT_ALLOW_PROTOCOL=https:ssh": false,
+		"GIT_ADVICE=0":                 false,
+		// Strict push additions
+		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new": false,
+		"GIT_ASKPASS=":        false,
+		"GIT_CONFIG_NOSYSTEM=1": false,
+	}
+
+	for _, e := range result {
+		for check := range checks {
+			if e == check {
+				checks[check] = true
+			}
+		}
+	}
+
+	for check, found := range checks {
+		if !found {
+			t.Errorf("Expected %s in environment", check)
+		}
+	}
+
+	// Check git config overrides for credential hijacking prevention
+	var hasCredentialHelper, hasSubmoduleRecurse bool
+	for _, e := range result {
+		if strings.HasPrefix(e, "GIT_CONFIG_PARAMETERS=") {
+			if strings.Contains(e, "credential.helper=") {
+				hasCredentialHelper = true
+			}
+			if strings.Contains(e, "submodule.recurse=false") {
+				hasSubmoduleRecurse = true
+			}
+		}
+	}
+	if !hasCredentialHelper {
+		t.Error("Expected GIT_CONFIG_PARAMETERS with credential.helper override")
+	}
+	if !hasSubmoduleRecurse {
+		t.Error("Expected GIT_CONFIG_PARAMETERS with submodule.recurse=false")
+	}
+}
+
 func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		Repo:     "owner/repo",
 		RepoPath: "/path/to/repo",
 		Env: map[string]string{
 			"CUSTOM_VAR": "value",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 
 	cmd := sanitizer.PrepareCommand("gh", []string{"pr", "list"})
 
@@ -278,13 +337,13 @@ func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
-	profile := &Profile{
+	project := &ProjectConfig{
 		RepoPath: "/path/to/repo",
 		GitConfig: map[string]string{
 			"user.name": "Test User",
 		},
 	}
-	sanitizer := NewCommandSanitizer(profile)
+	sanitizer := NewCommandSanitizer(project)
 
 	cmd := sanitizer.PrepareCommand("git", []string{"status"})
 

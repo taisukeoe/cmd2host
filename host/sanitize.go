@@ -42,7 +42,7 @@ var baseEnvVars = []string{
 	"GPG_TTY",
 	// Note: GH_TOKEN/GITHUB_TOKEN are intentionally NOT inherited.
 	// gh CLI should use SSH auth via SSH_AUTH_SOCK.
-	// If a token is needed, set it explicitly in profile's env field.
+	// If a token is needed, set it explicitly in project's env field.
 }
 
 // BuildEnv builds the final environment array for exec.Cmd
@@ -113,12 +113,12 @@ func (s *SanitizedEnv) buildGitConfigEnv() string {
 
 // CommandSanitizer prepares commands for safe execution
 type CommandSanitizer struct {
-	profile *Profile
+	project *ProjectConfig
 }
 
 // NewCommandSanitizer creates a new CommandSanitizer
-func NewCommandSanitizer(profile *Profile) *CommandSanitizer {
-	return &CommandSanitizer{profile: profile}
+func NewCommandSanitizer(project *ProjectConfig) *CommandSanitizer {
+	return &CommandSanitizer{project: project}
 }
 
 // SanitizeForGH applies gh-specific sanitization
@@ -129,9 +129,9 @@ func (cs *CommandSanitizer) SanitizeForGH(env *SanitizedEnv) {
 	// Set NO_COLOR for consistent output
 	env.Set("NO_COLOR", "1")
 
-	// Bind to specific repo if profile specifies
-	if cs.profile != nil && cs.profile.Repo != "" {
-		env.Set("GH_REPO", cs.profile.Repo)
+	// Bind to specific repo if project specifies
+	if cs.project != nil && cs.project.Repo != "" {
+		env.Set("GH_REPO", cs.project.Repo)
 	}
 }
 
@@ -146,10 +146,33 @@ func (cs *CommandSanitizer) SanitizeForGit(env *SanitizedEnv) {
 	// Disable advice messages
 	env.Set("GIT_ADVICE", "0")
 
-	// Apply profile git config
-	if cs.profile != nil && cs.profile.GitConfig != nil {
-		env.SetGitConfigFromMap(cs.profile.GitConfig)
+	// Apply project git config
+	if cs.project != nil && cs.project.GitConfig != nil {
+		env.SetGitConfigFromMap(cs.project.GitConfig)
 	}
+}
+
+// SanitizeForGitPushStrict applies strict sanitization for git push
+// This prevents credential hijacking and ensures non-interactive execution
+func (cs *CommandSanitizer) SanitizeForGitPushStrict(env *SanitizedEnv) {
+	// Apply base git sanitization first
+	cs.SanitizeForGit(env)
+
+	// Strict: Disable SSH command injection via environment
+	env.Set("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+
+	// Strict: Clear any askpass helpers
+	env.Set("GIT_ASKPASS", "")
+
+	// Strict: Ignore system git config
+	env.Set("GIT_CONFIG_NOSYSTEM", "1")
+
+	// Strict: Override git config to prevent credential hijacking
+	// These take precedence over repo-local .git/config
+	env.SetGitConfig("credential.helper", "")
+	env.SetGitConfig("submodule.recurse", "false")
+
+	// Note: --no-verify is added by the operation template, not here
 }
 
 // PrepareCommand creates an exec.Cmd with sanitized environment
@@ -158,9 +181,9 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.
 
 	env := NewSanitizedEnv()
 
-	// Apply profile environment
-	if cs.profile != nil {
-		env.SetFromMap(cs.profile.Env)
+	// Apply project environment
+	if cs.project != nil {
+		env.SetFromMap(cs.project.Env)
 	}
 
 	// Apply command-specific sanitization
@@ -171,14 +194,19 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.
 	case "gh":
 		cs.SanitizeForGH(env)
 	case "git":
-		cs.SanitizeForGit(env)
+		// Check if this is a push operation by examining args
+		if len(args) > 0 && args[0] == "push" {
+			cs.SanitizeForGitPushStrict(env)
+		} else {
+			cs.SanitizeForGit(env)
+		}
 	}
 
 	cmd.Env = env.BuildEnv()
 
-	// Set working directory if profile specifies
-	if cs.profile != nil && cs.profile.RepoPath != "" {
-		cmd.Dir = cs.profile.RepoPath
+	// Set working directory if project specifies
+	if cs.project != nil && cs.project.RepoPath != "" {
+		cmd.Dir = cs.project.RepoPath
 	}
 
 	return cmd

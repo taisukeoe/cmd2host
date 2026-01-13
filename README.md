@@ -26,11 +26,56 @@ Note: Wrapper scripts (e.g., `gh`) are installed but display MCP usage instructi
 curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
 ```
 
-### 2. Add feature and token auth to devcontainer.json
+### 2. Create project configuration
+
+Create a project config at `~/.cmd2host/projects/<owner_repo>/config.json`:
 
 ```json
 {
-  "initializeCommand": "CMD2HOST_PROFILE=gh_readonly .devcontainer/init-cmd2host.sh",
+  "repo": "owner/repo",
+  "repo_path": "/path/to/local/repo",
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_view", "gh_issue_list"],
+  "constraints": {
+    "branch_allow": ["^ai/", "^feature/"],
+    "path_deny": [".git/**", ".env*", "**/*.pem"]
+  },
+  "operations": {
+    "gh_pr_view": {
+      "command": "gh",
+      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json"],
+      "description": "View a pull request"
+    },
+    "gh_pr_list": {
+      "command": "gh",
+      "args_template": ["pr", "list", "-R", "{repo}"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit"],
+      "description": "List pull requests"
+    }
+  }
+}
+```
+
+Or use a template from `templates/`:
+- `readonly.json` - Read-only operations (git fetch, gh pr/issue view/list)
+- `github_write.json` - + PR/Issue creation
+- `git_write.json` - + git push (with strict constraints)
+
+### 3. Approve the configuration
+
+```bash
+cmd2host config approve owner_repo
+```
+
+### 4. Add feature and token auth to devcontainer.json
+
+```json
+{
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
   "mounts": [
     "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly"
   ],
@@ -42,11 +87,11 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 }
 ```
 
-### 3. Create token initialization script
+### 5. Create token initialization script
 
 Copy `host/scripts/init-cmd2host.sh` to your project's `.devcontainer/` directory.
 
-### 4. Configure MCP server for AI agents
+### 6. Configure MCP server for AI agents
 
 Add MCP server configuration to your `.devcontainer/devcontainer.json`:
 
@@ -67,7 +112,7 @@ Add MCP server configuration to your `.devcontainer/devcontainer.json`:
 
 Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
 
-### 5. Add to .gitignore
+### 7. Add to .gitignore
 
 ```
 .devcontainer/.session/
@@ -95,6 +140,17 @@ tail -f ~/.cmd2host/cmd2host.log
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/uninstall.sh | bash
+```
+
+## CLI Commands
+
+```bash
+cmd2host                           # Start daemon
+cmd2host config diff <project-id>  # Show config status and hash
+cmd2host config approve <project-id> # Approve current config
+cmd2host projects                  # List all configured projects
+cmd2host --hash-token              # Hash a token from stdin
+cmd2host --version                 # Show version
 ```
 
 ## Feature Options
@@ -142,46 +198,93 @@ cmd2host uses session tokens to authenticate requests from containers:
 
 Token flow:
 1. `initializeCommand` generates a random token on the host
-2. Token hash is stored in `~/.cmd2host/tokens/`
+2. Token hash is stored in `~/.cmd2host/tokens/` with repo binding
 3. Raw token is mounted into container at `/run/cmd2host-token`
 4. Container reads token from file and includes it in requests
 
-### Command Validation
+### Project Configuration
 
-Commands are validated using operation mode with pre-approved templates:
+Each project has its own configuration with:
 
-- **Profile-based policies**: Repository restriction, branch allowlist, path denylist
-- **Typed parameters**: Parameters are validated against schemas
-- **Allowed flags**: Only pre-approved flags can be used
+- **allowed_operations**: Whitelist of permitted operations (default deny)
+- **constraints**: Branch patterns, path restrictions
+- **operations**: Pre-approved command templates with typed parameters
 
-Default config (in `~/.cmd2host/config.json`):
+### Config Approval
+
+Configuration changes require explicit approval:
+
+```bash
+# View current config status
+cmd2host config diff owner_repo
+
+# Approve changes
+cmd2host config approve owner_repo
+```
+
+If config is modified after approval, operations are denied until re-approved.
+
+### Default Deny
+
+Only operations listed in `allowed_operations` can be executed. All other operations are denied.
+
+## Project Configuration
+
+### Directory Structure
+
+```
+~/.cmd2host/
+├── daemon.json                    # Daemon settings (port, limits)
+└── projects/
+    ├── owner_repo/
+    │   ├── config.json            # Project configuration
+    │   └── approved.sha256        # Approved config hash
+    └── another_owner_another_repo/
+        └── config.json
+```
+
+### Config Schema
 
 ```json
 {
-  "profiles": {
-    "gh_readonly": {
-      "repo": "",
-      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
-      "env": {"GH_PROMPT_DISABLED": "1"}
-    }
+  "repo": "owner/repo",
+  "repo_path": "/absolute/path/to/repo",
+  "allowed_operations": ["op1", "op2"],
+  "constraints": {
+    "branch_allow": ["^pattern1", "^pattern2"],
+    "path_deny": ["glob1", "glob2"],
+    "remote_hosts_allow": ["github.com"]
+  },
+  "env": {
+    "CUSTOM_VAR": "value"
+  },
+  "git_config": {
+    "user.name": "AI Agent",
+    "user.email": "ai@example.com"
   },
   "operations": {
-    "gh_pr_view": {
-      "command": "/opt/homebrew/bin/gh",
-      "args_template": ["pr", "view", "{number}"],
-      "params": {"number": {"type": "integer", "min": 1}},
-      "allowed_flags": ["--json"],
-      "description": "View a pull request"
+    "operation_id": {
+      "command": "gh",
+      "args_template": ["arg1", "{param1}", "{repo}"],
+      "params": {
+        "param1": {"type": "string"}
+      },
+      "allowed_flags": ["--flag1", "--flag2"],
+      "description": "Operation description"
     }
   }
 }
 ```
 
-To use a specific profile, set `CMD2HOST_PROFILE` when running `init-cmd2host.sh`:
+### Templates
 
-```bash
-CMD2HOST_PROFILE=gh_readonly .devcontainer/init-cmd2host.sh
-```
+Pre-configured templates are available in `templates/`:
+
+| Template | Description | Operations |
+|----------|-------------|------------|
+| `readonly.json` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
+| `github_write.json` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
+| `git_write.json` | + Git push | readonly + git_push (requires branch_allow constraint) |
 
 ## MCP Server Integration
 
@@ -190,8 +293,8 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 ### Features
 
 - **Type-safe operations**: Pre-approved command templates with typed parameters
-- **Profile-based policies**: Fine-grained control over what operations are allowed
-  - Repository restriction (binds token to specific repo)
+- **Project-based policies**: Fine-grained control over what operations are allowed
+  - Repository binding (token → repo → project config)
   - Branch allowlist (regex patterns)
   - Path denylist (glob patterns)
   - Git config overrides
@@ -208,8 +311,8 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 - `gh_pr_view` - View a pull request by number
 - `gh_pr_list` - List pull requests with filters
 - `gh_issue_create` - Create a new issue
-- `git_show` - Show commit or file contents
-- `git_log` - View commit history
+- `git_fetch` - Fetch from remote
+- `git_push` - Push to remote (requires branch_allow constraint)
 
 ### Installation
 
@@ -218,9 +321,11 @@ The MCP server binary (`cmd2host-mcp`) is automatically installed in the DevCont
 ### Security
 
 MCP server requests use token authentication. Operations are validated against:
-1. Pre-approved operation templates
-2. Profile-based policies (repo, branch, path restrictions)
-3. Parameter type checking and validation
+1. Token → repo binding
+2. Project config approval status (hash verification)
+3. Allowed operations list (default deny)
+4. Parameter type checking and validation
+5. Constraint checks (branch patterns, path globs)
 
 ## Environment Variables
 

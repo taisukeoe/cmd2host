@@ -4,27 +4,24 @@ import (
 	"fmt"
 )
 
-// Validator validates commands and operations against configuration rules
-type Validator struct {
-	config *Config
-}
+// Validator validates operations against project configuration
+type Validator struct{}
 
 // NewValidator creates a new Validator
-func NewValidator(config *Config) *Validator {
-	return &Validator{config: config}
+func NewValidator() *Validator {
+	return &Validator{}
 }
 
-// ValidationResult represents the result of command validation
+// ValidationResult represents the result of operation validation
 type ValidationResult struct {
 	OK      bool
 	Message string
 }
 
-// ValidateOperation validates an operation request against profile constraints
-// This is the new operation-based validation path
-func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*Operation, ValidationResult) {
-	// Check if operation exists
-	op, exists := v.config.GetOperation(req.Operation)
+// ValidateOperation validates an operation request against project constraints
+func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConfig) (*Operation, ValidationResult) {
+	// Check if operation exists in project
+	op, exists := project.GetOperation(req.Operation)
 	if !exists {
 		return nil, ValidationResult{
 			OK:      false,
@@ -32,11 +29,11 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 		}
 	}
 
-	// Check if operation is allowed in profile
-	if !profile.HasOperation(req.Operation) {
+	// Check if operation is allowed
+	if !project.HasOperation(req.Operation) {
 		return nil, ValidationResult{
 			OK:      false,
-			Message: fmt.Sprintf("Operation %s not allowed in profile", req.Operation),
+			Message: fmt.Sprintf("Operation %s not allowed", req.Operation),
 		}
 	}
 
@@ -61,7 +58,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 
 	// Validate branch constraint (for git operations)
 	if policyReq.Branch != "" {
-		if err := profile.ValidateBranch(policyReq.Branch); err != nil {
+		if err := project.ValidateBranch(policyReq.Branch); err != nil {
 			return nil, ValidationResult{
 				OK:      false,
 				Message: err.Error(),
@@ -71,7 +68,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 
 	// Validate path constraints (for git add, etc.)
 	if len(policyReq.Paths) > 0 {
-		if err := profile.ValidatePaths(policyReq.Paths); err != nil {
+		if err := project.ValidatePaths(policyReq.Paths); err != nil {
 			return nil, ValidationResult{
 				OK:      false,
 				Message: err.Error(),
@@ -80,6 +77,14 @@ func (v *Validator) ValidateOperation(req OperationRequest, profile *Profile) (*
 	}
 
 	return op, ValidationResult{OK: true}
+}
+
+// PolicyValidationRequest contains data needed for policy validation
+type PolicyValidationRequest struct {
+	OperationID string
+	Params      map[string]ParamValue
+	Branch      string   // For git operations
+	Paths       []string // For git add, etc.
 }
 
 // extractPolicyParams extracts policy-relevant parameters from the request
@@ -112,4 +117,3 @@ func extractPolicyParams(req OperationRequest) PolicyValidationRequest {
 
 	return policyReq
 }
-

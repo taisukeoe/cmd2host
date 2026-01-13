@@ -1,0 +1,65 @@
+{
+  "repo": "OWNER/REPO",
+  "repo_path": "/path/to/repo",
+  "allowed_operations": [
+    "git_fetch",
+    "git_push",
+    "gh_pr_view",
+    "gh_pr_list",
+    "gh_issue_view",
+    "gh_issue_list"
+  ],
+  "constraints": {
+    "branch_allow": ["^ai/"],
+    "remote_hosts_allow": ["github.com"],
+    "path_deny": [".git/hooks/**", ".git/config"]
+  },
+  "operations": {
+    "git_fetch": {
+      "command": "git",
+      "args_template": ["fetch", "origin"],
+      "params": {},
+      "description": "Fetch from origin remote"
+    },
+    "git_push": {
+      "command": "git",
+      "args_template": ["push", "--no-verify", "origin", "{branch}"],
+      "params": {
+        "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
+      },
+      "description": "Push branch to origin (strict sanitization applied)"
+    },
+    "gh_pr_view": {
+      "command": "gh",
+      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--comments"],
+      "description": "View a pull request"
+    },
+    "gh_pr_list": {
+      "command": "gh",
+      "args_template": ["pr", "list", "-R", "{repo}"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--base", "--head"],
+      "description": "List pull requests"
+    },
+    "gh_issue_view": {
+      "command": "gh",
+      "args_template": ["issue", "view", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--comments"],
+      "description": "View an issue"
+    },
+    "gh_issue_list": {
+      "command": "gh",
+      "args_template": ["issue", "list", "-R", "{repo}"],
+      "params": {},
+      "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--assignee"],
+      "description": "List issues"
+    }
+  }
+}

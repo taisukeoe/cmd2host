@@ -26,22 +26,22 @@ const (
 
 // Server handles TCP connections and command proxying
 type Server struct {
-	config     *Config
-	validator  *Validator
-	tokenStore *TokenStore
-	listener   net.Listener
+	daemonConfig *DaemonConfig
+	validator    *Validator
+	tokenStore   *TokenStore
+	listener     net.Listener
 }
 
 // NewServer creates a new Server
-func NewServer(config *Config) (*Server, error) {
+func NewServer(daemonConfig *DaemonConfig) (*Server, error) {
 	tokenStore, err := NewTokenStore()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize token store: %w", err)
 	}
 	return &Server{
-		config:     config,
-		validator:  NewValidator(config),
-		tokenStore: tokenStore,
+		daemonConfig: daemonConfig,
+		validator:    NewValidator(),
+		tokenStore:   tokenStore,
 	}, nil
 }
 
@@ -104,6 +104,32 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 }
 
+// resolveProject resolves project config from token data
+func (s *Server) resolveProject(tokenData TokenData) (*ProjectConfig, string, error) {
+	if tokenData.Repo == "" {
+		return nil, "", fmt.Errorf("token does not have a repository bound")
+	}
+
+	projectID := NormalizeProjectID(tokenData.Repo)
+
+	// Load project config
+	projectConfig, err := LoadProjectConfig(projectID)
+	if err != nil {
+		return nil, projectID, err
+	}
+
+	// Verify config is approved
+	approved, currentHash, err := IsConfigApproved(projectID)
+	if err != nil {
+		return nil, projectID, fmt.Errorf("failed to check config approval: %w", err)
+	}
+	if !approved {
+		return nil, projectID, fmt.Errorf("config not approved (hash: %s). Run: cmd2host config approve %s", currentHash[:16], projectID)
+	}
+
+	return projectConfig, projectID, nil
+}
+
 // handleOperationRequest handles new-style operation requests
 func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	var req OperationRequest
@@ -130,8 +156,8 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Resolve profile from token (with fallback to default)
-	profile, profileName, err := s.resolveProfile(tokenData)
+	// Resolve project config from token
+	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
 		fmt.Printf("  -> %v\n", err)
 		s.sendOperationResponse(conn, OperationResponse{
@@ -143,10 +169,10 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	}
 
 	// Log operation request (params omitted to avoid logging sensitive data like PR body)
-	fmt.Printf("[OP:%s] profile=%s request_id=%s\n", req.Operation, profileName, req.RequestID)
+	fmt.Printf("[OP:%s] project=%s request_id=%s\n", req.Operation, projectID, req.RequestID)
 
 	// Validate operation
-	op, result := s.validator.ValidateOperation(req, profile)
+	op, result := s.validator.ValidateOperation(req, projectConfig)
 	if !result.OK {
 		fmt.Printf("  -> DENIED: %s\n", result.Message)
 		s.sendOperationResponse(conn, OperationResponse{
@@ -158,12 +184,12 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	}
 
 	// Build arguments from template
-	profileEnv := profile.GetEnvForOperation()
+	projectEnv := projectConfig.GetEnvForOperation()
 	// Inject token's repo into template expansion
 	if tokenData.Repo != "" {
-		profileEnv["repo"] = tokenData.Repo
+		projectEnv["repo"] = tokenData.Repo
 	}
-	args, err := op.BuildArgs(req.Params, req.Flags, profileEnv)
+	args, err := op.BuildArgs(req.Params, req.Flags, projectEnv)
 	if err != nil {
 		fmt.Printf("  -> ARG BUILD FAILED: %v\n", err)
 		s.sendOperationResponse(conn, OperationResponse{
@@ -175,7 +201,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	}
 
 	// Execute with sanitized environment
-	resp := s.executeWithSanitization(op.Command, args, profile)
+	resp := s.executeWithSanitization(op.Command, args, projectConfig)
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
 
 	s.sendOperationResponse(conn, OperationResponse{
@@ -187,7 +213,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 }
 
 // executeWithSanitization executes a command with sanitized environment
-func (s *Server) executeWithSanitization(cmdName string, args []string, profile *Profile) ExecuteResult {
+func (s *Server) executeWithSanitization(cmdName string, args []string, project *ProjectConfig) ExecuteResult {
 	// Validate command path
 	if err := ValidateCommandPath(cmdName); err != nil {
 		return ExecuteResult{
@@ -196,11 +222,11 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, profile 
 		}
 	}
 
-	// Create sanitizer with profile and prepare command once
-	sanitizer := NewCommandSanitizer(profile)
+	// Create sanitizer with project and prepare command once
+	sanitizer := NewCommandSanitizer(project)
 	preparedCmd := sanitizer.PrepareCommand(cmdName, args)
 
-	timeout := time.Duration(s.config.DefaultTimeout) * time.Second
+	timeout := time.Duration(s.daemonConfig.DefaultTimeout) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -216,8 +242,8 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, profile 
 	err := cmd.Run()
 
 	// Truncate output if needed
-	stdoutStr := truncateOutput(stdout.String(), s.config.MaxStdoutBytes)
-	stderrStr := truncateOutput(stderr.String(), s.config.MaxStderrBytes)
+	stdoutStr := truncateOutput(stdout.String(), s.daemonConfig.MaxStdoutBytes)
+	stderrStr := truncateOutput(stderr.String(), s.daemonConfig.MaxStderrBytes)
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -290,8 +316,8 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Resolve profile from token (with fallback to default)
-	profile, profileName, err := s.resolveProfile(tokenData)
+	// Resolve project config from token
+	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
 		s.sendListOperationsResponse(conn, ListOperationsResponse{
 			Error: err.Error(),
@@ -299,16 +325,16 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[LIST_OPERATIONS] profile=%s\n", profileName)
+	fmt.Printf("[LIST_OPERATIONS] project=%s\n", projectID)
 
-	// Build list of operations available to this profile
+	// Build list of operations available to this project
 	var ops []OperationInfo
-	for _, opID := range profile.Operations {
+	for _, opID := range projectConfig.AllowedOperations {
 		// Apply prefix filter if specified
 		if req.Prefix != "" && !strings.HasPrefix(opID, req.Prefix) {
 			continue
 		}
-		op, exists := s.config.GetOperation(opID)
+		op, exists := projectConfig.GetOperation(opID)
 		if !exists {
 			continue
 		}
@@ -347,8 +373,8 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Resolve profile from token (with fallback to default)
-	profile, profileName, err := s.resolveProfile(tokenData)
+	// Resolve project config from token
+	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 			Error: err.Error(),
@@ -356,15 +382,15 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Check if operation is allowed for this profile
-	if !profile.HasOperation(req.DescribeOperation) {
+	// Check if operation is allowed for this project
+	if !projectConfig.HasOperation(req.DescribeOperation) {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 			Error: fmt.Sprintf("Operation not allowed: %s", req.DescribeOperation),
 		})
 		return
 	}
 
-	op, exists := s.config.GetOperation(req.DescribeOperation)
+	op, exists := projectConfig.GetOperation(req.DescribeOperation)
 	if !exists {
 		s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 			Error: fmt.Sprintf("Operation not found: %s", req.DescribeOperation),
@@ -372,7 +398,7 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	fmt.Printf("[DESCRIBE_OPERATION] profile=%s operation=%s\n", profileName, req.DescribeOperation)
+	fmt.Printf("[DESCRIBE_OPERATION] project=%s operation=%s\n", projectID, req.DescribeOperation)
 
 	s.sendDescribeOperationResponse(conn, DescribeOperationResponse{
 		Operation: &OperationInfo{
@@ -426,22 +452,6 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// resolveProfile resolves the profile for a token, using default_profile as fallback
-func (s *Server) resolveProfile(tokenData TokenData) (*Profile, string, error) {
-	profileName := tokenData.Profile
-	if profileName == "" {
-		profileName = s.config.DefaultProfile
-	}
-	if profileName == "" {
-		return nil, "", fmt.Errorf("token does not have a profile assigned and no default_profile configured")
-	}
-	profile, exists := s.config.GetProfile(profileName)
-	if !exists {
-		return nil, "", fmt.Errorf("profile not found: %s", profileName)
-	}
-	return profile, profileName, nil
-}
-
 // Run starts the TCP server
 func (s *Server) Run() error {
 	// Cleanup expired tokens on startup
@@ -460,7 +470,7 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	addr := fmt.Sprintf("%s:%d", s.config.ListenAddress, s.config.ListenPort)
+	addr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -469,13 +479,12 @@ func (s *Server) Run() error {
 	s.listener = listener
 
 	fmt.Printf("cmd2host listening on %s\n", addr)
-	if names := s.profileNames(); len(names) > 0 {
-		fmt.Printf("Profiles: %v\n", names)
+
+	// List configured projects
+	projects, _ := ListProjects()
+	if len(projects) > 0 {
+		fmt.Printf("Projects: %v\n", projects)
 	}
-	if s.config.DefaultProfile != "" {
-		fmt.Printf("Default profile: %s\n", s.config.DefaultProfile)
-	}
-	fmt.Println("Repository restriction: bound to token (set at session init)")
 	fmt.Println()
 
 	for {
@@ -497,15 +506,6 @@ func (s *Server) Shutdown() {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-}
-
-// profileNames returns a list of configured profile names
-func (s *Server) profileNames() []string {
-	names := make([]string, 0, len(s.config.Profiles))
-	for name := range s.config.Profiles {
-		names = append(names, name)
-	}
-	return names
 }
 
 func main() {
@@ -532,20 +532,162 @@ func main() {
 		return
 	}
 
-	configPath := DefaultConfigPath()
-	if len(os.Args) > 1 {
-		configPath = os.Args[1]
+	// Handle config subcommands
+	if len(os.Args) >= 2 && os.Args[1] == "config" {
+		handleConfigCommand()
+		return
 	}
 
-	config, err := LoadConfig(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Run: curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash")
+	// Handle projects subcommand
+	if len(os.Args) == 2 && os.Args[1] == "projects" {
+		handleProjectsCommand()
+		return
+	}
+
+	// Default: run daemon
+	runDaemon()
+}
+
+// handleConfigCommand handles config subcommands
+func handleConfigCommand() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: cmd2host config <command> [args]")
+		fmt.Fprintln(os.Stderr, "Commands:")
+		fmt.Fprintln(os.Stderr, "  diff <project-id>     Show config diff and current hash")
+		fmt.Fprintln(os.Stderr, "  approve <project-id>  Approve current config")
 		os.Exit(1)
 	}
 
-	server, err := NewServer(config)
+	subCmd := os.Args[2]
+
+	switch subCmd {
+	case "diff":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host config diff <project-id>")
+			os.Exit(1)
+		}
+		projectID := os.Args[3]
+		handleConfigDiff(projectID)
+
+	case "approve":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host config approve <project-id>")
+			os.Exit(1)
+		}
+		projectID := os.Args[3]
+		handleConfigApprove(projectID)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown config command: %s\n", subCmd)
+		os.Exit(1)
+	}
+}
+
+// handleConfigDiff shows config status and hash
+func handleConfigDiff(projectID string) {
+	configPath := ProjectConfigPath(projectID)
+	approvedPath := ApprovedHashPath(projectID)
+
+	// Check if config exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Config not found: %s\n", configPath)
+		os.Exit(1)
+	}
+
+	// Compute current hash
+	currentHash, err := ComputeConfigHash(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error computing hash: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Read approved hash
+	var approvedHash string
+	approvedData, err := os.ReadFile(approvedPath)
+	if err == nil {
+		approvedHash = strings.TrimSpace(string(approvedData))
+	}
+
+	fmt.Printf("Project:       %s\n", projectID)
+	fmt.Printf("Config:        %s\n", configPath)
+	fmt.Printf("Current hash:  %s\n", currentHash)
+
+	if approvedHash == "" {
+		fmt.Printf("Approved hash: (none)\n")
+		fmt.Println("\nStatus: NOT APPROVED")
+		fmt.Printf("\nTo approve, run: cmd2host config approve %s\n", projectID)
+	} else if currentHash == approvedHash {
+		fmt.Printf("Approved hash: %s\n", approvedHash)
+		fmt.Println("\nStatus: APPROVED (hashes match)")
+	} else {
+		fmt.Printf("Approved hash: %s\n", approvedHash)
+		fmt.Println("\nStatus: MODIFIED (hashes differ)")
+		fmt.Printf("\nTo approve changes, run: cmd2host config approve %s\n", projectID)
+	}
+}
+
+// handleConfigApprove approves the current config
+func handleConfigApprove(projectID string) {
+	configPath := ProjectConfigPath(projectID)
+
+	// Check if config exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Config not found: %s\n", configPath)
+		os.Exit(1)
+	}
+
+	// Validate config first
+	_, err := LoadProjectConfig(projectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Approve
+	if err := ApproveConfig(projectID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error approving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	hash, _ := ComputeConfigHash(configPath)
+	fmt.Printf("Approved config for project: %s\n", projectID)
+	fmt.Printf("Hash: %s\n", hash)
+}
+
+// handleProjectsCommand lists all configured projects
+func handleProjectsCommand() {
+	projects, err := ListProjects()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing projects: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(projects) == 0 {
+		fmt.Println("No projects configured.")
+		fmt.Printf("Project configs are stored in: %s\n", ProjectsDir())
+		return
+	}
+
+	fmt.Println("Configured projects:")
+	for _, p := range projects {
+		approved, _, err := IsConfigApproved(p)
+		status := "approved"
+		if err != nil || !approved {
+			status = "not approved"
+		}
+		fmt.Printf("  %s (%s)\n", p, status)
+	}
+}
+
+// runDaemon starts the daemon server
+func runDaemon() {
+	daemonConfig, err := LoadDaemonConfig(DefaultDaemonConfigPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Daemon config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	server, err := NewServer(daemonConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Server initialization error: %v\n", err)
 		os.Exit(1)
