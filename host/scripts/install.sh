@@ -155,7 +155,8 @@ fi
 [[ -f "$UNINSTALL_SCRIPT" ]] && chmod +x "$UNINSTALL_SCRIPT"
 
 # Note: Daemon config (daemon.json) is optional - defaults are used if not present.
-# Project-specific config is created per-session by init-cmd2host.sh.
+# Project-specific config must be created manually in ~/.cmd2host/projects/<owner_repo>/config.json.
+# init-cmd2host.sh creates per-session tokens in ~/.cmd2host/tokens/.
 
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"
