@@ -166,6 +166,46 @@ start_daemon() {
     fi
 }
 
+# Ensure project config exists for E2E test
+ensure_project_config() {
+    local project_id="taisukeoe_cmd2host"
+    local project_dir="$INSTALL_DIR/projects/$project_id"
+    local config_file="$project_dir/config.json"
+
+    # Skip if config already exists and is approved
+    if [[ -f "$config_file" ]]; then
+        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: approved"; then
+            log_info "Project config already exists and approved"
+            return 0
+        fi
+    fi
+
+    log_info "Creating project config for $project_id..."
+    mkdir -p "$project_dir"
+
+    local gh_path
+    gh_path=$(which gh 2>/dev/null || echo "gh")
+
+    cat > "$config_file" << EOF
+{
+  "repo": "taisukeoe/cmd2host",
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
+  "operations": {
+    "gh_pr_view": {"command": "$gh_path", "args_template": ["pr", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1, "optional": true}}, "allowed_flags": ["--json"], "description": "View a pull request"},
+    "gh_pr_list": {"command": "$gh_path", "args_template": ["pr", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List pull requests"},
+    "gh_issue_list": {"command": "$gh_path", "args_template": ["issue", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List issues"},
+    "gh_issue_view": {"command": "$gh_path", "args_template": ["issue", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1}}, "allowed_flags": ["--json"], "description": "View an issue"},
+    "gh_repo_view": {"command": "$gh_path", "args_template": ["repo", "view", "{repo}"], "params": {}, "allowed_flags": ["--json"], "description": "View repository info"},
+    "gh_auth_status": {"command": "$gh_path", "args_template": ["auth", "status"], "params": {}, "allowed_flags": [], "description": "Check auth status"}
+  },
+  "env": {"GH_PROMPT_DISABLED": "1"}
+}
+EOF
+
+    "$BINARY_PATH" config approve "$project_id"
+    log_info "Project config approved for $project_id"
+}
+
 if ! $SKIP_BUILD; then
     # Clean install: uninstall first
     if $CLEAN_INSTALL && [[ -d "$INSTALL_DIR" ]]; then
@@ -202,11 +242,16 @@ if ! $SKIP_BUILD; then
         sleep 1
         start_daemon
 
+        # Ensure project config exists
+        ensure_project_config
+
         log_pass "Daemon rebuilt and restarted"
     else
         # Fresh install (macOS uses install.sh, Linux does manual setup)
         if [[ "$OS_TYPE" == "Darwin" ]]; then
             if ./host/scripts/install.sh --build; then
+                # Ensure project config exists
+                ensure_project_config
                 log_pass "Daemon installed"
             else
                 log_fail "Daemon install failed"
@@ -226,9 +271,6 @@ if ! $SKIP_BUILD; then
                 exit 1
             fi
 
-            # Detect gh path
-            GH_PATH=$(which gh 2>/dev/null || echo "gh")
-
             # Create daemon config for CI environment
             # SECURITY NOTE: listen_address is 0.0.0.0 to allow container-to-host communication.
             # This is safe in CI where the runner is isolated. Do NOT use 0.0.0.0 in production.
@@ -239,33 +281,12 @@ if ! $SKIP_BUILD; then
 }
 EOF
 
-            # Create project config for taisukeoe/cmd2host
-            PROJECT_ID="taisukeoe_cmd2host"
-            PROJECT_DIR="$INSTALL_DIR/projects/$PROJECT_ID"
-            mkdir -p "$PROJECT_DIR"
-
-            cat > "$PROJECT_DIR/config.json" << EOF
-{
-  "repo": "taisukeoe/cmd2host",
-  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
-  "operations": {
-    "gh_pr_view": {"command": "$GH_PATH", "args_template": ["pr", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1, "optional": true}}, "allowed_flags": ["--json"], "description": "View a pull request"},
-    "gh_pr_list": {"command": "$GH_PATH", "args_template": ["pr", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List pull requests"},
-    "gh_issue_list": {"command": "$GH_PATH", "args_template": ["issue", "list", "-R", "{repo}"], "params": {}, "allowed_flags": ["--json", "--state", "--limit"], "description": "List issues"},
-    "gh_issue_view": {"command": "$GH_PATH", "args_template": ["issue", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1}}, "allowed_flags": ["--json"], "description": "View an issue"},
-    "gh_repo_view": {"command": "$GH_PATH", "args_template": ["repo", "view", "{repo}"], "params": {}, "allowed_flags": ["--json"], "description": "View repository info"},
-    "gh_auth_status": {"command": "$GH_PATH", "args_template": ["auth", "status"], "params": {}, "allowed_flags": [], "description": "Check auth status"}
-  },
-  "env": {"GH_PROMPT_DISABLED": "1"}
-}
-EOF
-
-            # Approve the project config
-            "$BINARY_PATH" config approve "$PROJECT_ID"
-            log_info "Project config approved for $PROJECT_ID"
-
             # Start daemon
             start_daemon
+
+            # Create project config
+            ensure_project_config
+
             log_pass "Daemon installed (Linux/CI mode)"
         fi
     fi
