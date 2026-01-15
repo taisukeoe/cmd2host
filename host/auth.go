@@ -25,8 +25,8 @@ type TokenData struct {
 	// See validator.go:validateRepository for the enforcement logic.
 	Repo string `json:"repo"`
 
-	// Profile is the profile name that defines allowed operations and constraints.
-	// If empty, falls back to legacy command-based validation.
+	// Profile is deprecated and unused. Project-based config is now used instead.
+	// Kept for backwards compatibility with existing token files.
 	Profile string `json:"profile,omitempty"`
 }
 
