@@ -154,78 +154,8 @@ else
 fi
 [[ -f "$UNINSTALL_SCRIPT" ]] && chmod +x "$UNINSTALL_SCRIPT"
 
-# Detect gh path (launchd doesn't inherit user's PATH)
-GH_PATH=$(which gh 2>/dev/null || echo "")
-if [[ -z "$GH_PATH" ]]; then
-    echo "Warning: gh CLI not found in PATH"
-    echo "Install with: brew install gh"
-    GH_PATH="gh"  # fallback, will fail at runtime
-fi
-
-cat > "$INSTALL_DIR/config.json" << EOF
-{
-  "listen_address": "127.0.0.1",
-  "listen_port": 9876,
-  "default_profile": "gh_readonly",
-  "profiles": {
-    "gh_readonly": {
-      "repo": "",
-      "operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
-      "env": {
-        "GH_PROMPT_DISABLED": "1"
-      }
-    }
-  },
-  "operations": {
-    "gh_pr_view": {
-      "command": "$GH_PATH",
-      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
-      "params": {
-        "number": {"type": "integer", "min": 1, "optional": true}
-      },
-      "allowed_flags": ["--json"],
-      "description": "View a pull request (by number, or current branch if omitted)"
-    },
-    "gh_pr_list": {
-      "command": "$GH_PATH",
-      "args_template": ["pr", "list", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--json", "--state", "--limit"],
-      "description": "List pull requests"
-    },
-    "gh_issue_list": {
-      "command": "$GH_PATH",
-      "args_template": ["issue", "list", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--json", "--state", "--limit"],
-      "description": "List issues"
-    },
-    "gh_issue_view": {
-      "command": "$GH_PATH",
-      "args_template": ["issue", "view", "{number}", "-R", "{repo}"],
-      "params": {
-        "number": {"type": "integer", "min": 1}
-      },
-      "allowed_flags": ["--json"],
-      "description": "View an issue"
-    },
-    "gh_repo_view": {
-      "command": "$GH_PATH",
-      "args_template": ["repo", "view", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--json"],
-      "description": "View repository information"
-    },
-    "gh_auth_status": {
-      "command": "$GH_PATH",
-      "args_template": ["auth", "status"],
-      "params": {},
-      "allowed_flags": [],
-      "description": "Check authentication status"
-    }
-  }
-}
-EOF
+# Note: Daemon config (daemon.json) is optional - defaults are used if not present.
+# Project-specific config is created per-session by init-cmd2host.sh.
 
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"
@@ -266,5 +196,7 @@ echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
 echo ""
 echo "To uninstall: $INSTALL_DIR/uninstall.sh"
 echo ""
-echo "Repository restriction: Only the current repository (detected from git remote) is allowed."
-echo "Token authentication is enabled. See README.md for devcontainer.json configuration."
+echo "Next steps:"
+echo "  1. Add init-cmd2host.sh to your .devcontainer/ (see README.md)"
+echo "  2. Create project config in ~/.cmd2host/projects/<owner_repo>/config.json"
+echo "  3. Approve config: $BINARY_PATH config approve <owner_repo>"
