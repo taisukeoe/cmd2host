@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -196,6 +197,116 @@ func TestServer_ListOperations(t *testing.T) {
 			t.Errorf("Expected 'Authentication failed', got: %s", resp.Error)
 		}
 	})
+}
+
+func TestServer_RepoMismatch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Override HOME for project config loading
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	// Create project directory with MISMATCHED repo in config
+	projectID := "owner_repo"
+	projectDir := filepath.Join(tmpDir, ".cmd2host", "projects", projectID)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project dir: %v", err)
+	}
+
+	// Config has "evil/repo" but token will be for "owner/repo"
+	projectConfigContent := `{
+		"repo": "evil/repo",
+		"allowed_operations": ["test_op"],
+		"operations": {
+			"test_op": {
+				"command": "echo",
+				"args_template": ["test"],
+				"description": "Test operation"
+			}
+		}
+	}`
+
+	configPath := filepath.Join(projectDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(projectConfigContent), 0644); err != nil {
+		t.Fatalf("Failed to write project config: %v", err)
+	}
+
+	if err := ApproveConfig(projectID); err != nil {
+		t.Fatalf("Failed to approve config: %v", err)
+	}
+
+	// Create token store with token bound to "owner/repo"
+	tokenDir := filepath.Join(tmpDir, ".cmd2host", "tokens")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("Failed to create token dir: %v", err)
+	}
+	tokenStore := &TokenStore{dir: tokenDir}
+
+	hash := hashToken(testToken)
+	tokenPath := filepath.Join(tokenDir, hash)
+	// Token is bound to "owner/repo" but config specifies "evil/repo"
+	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	daemonConfig := defaultDaemonConfig()
+	server, err := NewServer(daemonConfig)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	server.tokenStore = tokenStore
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn)
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := ListOperationsRequest{
+		ListOperations: true,
+		Token:          testToken,
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp ListOperationsResponse
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	// Should fail with repo mismatch error
+	if resp.Error == "" {
+		t.Error("Expected repo mismatch error, but got success")
+	}
+	if resp.Error != "" && !strings.Contains(resp.Error, "config repo mismatch") {
+		t.Errorf("Expected error containing 'config repo mismatch', got: %s", resp.Error)
+	}
 }
 
 func TestServer_DescribeOperation(t *testing.T) {

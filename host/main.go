@@ -118,6 +118,11 @@ func (s *Server) resolveProject(tokenData TokenData) (*ProjectConfig, string, er
 		return nil, projectID, err
 	}
 
+	// Verify projectConfig.Repo matches tokenData.Repo to prevent config tampering
+	if projectConfig.Repo != tokenData.Repo {
+		return nil, projectID, fmt.Errorf("config repo mismatch: token bound to %q but config specifies %q", tokenData.Repo, projectConfig.Repo)
+	}
+
 	// Verify config is approved
 	approved, currentHash, err := IsConfigApproved(projectID)
 	if err != nil {
