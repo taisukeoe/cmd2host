@@ -292,6 +292,8 @@ EOF
     fi
 else
     log_step "Step 1: Skipping daemon rebuild (--skip-build)"
+    # Still need to ensure project config exists
+    ensure_project_config
 fi
 
 # ===================
