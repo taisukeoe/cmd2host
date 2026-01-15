@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -303,22 +304,9 @@ func TestServer_RepoMismatch(t *testing.T) {
 	if resp.Error == "" {
 		t.Error("Expected repo mismatch error, but got success")
 	}
-	if resp.Error != "" && !contains(resp.Error, "config repo mismatch") {
+	if resp.Error != "" && !strings.Contains(resp.Error, "config repo mismatch") {
 		t.Errorf("Expected error containing 'config repo mismatch', got: %s", resp.Error)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestServer_DescribeOperation(t *testing.T) {
