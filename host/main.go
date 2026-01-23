@@ -549,6 +549,12 @@ func main() {
 		return
 	}
 
+	// Handle templates subcommand
+	if len(os.Args) >= 2 && os.Args[1] == "templates" {
+		handleTemplatesCommand()
+		return
+	}
+
 	// Default: run daemon
 	runDaemon()
 }
@@ -558,14 +564,18 @@ func handleConfigCommand() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "Usage: cmd2host config <command> [args]")
 		fmt.Fprintln(os.Stderr, "Commands:")
-		fmt.Fprintln(os.Stderr, "  diff <project-id>     Show config diff and current hash")
-		fmt.Fprintln(os.Stderr, "  approve <project-id>  Approve current config")
+		fmt.Fprintln(os.Stderr, "  init --repo=<owner/repo> [options]  Create project config from template")
+		fmt.Fprintln(os.Stderr, "  diff <project-id>                   Show config diff and current hash")
+		fmt.Fprintln(os.Stderr, "  approve <project-id>                Approve current config")
 		os.Exit(1)
 	}
 
 	subCmd := os.Args[2]
 
 	switch subCmd {
+	case "init":
+		handleConfigInit()
+
 	case "diff":
 		if len(os.Args) < 4 {
 			fmt.Fprintln(os.Stderr, "Usage: cmd2host config diff <project-id>")
@@ -585,6 +595,73 @@ func handleConfigCommand() {
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown config command: %s\n", subCmd)
 		os.Exit(1)
+	}
+}
+
+// handleConfigInit creates a new project config from a template
+func handleConfigInit() {
+	var opts CreateProjectConfigOptions
+	showHelp := false
+
+	// Parse flags manually (starting from os.Args[3])
+	for i := 3; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch {
+		case arg == "--help" || arg == "-h":
+			showHelp = true
+		case strings.HasPrefix(arg, "--repo="):
+			opts.Repo = strings.TrimPrefix(arg, "--repo=")
+		case strings.HasPrefix(arg, "--template="):
+			opts.Template = strings.TrimPrefix(arg, "--template=")
+		case strings.HasPrefix(arg, "--repo-path="):
+			opts.RepoPath = strings.TrimPrefix(arg, "--repo-path=")
+		case arg == "--approve":
+			opts.Approve = true
+		case arg == "--force":
+			opts.Force = true
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown flag: %s\n", arg)
+			os.Exit(1)
+		}
+	}
+
+	if showHelp || opts.Repo == "" {
+		fmt.Fprintln(os.Stderr, "Usage: cmd2host config init --repo=<owner/repo> [options]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Options:")
+		fmt.Fprintln(os.Stderr, "  --repo=<owner/repo>   Repository name (required)")
+		fmt.Fprintln(os.Stderr, "  --template=<name>     Template name (default: readonly)")
+		fmt.Fprintln(os.Stderr, "  --repo-path=<path>    Local repository path")
+		fmt.Fprintln(os.Stderr, "  --approve             Approve config after creation")
+		fmt.Fprintln(os.Stderr, "  --force               Overwrite existing config")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Available templates:")
+		templates, err := ListTemplates()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  (error listing templates: %v)\n", err)
+		} else {
+			for _, t := range templates {
+				fmt.Fprintf(os.Stderr, "  - %s\n", t)
+			}
+		}
+		if opts.Repo == "" {
+			os.Exit(1)
+		}
+		return
+	}
+
+	if err := CreateProjectConfig(opts); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	projectID := NormalizeProjectID(opts.Repo)
+	configPath := ProjectConfigPath(projectID)
+	fmt.Printf("Created config: %s\n", configPath)
+	if opts.Approve {
+		fmt.Println("Config approved.")
+	} else {
+		fmt.Printf("\nTo approve, run: cmd2host config approve %s\n", projectID)
 	}
 }
 
@@ -681,6 +758,48 @@ func handleProjectsCommand() {
 			status = "not approved"
 		}
 		fmt.Printf("  %s (%s)\n", p, status)
+	}
+}
+
+// handleTemplatesCommand handles templates subcommands
+func handleTemplatesCommand() {
+	// cmd2host templates - list templates
+	// cmd2host templates show <name> - show template content
+	if len(os.Args) == 2 {
+		// List templates
+		templates, err := ListTemplates()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing templates: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Available templates:")
+		for _, t := range templates {
+			fmt.Printf("  %s\n", t)
+		}
+		return
+	}
+
+	subCmd := os.Args[2]
+
+	switch subCmd {
+	case "show":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host templates show <name>")
+			os.Exit(1)
+		}
+		name := os.Args[3]
+		data, err := GetTemplate(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(data))
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown templates command: %s\n", subCmd)
+		fmt.Fprintln(os.Stderr, "Usage: cmd2host templates [show <name>]")
+		os.Exit(1)
 	}
 }
 

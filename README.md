@@ -28,42 +28,25 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 
 ### 2. Create project configuration
 
-Create a project config at `~/.cmd2host/projects/<owner_repo>/config.json`:
+Create a project config using a template:
 
-```json
-{
-  "repo": "owner/repo",
-  "repo_path": "/path/to/local/repo",
-  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_view", "gh_issue_list"],
-  "constraints": {
-    "branch_allow": ["^ai/", "^feature/"],
-    "path_deny": [".git/**", ".env*", "**/*.pem"]
-  },
-  "operations": {
-    "gh_pr_view": {
-      "command": "gh",
-      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
-      "params": {
-        "number": {"type": "integer", "min": 1}
-      },
-      "allowed_flags": ["--json"],
-      "description": "View a pull request"
-    },
-    "gh_pr_list": {
-      "command": "gh",
-      "args_template": ["pr", "list", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--json", "--state", "--limit"],
-      "description": "List pull requests"
-    }
-  }
-}
+```bash
+# List available templates
+cmd2host templates
+
+# Create config from template
+cmd2host config init --repo=owner/repo --template=readonly --repo-path=/path/to/repo
+
+# Or create and approve in one step
+cmd2host config init --repo=owner/repo --template=github_write --approve
 ```
 
-Or use a template from `templates/`:
-- `readonly.json` - Read-only operations (git fetch, gh pr/issue view/list)
-- `github_write.json` - + PR/Issue creation
-- `git_write.json` - + git push (with strict constraints)
+Available templates:
+- `readonly` - Read-only operations (git fetch, gh pr/issue view/list)
+- `github_write` - + PR/Issue creation
+- `git_write` - + git push (with strict constraints)
+
+Or create manually at `~/.cmd2host/projects/<owner_repo>/config.json` (see Templates section below).
 
 ### 3. Approve the configuration
 
@@ -278,13 +261,18 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 
 ### Templates
 
-Pre-configured templates are available in `templates/`:
+Templates are embedded in the cmd2host binary. Use CLI commands to list and view them:
+
+```bash
+cmd2host templates              # List available templates
+cmd2host templates show <name>  # Show template content
+```
 
 | Template | Description | Operations |
 |----------|-------------|------------|
-| `readonly.json` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
-| `github_write.json` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
-| `git_write.json` | + Git push | readonly + git_push (requires branch_allow constraint) |
+| `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
+| `github_write` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
+| `git_write` | + Git push | readonly + git_push (requires branch_allow constraint) |
 
 ## MCP Server Integration
 
