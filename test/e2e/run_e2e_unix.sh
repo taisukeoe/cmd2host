@@ -92,7 +92,6 @@ FAILED=0
 INSTALL_DIR="$HOME/.cmd2host"
 BINARY_PATH="$INSTALL_DIR/cmd2host"
 SOCKET_PATH="$INSTALL_DIR/cmd2host.sock"
-OS_TYPE="$(uname -s)"
 DAEMON_PID=""
 
 # Cleanup function

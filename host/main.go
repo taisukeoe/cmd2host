@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -552,7 +553,7 @@ func (s *Server) createUnixListener() (net.Listener, error) {
 	path := s.daemonConfig.SocketPath
 
 	// Ensure parent directory exists
-	dir := path[:strings.LastIndex(path, "/")]
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create socket directory: %w", err)
 	}

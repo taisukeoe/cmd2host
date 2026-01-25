@@ -97,3 +97,66 @@ func TestLoadDaemonConfigMissing(t *testing.T) {
 		t.Errorf("Default ListenPort = %d, want %d", config.ListenPort, 9876)
 	}
 }
+
+func TestLoadDaemonConfigUnixSocketDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "daemon.json")
+
+	// Minimal config - should get Unix socket defaults
+	configContent := `{}`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	config, err := LoadDaemonConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig failed: %v", err)
+	}
+
+	// Verify Unix socket defaults
+	if config.ListenMode != "both" {
+		t.Errorf("Default ListenMode = %q, want %q", config.ListenMode, "both")
+	}
+
+	home, _ := os.UserHomeDir()
+	expectedSocketPath := filepath.Join(home, ".cmd2host", "cmd2host.sock")
+	if config.SocketPath != expectedSocketPath {
+		t.Errorf("Default SocketPath = %q, want %q", config.SocketPath, expectedSocketPath)
+	}
+
+	if config.SocketMode != 0660 {
+		t.Errorf("Default SocketMode = %o, want %o", config.SocketMode, 0660)
+	}
+}
+
+func TestLoadDaemonConfigUnixSocketExplicit(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "daemon.json")
+
+	configContent := `{
+		"listen_mode": "unix",
+		"socket_path": "/var/run/cmd2host.sock",
+		"socket_mode": 432
+	}`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	config, err := LoadDaemonConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig failed: %v", err)
+	}
+
+	if config.ListenMode != "unix" {
+		t.Errorf("ListenMode = %q, want %q", config.ListenMode, "unix")
+	}
+	if config.SocketPath != "/var/run/cmd2host.sock" {
+		t.Errorf("SocketPath = %q, want %q", config.SocketPath, "/var/run/cmd2host.sock")
+	}
+	// 432 decimal = 0660 octal
+	if config.SocketMode != 432 {
+		t.Errorf("SocketMode = %d, want %d", config.SocketMode, 432)
+	}
+}
