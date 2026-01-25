@@ -65,3 +65,33 @@ echo -n "$SESSION_TOKEN" > "$TEMP_TOKEN"
 mv "$TEMP_TOKEN" "$SESSION_TOKEN_FILE"
 
 echo "cmd2host: session token initialized"
+
+# Auto-create project config if it doesn't exist
+if [[ -n "$CURRENT_REPO" ]]; then
+    # Normalize project ID (owner/repo -> owner_repo)
+    PROJECT_ID="${CURRENT_REPO//\//_}"
+    CONFIG_PATH="${HOME}/.cmd2host/projects/${PROJECT_ID}/config.json"
+
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+        # Determine template:
+        # 1. CMD2HOST_TEMPLATE environment variable
+        # 2. .devcontainer/cmd2host.template file
+        # 3. Default to "readonly"
+        TEMPLATE="${CMD2HOST_TEMPLATE:-}"
+        if [[ -z "$TEMPLATE" && -f ".devcontainer/cmd2host.template" ]]; then
+            TEMPLATE=$(cat ".devcontainer/cmd2host.template" | tr -d '[:space:]')
+        fi
+        TEMPLATE="${TEMPLATE:-readonly}"
+
+        # Get repo path (current directory)
+        REPO_PATH="$(pwd)"
+
+        # Create config (without --approve for security - manual approval required)
+        if "$CMD2HOST_BIN" config init --repo="$CURRENT_REPO" --template="$TEMPLATE" --repo-path="$REPO_PATH" 2>/dev/null; then
+            echo "cmd2host: created project config from template '$TEMPLATE'"
+            echo "cmd2host: to approve, run: cmd2host config approve $PROJECT_ID"
+        else
+            echo "cmd2host: warning: failed to create project config" >&2
+        fi
+    fi
+fi

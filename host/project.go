@@ -321,3 +321,79 @@ func ListProjects() ([]string, error) {
 	}
 	return projects, nil
 }
+
+// CreateProjectConfigOptions contains options for CreateProjectConfig
+type CreateProjectConfigOptions struct {
+	Repo     string // Repository (owner/repo) - required
+	Template string // Template name (default: "readonly")
+	RepoPath string // Local repository path (optional)
+	Approve  bool   // Approve config after creation
+	Force    bool   // Overwrite existing config
+}
+
+// CreateProjectConfig creates a project configuration from a template
+func CreateProjectConfig(opts CreateProjectConfigOptions) error {
+	if opts.Repo == "" {
+		return fmt.Errorf("repo is required")
+	}
+
+	// Validate repo format: must be exactly "owner/repo" with no extra slashes
+	// Aligned with CURRENT_REPO detection in init-cmd2host.sh
+	repoPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	if !repoPattern.MatchString(opts.Repo) {
+		return fmt.Errorf("repo must be in owner/repo format (e.g., owner/repo)")
+	}
+
+	// Default template
+	if opts.Template == "" {
+		opts.Template = "readonly"
+	}
+
+	// Load template
+	templateData, err := GetTemplate(opts.Template)
+	if err != nil {
+		return fmt.Errorf("failed to load template: %w", err)
+	}
+
+	// Replace placeholders
+	content := string(templateData)
+	content = strings.ReplaceAll(content, "OWNER/REPO", opts.Repo)
+	if opts.RepoPath != "" {
+		content = strings.ReplaceAll(content, "/path/to/repo", opts.RepoPath)
+	}
+
+	// Validate the resulting JSON by parsing it
+	var config ProjectConfig
+	if err := json.Unmarshal([]byte(content), &config); err != nil {
+		return fmt.Errorf("invalid config after template expansion: %w", err)
+	}
+
+	// Create project directory
+	projectID := NormalizeProjectID(opts.Repo)
+	projectDir := filepath.Join(ProjectsDir(), projectID)
+	configPath := filepath.Join(projectDir, "config.json")
+
+	// Check if config already exists
+	if _, err := os.Stat(configPath); err == nil && !opts.Force {
+		return fmt.Errorf("config already exists: %s (use --force to overwrite)", configPath)
+	}
+
+	// Create directory
+	if err := os.MkdirAll(projectDir, 0700); err != nil {
+		return fmt.Errorf("failed to create project directory: %w", err)
+	}
+
+	// Write config file
+	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	// Approve if requested
+	if opts.Approve {
+		if err := ApproveConfig(projectID); err != nil {
+			return fmt.Errorf("config created but approval failed: %w", err)
+		}
+	}
+
+	return nil
+}

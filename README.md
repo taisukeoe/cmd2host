@@ -8,13 +8,17 @@ DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`)
 DevContainer                      Host Machine (macOS)
 +------------------+             +------------------+
 | AI Agent         |             | cmd2host daemon  |
-|   ↓              |   TCP:9876  |   ↓              |
-| cmd2host-mcp     | ----------> | cmd2host (Go)    |
-| (MCP server)     | <---------- |   ↓              |
-|   ↓              |             | gh (real CLI)    |
+|   ↓              |  TCP:9876   |   ↓              |
+| cmd2host-mcp     | ----or----> | cmd2host (Go)    |
+| (MCP server)     | Unix socket |   ↓              |
+|   ↓              | <---------- | gh (real CLI)    |
 | Operations API   |             |                  |
 +------------------+             +------------------+
 ```
+
+Connection modes:
+- **TCP** (default): Uses `host.docker.internal:9876` - works with most DevContainers
+- **Unix socket**: Uses mounted socket file - required for `--network none` containers
 
 Note: Wrapper scripts (e.g., `gh`) are installed but display MCP usage instructions instead of executing commands directly.
 
@@ -28,42 +32,25 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 
 ### 2. Create project configuration
 
-Create a project config at `~/.cmd2host/projects/<owner_repo>/config.json`:
+Create a project config using a template:
 
-```json
-{
-  "repo": "owner/repo",
-  "repo_path": "/path/to/local/repo",
-  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_view", "gh_issue_list"],
-  "constraints": {
-    "branch_allow": ["^ai/", "^feature/"],
-    "path_deny": [".git/**", ".env*", "**/*.pem"]
-  },
-  "operations": {
-    "gh_pr_view": {
-      "command": "gh",
-      "args_template": ["pr", "view", "{number}", "-R", "{repo}"],
-      "params": {
-        "number": {"type": "integer", "min": 1}
-      },
-      "allowed_flags": ["--json"],
-      "description": "View a pull request"
-    },
-    "gh_pr_list": {
-      "command": "gh",
-      "args_template": ["pr", "list", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--json", "--state", "--limit"],
-      "description": "List pull requests"
-    }
-  }
-}
+```bash
+# List available templates
+cmd2host templates
+
+# Create config from template
+cmd2host config init --repo=owner/repo --template=readonly --repo-path=/path/to/repo
+
+# Or create and approve in one step
+cmd2host config init --repo=owner/repo --template=github_write --approve
 ```
 
-Or use a template from `templates/`:
-- `readonly.json` - Read-only operations (git fetch, gh pr/issue view/list)
-- `github_write.json` - + PR/Issue creation
-- `git_write.json` - + git push (with strict constraints)
+Available templates:
+- `readonly` - Read-only operations (git fetch, gh pr/issue view/list)
+- `github_write` - + PR/Issue creation
+- `git_write` - + git push (with strict constraints)
+
+Or create manually at `~/.cmd2host/projects/<owner_repo>/config.json` (see Templates section below).
 
 ### 3. Approve the configuration
 
@@ -159,6 +146,7 @@ cmd2host --version                 # Show version
 |--------|------|---------|-------------|
 | `commands` | string | `gh` | Comma-separated list of commands to proxy |
 | `installMcpServer` | boolean | `true` | Install cmd2host-mcp (MCP server for AI agent integration) |
+| `connectionMode` | string | `tcp` | Connection mode: `tcp` (default) or `unix` (for `--network none` containers) |
 
 ### Example: Multiple commands
 
@@ -184,6 +172,38 @@ cmd2host --version                 # Show version
   }
 }
 ```
+
+### Example: Unix socket mode (for `--network none`)
+
+For containers with `--network none`, use Unix socket instead of TCP:
+
+```json
+{
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly",
+    "source=${localEnv:HOME}/.cmd2host/cmd2host.sock,target=/var/run/cmd2host.sock,type=bind"
+  ],
+  "features": {
+    "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
+      "commands": "gh",
+      "connectionMode": "unix"
+    }
+  },
+  "customizations": {
+    "claude-code": {
+      "mcpServers": {
+        "cmd2host": {
+          "command": "cmd2host-mcp",
+          "args": ["-socket", "/var/run/cmd2host.sock", "-token-file", "/run/cmd2host-token"]
+        }
+      }
+    }
+  }
+}
+```
+
+Or copy `src/cmd2host/mcp-unix.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
 
 ## Security
 
@@ -278,13 +298,18 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 
 ### Templates
 
-Pre-configured templates are available in `templates/`:
+Templates are embedded in the cmd2host binary. Use CLI commands to list and view them:
+
+```bash
+cmd2host templates              # List available templates
+cmd2host templates show <name>  # Show template content
+```
 
 | Template | Description | Operations |
 |----------|-------------|------------|
-| `readonly.json` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
-| `github_write.json` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
-| `git_write.json` | + Git push | readonly + git_push (requires branch_allow constraint) |
+| `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
+| `github_write` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
+| `git_write` | + Git push | readonly + git_push (requires branch_allow constraint) |
 
 ## MCP Server Integration
 
@@ -333,8 +358,9 @@ Set automatically by the feature:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HOST_CMD_PROXY_HOST` | `host.docker.internal` | Host address |
-| `HOST_CMD_PROXY_PORT` | `9876` | Daemon port |
+| `HOST_CMD_PROXY_HOST` | `host.docker.internal` | Host address (TCP mode) |
+| `HOST_CMD_PROXY_PORT` | `9876` | Daemon port (TCP mode) |
+| `HOST_CMD_PROXY_SOCKET` | `/var/run/cmd2host.sock` | Unix socket path (Unix mode) |
 | `HOST_CMD_PROXY_TOKEN_FILE` | `/run/cmd2host-token` | Path to session token file |
 
 ## Development

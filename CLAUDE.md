@@ -59,10 +59,11 @@ Commands are validated using **operation mode**: pre-approved operation template
 - `host/executor.go` - Command execution
 - `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
 
-### Templates
-- `templates/readonly.json` - Read-only operations template
-- `templates/github_write.json` - GitHub write operations template
-- `templates/git_write.json` - Git push operations template (with strict constraints)
+### Templates (embedded in binary)
+- `host/templates/readonly.json` - Read-only operations template
+- `host/templates/github_write.json` - GitHub write operations template
+- `host/templates/git_write.json` - Git push operations template (with strict constraints)
+- `host/templates.go` - Template embedding and listing functions
 
 ### MCP server
 - `mcp-server/main.go` - MCP server entry point
@@ -139,6 +140,9 @@ just build
 
 # CLI commands
 ./dist/cmd2host projects                    # List projects
+./dist/cmd2host templates                   # List available templates
+./dist/cmd2host templates show <name>       # Show template content
+./dist/cmd2host config init --repo=owner/repo [--template=<name>] [--repo-path=<path>] [--approve] [--force]
 ./dist/cmd2host config diff <project-id>    # Show config status
 ./dist/cmd2host config approve <project-id> # Approve config
 ```
