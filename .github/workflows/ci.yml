@@ -77,6 +77,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: just test-host
 
+      - name: Unix Socket E2E Test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: just test-e2e-unix
+
   test-devcontainer:
     needs: changes
     if: needs.changes.outputs.devcontainer == 'true'

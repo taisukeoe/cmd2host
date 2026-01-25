@@ -24,12 +24,13 @@ const (
 	maxReadSize = 65536
 )
 
-// Server handles TCP connections and command proxying
+// Server handles TCP and Unix socket connections and command proxying
 type Server struct {
 	daemonConfig *DaemonConfig
 	validator    *Validator
 	tokenStore   *TokenStore
-	listener     net.Listener
+	tcpListener  net.Listener
+	unixListener net.Listener
 }
 
 // NewServer creates a new Server
@@ -457,7 +458,7 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// Run starts the TCP server
+// Run starts the server based on listen mode
 func (s *Server) Run() error {
 	// Cleanup expired tokens on startup
 	if err := s.tokenStore.CleanupExpired(); err != nil {
@@ -475,16 +476,6 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	addr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
-
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
-	}
-	s.listener = listener
-
-	fmt.Printf("cmd2host listening on %s\n", addr)
-
 	// List configured projects
 	projects, _ := ListProjects()
 	if len(projects) > 0 {
@@ -492,6 +483,109 @@ func (s *Server) Run() error {
 	}
 	fmt.Println()
 
+	switch s.daemonConfig.ListenMode {
+	case "tcp":
+		return s.runTCP()
+	case "unix":
+		return s.runUnix()
+	case "both":
+		return s.runBoth()
+	default:
+		return fmt.Errorf("invalid listen_mode: %s (must be tcp, unix, or both)", s.daemonConfig.ListenMode)
+	}
+}
+
+// runTCP starts only the TCP listener
+func (s *Server) runTCP() error {
+	addr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on TCP %s: %w", addr, err)
+	}
+	s.tcpListener = listener
+	fmt.Printf("cmd2host listening on %s (TCP)\n", addr)
+	return s.acceptLoop(listener)
+}
+
+// runUnix starts only the Unix socket listener
+func (s *Server) runUnix() error {
+	listener, err := s.createUnixListener()
+	if err != nil {
+		return err
+	}
+	s.unixListener = listener
+	fmt.Printf("cmd2host listening on %s (Unix socket)\n", s.daemonConfig.SocketPath)
+	return s.acceptLoop(listener)
+}
+
+// runBoth starts both TCP and Unix socket listeners
+func (s *Server) runBoth() error {
+	// Start TCP listener
+	tcpAddr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
+	tcpListener, err := net.Listen("tcp", tcpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on TCP %s: %w", tcpAddr, err)
+	}
+	s.tcpListener = tcpListener
+
+	// Start Unix listener
+	unixListener, err := s.createUnixListener()
+	if err != nil {
+		tcpListener.Close()
+		return err
+	}
+	s.unixListener = unixListener
+
+	fmt.Printf("cmd2host listening on %s (TCP) and %s (Unix socket)\n", tcpAddr, s.daemonConfig.SocketPath)
+
+	// Run both accept loops concurrently
+	errCh := make(chan error, 2)
+	go func() { errCh <- s.acceptLoop(tcpListener) }()
+	go func() { errCh <- s.acceptLoop(unixListener) }()
+
+	// Return first error (usually from shutdown)
+	return <-errCh
+}
+
+// createUnixListener creates and configures a Unix domain socket listener
+func (s *Server) createUnixListener() (net.Listener, error) {
+	path := s.daemonConfig.SocketPath
+
+	// Ensure parent directory exists
+	dir := path[:strings.LastIndex(path, "/")]
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create socket directory: %w", err)
+	}
+
+	// Remove stale socket file if exists
+	if info, err := os.Stat(path); err == nil {
+		if info.Mode()&os.ModeSocket != 0 {
+			if err := os.Remove(path); err != nil {
+				return nil, fmt.Errorf("failed to remove stale socket %s: %w", path, err)
+			}
+		} else {
+			return nil, fmt.Errorf("path %s exists but is not a socket", path)
+		}
+	}
+
+	// Create listener
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create unix socket %s: %w", path, err)
+	}
+
+	// Set permissions
+	if err := os.Chmod(path, os.FileMode(s.daemonConfig.SocketMode)); err != nil {
+		listener.Close()
+		os.Remove(path)
+		return nil, fmt.Errorf("failed to set socket permissions: %w", err)
+	}
+
+	return listener, nil
+}
+
+// acceptLoop handles incoming connections on a listener
+func (s *Server) acceptLoop(listener net.Listener) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -508,8 +602,13 @@ func (s *Server) Run() error {
 
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() {
-	if s.listener != nil {
-		s.listener.Close()
+	if s.tcpListener != nil {
+		s.tcpListener.Close()
+	}
+	if s.unixListener != nil {
+		s.unixListener.Close()
+		// Clean up socket file
+		os.Remove(s.daemonConfig.SocketPath)
 	}
 }
 
@@ -686,7 +785,13 @@ func handleProjectsCommand() {
 
 // runDaemon starts the daemon server
 func runDaemon() {
-	daemonConfig, err := LoadDaemonConfig(DefaultDaemonConfigPath())
+	// Allow overriding config path via environment variable (for testing)
+	configPath := os.Getenv("DAEMON_CONFIG")
+	if configPath == "" {
+		configPath = DefaultDaemonConfigPath()
+	}
+
+	daemonConfig, err := LoadDaemonConfig(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Daemon config error: %v\n", err)
 		os.Exit(1)

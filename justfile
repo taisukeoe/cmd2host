@@ -63,6 +63,10 @@ test-e2e-clean:
 test-e2e-quick:
     ./test/e2e/run_e2e.sh --skip-build --skip-devcontainer
 
+# Run E2E tests for Unix socket mode (no devcontainer needed)
+test-e2e-unix:
+    ./test/e2e/run_e2e_unix.sh
+
 # Run all tests (except devcontainer and e2e)
 test-all: test test-mcp test-host
 
