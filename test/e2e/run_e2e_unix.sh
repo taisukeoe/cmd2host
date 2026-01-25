@@ -296,8 +296,9 @@ DAEMON_PID=$!
 
 sleep 2
 
-# Verify both listeners are active
-if [[ -S "$SOCKET_PATH" ]] && lsof -i :19876 > /dev/null 2>&1; then
+# Verify both listeners are active (use nc instead of lsof for portability)
+TCP_CHECK=$(echo '{}' | nc -w 1 127.0.0.1 19876 2>&1 || true)
+if [[ -S "$SOCKET_PATH" ]] && [[ -n "$TCP_CHECK" ]]; then
     log_pass "Both listeners active (TCP:19876 + Unix socket)"
     ((PASSED++))
 else
