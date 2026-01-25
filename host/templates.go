@@ -38,7 +38,7 @@ func GetTemplate(name string) ([]byte, error) {
 	path := filepath.Join("templates", filename)
 	data, err := templatesFS.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("template not found: %s", name)
+		return nil, fmt.Errorf("failed to read template %q: %w", name, err)
 	}
 	return data, nil
 }

@@ -336,3 +336,138 @@ func TestMatchDoubleStarGlob(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateProjectConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Override HOME for testing
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	t.Run("successful creation with default template", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo: "testowner/testrepo",
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig failed: %v", err)
+		}
+
+		// Verify config was created
+		configPath := filepath.Join(tmpDir, ".cmd2host", "projects", "testowner_testrepo", "config.json")
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			t.Errorf("Config file not created at %s", configPath)
+		}
+
+		// Verify config is valid and loadable
+		config, err := LoadProjectConfig("testowner_testrepo")
+		if err != nil {
+			t.Fatalf("Failed to load created config: %v", err)
+		}
+		if config.Repo != "testowner/testrepo" {
+			t.Errorf("Config repo = %q, want %q", config.Repo, "testowner/testrepo")
+		}
+	})
+
+	t.Run("custom template and repo_path substitution", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:     "org/project",
+			Template: "github_write",
+			RepoPath: "/custom/path/to/repo",
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig failed: %v", err)
+		}
+
+		config, err := LoadProjectConfig("org_project")
+		if err != nil {
+			t.Fatalf("Failed to load created config: %v", err)
+		}
+		if config.Repo != "org/project" {
+			t.Errorf("Config repo = %q, want %q", config.Repo, "org/project")
+		}
+		if config.RepoPath != "/custom/path/to/repo" {
+			t.Errorf("Config repo_path = %q, want %q", config.RepoPath, "/custom/path/to/repo")
+		}
+		// github_write should include gh_pr_create
+		if !config.HasOperation("gh_pr_create") {
+			t.Error("github_write template should include gh_pr_create operation")
+		}
+	})
+
+	t.Run("existing config without force", func(t *testing.T) {
+		// First creation
+		opts := CreateProjectConfigOptions{
+			Repo: "existing/repo",
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("First CreateProjectConfig failed: %v", err)
+		}
+
+		// Second creation without force should fail
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error when config exists without --force")
+		}
+	})
+
+	t.Run("existing config with force", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:  "existing/repo",
+			Force: true,
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig with force failed: %v", err)
+		}
+	})
+
+	t.Run("with approve flag", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:    "approved/repo",
+			Approve: true,
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig failed: %v", err)
+		}
+
+		// Check that config is approved
+		approved, _, err := IsConfigApproved("approved_repo")
+		if err != nil {
+			t.Fatalf("IsConfigApproved failed: %v", err)
+		}
+		if !approved {
+			t.Error("Config should be approved when Approve=true")
+		}
+	})
+
+	t.Run("invalid repo format", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo: "invalidrepo", // missing owner/
+		}
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error for invalid repo format")
+		}
+	})
+
+	t.Run("empty repo", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo: "",
+		}
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error for empty repo")
+		}
+	})
+
+	t.Run("unknown template", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:     "unknown/template",
+			Template: "nonexistent_template",
+		}
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error for unknown template")
+		}
+	})
+}
