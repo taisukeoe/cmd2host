@@ -6,6 +6,7 @@ echo "Installing cmd2host feature..."
 # Parse options (passed as environment variables by devcontainer)
 COMMANDS="${COMMANDS:-gh}"
 INSTALLMCPSERVER="${INSTALLMCPSERVER:-true}"
+CONNECTIONMODE="${CONNECTIONMODE:-tcp}"
 
 # GitHub repository for releases
 GITHUB_REPO="taisukeoe/cmd2host"
@@ -88,11 +89,18 @@ done
 # Install MCP server if requested
 if [[ "$INSTALLMCPSERVER" == "true" ]]; then
     if install_mcp_server; then
+        # Select MCP config based on connection mode
+        MCP_CONFIG="mcp.json"
+        if [[ "$CONNECTIONMODE" == "unix" ]]; then
+            MCP_CONFIG="mcp-unix.json"
+            echo "  Using Unix socket mode for MCP"
+        fi
+
         # Copy MCP config to workspace(s)
-        if [[ -f "$SCRIPT_DIR/mcp.json" && -d "/workspaces" ]]; then
+        if [[ -f "$SCRIPT_DIR/$MCP_CONFIG" && -d "/workspaces" ]]; then
             for ws in /workspaces/*/; do
                 if [[ -d "$ws" && ! -f "${ws}.mcp.json" ]]; then
-                    cp "$SCRIPT_DIR/mcp.json" "${ws}.mcp.json"
+                    cp "$SCRIPT_DIR/$MCP_CONFIG" "${ws}.mcp.json"
                     echo "  Created: ${ws}.mcp.json"
                 fi
             done

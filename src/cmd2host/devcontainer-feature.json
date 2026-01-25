@@ -1,6 +1,6 @@
 {
   "id": "cmd2host",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "name": "Host Command Proxy",
   "description": "Proxy commands (gh, etc.) from container to host machine. Requires cmd2host daemon on host.",
   "documentationURL": "https://github.com/taisukeoe/cmd2host",
@@ -14,11 +14,18 @@
       "type": "boolean",
       "default": true,
       "description": "Install cmd2host-mcp (MCP server for AI agent integration)"
+    },
+    "connectionMode": {
+      "type": "string",
+      "enum": ["tcp", "unix"],
+      "default": "tcp",
+      "description": "Connection mode to host daemon: 'tcp' (default) or 'unix' (for --network none containers)"
     }
   },
   "containerEnv": {
     "HOST_CMD_PROXY_HOST": "host.docker.internal",
     "HOST_CMD_PROXY_PORT": "9876",
+    "HOST_CMD_PROXY_SOCKET": "/var/run/cmd2host.sock",
     "HOST_CMD_PROXY_TOKEN_FILE": "/run/cmd2host-token"
   }
 }

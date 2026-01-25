@@ -8,8 +8,16 @@ import (
 
 // DaemonConfig represents daemon-level configuration (listen settings, limits)
 type DaemonConfig struct {
+	// Network mode: "tcp", "unix", or "both"
+	ListenMode string `json:"listen_mode,omitempty"` // Default: "both"
+
+	// TCP settings (used when ListenMode is "tcp" or "both")
 	ListenAddress string `json:"listen_address"`
 	ListenPort    int    `json:"listen_port"`
+
+	// Unix socket settings (used when ListenMode is "unix" or "both")
+	SocketPath string `json:"socket_path,omitempty"` // Default: ~/.cmd2host/cmd2host.sock
+	SocketMode uint32 `json:"socket_mode,omitempty"` // Default: 0660
 
 	// Output limits
 	MaxStdoutBytes int `json:"max_stdout_bytes,omitempty"` // Default: 1MB
@@ -59,11 +67,21 @@ func defaultDaemonConfig() *DaemonConfig {
 
 // applyDaemonDefaults sets default values for unset fields
 func applyDaemonDefaults(config *DaemonConfig) {
+	if config.ListenMode == "" {
+		config.ListenMode = "both" // TCP + Unix for backward compatibility
+	}
 	if config.ListenAddress == "" {
 		config.ListenAddress = "127.0.0.1"
 	}
 	if config.ListenPort == 0 {
 		config.ListenPort = 9876
+	}
+	if config.SocketPath == "" {
+		home, _ := os.UserHomeDir()
+		config.SocketPath = filepath.Join(home, ".cmd2host", "cmd2host.sock")
+	}
+	if config.SocketMode == 0 {
+		config.SocketMode = 0660 // Owner + group read/write
 	}
 	if config.MaxStdoutBytes == 0 {
 		config.MaxStdoutBytes = 1024 * 1024 // 1MB
