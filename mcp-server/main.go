@@ -18,8 +18,9 @@ var version = "dev"
 
 func main() {
 	var (
-		daemonHost  = flag.String("host", "host.docker.internal", "cmd2host daemon host")
-		daemonPort  = flag.Int("port", 9876, "cmd2host daemon port")
+		daemonHost  = flag.String("host", "host.docker.internal", "cmd2host daemon host (TCP mode)")
+		daemonPort  = flag.Int("port", 9876, "cmd2host daemon port (TCP mode)")
+		socketPath  = flag.String("socket", "", "cmd2host daemon socket path (Unix mode, overrides host/port)")
 		token       = flag.String("token", "", "Authentication token")
 		tokenFile   = flag.String("token-file", "", "Path to file containing authentication token")
 		showVersion = flag.Bool("version", false, "Show version and exit")
@@ -47,8 +48,13 @@ func main() {
 		log.Fatal("Error: token is required. Use -token, -token-file, or set CMD2HOST_TOKEN environment variable")
 	}
 
-	// Create client
-	client := NewClient(*daemonHost, *daemonPort, authToken)
+	// Create client based on connection mode
+	var client *Client
+	if *socketPath != "" {
+		client = NewUnixClient(*socketPath, authToken)
+	} else {
+		client = NewClient(*daemonHost, *daemonPort, authToken)
+	}
 
 	// Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{

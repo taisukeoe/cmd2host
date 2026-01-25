@@ -15,12 +15,17 @@ const (
 
 // Client communicates with the cmd2host daemon
 type Client struct {
-	host  string
-	port  int
+	// TCP connection settings
+	host string
+	port int
+
+	// Unix socket connection settings
+	socketPath string
+
 	token string
 }
 
-// NewClient creates a new cmd2host client
+// NewClient creates a new cmd2host client for TCP connection
 func NewClient(host string, port int, token string) *Client {
 	return &Client{
 		host:  host,
@@ -29,8 +34,26 @@ func NewClient(host string, port int, token string) *Client {
 	}
 }
 
-// connect establishes a TCP connection to the daemon
+// NewUnixClient creates a new cmd2host client for Unix socket connection
+func NewUnixClient(socketPath string, token string) *Client {
+	return &Client{
+		socketPath: socketPath,
+		token:      token,
+	}
+}
+
+// connect establishes a connection to the daemon (TCP or Unix socket)
 func (c *Client) connect() (net.Conn, error) {
+	if c.socketPath != "" {
+		// Unix socket connection
+		conn, err := net.DialTimeout("unix", c.socketPath, 10*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to cmd2host daemon at %s: %w", c.socketPath, err)
+		}
+		return conn, nil
+	}
+
+	// TCP connection
 	addr := fmt.Sprintf("%s:%d", c.host, c.port)
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {

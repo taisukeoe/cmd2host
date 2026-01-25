@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -18,6 +20,26 @@ func TestNewClient(t *testing.T) {
 	}
 	if client.token != "test-token" {
 		t.Errorf("Expected token 'test-token', got '%s'", client.token)
+	}
+	if client.socketPath != "" {
+		t.Errorf("Expected empty socketPath, got '%s'", client.socketPath)
+	}
+}
+
+func TestNewUnixClient(t *testing.T) {
+	client := NewUnixClient("/var/run/cmd2host.sock", "test-token")
+
+	if client.socketPath != "/var/run/cmd2host.sock" {
+		t.Errorf("Expected socketPath '/var/run/cmd2host.sock', got '%s'", client.socketPath)
+	}
+	if client.token != "test-token" {
+		t.Errorf("Expected token 'test-token', got '%s'", client.token)
+	}
+	if client.host != "" {
+		t.Errorf("Expected empty host, got '%s'", client.host)
+	}
+	if client.port != 0 {
+		t.Errorf("Expected port 0, got %d", client.port)
 	}
 }
 
@@ -295,5 +317,120 @@ func TestClient_Timeout(t *testing.T) {
 	// Should not take too long (the mock server will close after 5s)
 	if elapsed > 10*time.Second {
 		t.Errorf("Request took too long: %v", elapsed)
+	}
+}
+
+func TestUnixClient_ConnectFailure(t *testing.T) {
+	// Try to connect to a socket that doesn't exist
+	client := NewUnixClient("/tmp/nonexistent-cmd2host-test.sock", "test-token")
+	_, err := client.connect()
+	if err == nil {
+		t.Error("Expected connection error, got nil")
+	}
+}
+
+func TestUnixClient_ListOperations(t *testing.T) {
+	// Create temporary directory for socket
+	tmpDir, err := os.MkdirTemp("", "cmd2host-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	socketPath := filepath.Join(tmpDir, "test.sock")
+
+	// Start a mock Unix socket server
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create Unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	// Handle connection in goroutine
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read request
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+
+		var req ListOperationsRequest
+		json.Unmarshal(buf[:n], &req)
+
+		// Send response
+		resp := ListOperationsResponse{
+			Operations: []OperationInfo{
+				{ID: "test_unix_op", Description: "Test Unix socket operation"},
+			},
+		}
+		data, _ := json.Marshal(resp)
+		conn.Write(data)
+	}()
+
+	client := NewUnixClient(socketPath, "test-token")
+	resp, err := client.ListOperations()
+	if err != nil {
+		t.Fatalf("ListOperations via Unix socket failed: %v", err)
+	}
+
+	if len(resp.Operations) != 1 {
+		t.Errorf("Expected 1 operation, got %d", len(resp.Operations))
+	}
+	if resp.Operations[0].ID != "test_unix_op" {
+		t.Errorf("Expected operation ID 'test_unix_op', got '%s'", resp.Operations[0].ID)
+	}
+}
+
+func TestUnixClient_RunOperation(t *testing.T) {
+	// Create temporary directory for socket
+	tmpDir, err := os.MkdirTemp("", "cmd2host-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	socketPath := filepath.Join(tmpDir, "test.sock")
+
+	// Start a mock Unix socket server
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create Unix listener: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 4096)
+		conn.Read(buf)
+
+		resp := OperationResponse{
+			ExitCode: 0,
+			Stdout:   "unix socket works\n",
+			Stderr:   "",
+		}
+		data, _ := json.Marshal(resp)
+		conn.Write(data)
+	}()
+
+	client := NewUnixClient(socketPath, "test-token")
+	resp, err := client.RunOperation("test_op", map[string]interface{}{"msg": "hello"}, nil)
+	if err != nil {
+		t.Fatalf("RunOperation via Unix socket failed: %v", err)
+	}
+
+	if resp.ExitCode != 0 {
+		t.Errorf("Expected exit code 0, got %d", resp.ExitCode)
+	}
+	if resp.Stdout != "unix socket works\n" {
+		t.Errorf("Expected stdout 'unix socket works\\n', got '%s'", resp.Stdout)
 	}
 }
