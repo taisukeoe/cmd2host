@@ -337,9 +337,11 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 		return fmt.Errorf("repo is required")
 	}
 
-	// Validate repo format
-	if !strings.Contains(opts.Repo, "/") {
-		return fmt.Errorf("repo must be in owner/repo format")
+	// Validate repo format: must be exactly "owner/repo" with no extra slashes
+	// Aligned with CURRENT_REPO detection in init-cmd2host.sh
+	repoPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	if !repoPattern.MatchString(opts.Repo) {
+		return fmt.Errorf("repo must be in owner/repo format (e.g., owner/repo)")
 	}
 
 	// Default template

@@ -440,13 +440,33 @@ func TestCreateProjectConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid repo format", func(t *testing.T) {
+	t.Run("invalid repo format - no slash", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
 			Repo: "invalidrepo", // missing owner/
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
 			t.Error("Expected error for invalid repo format")
+		}
+	})
+
+	t.Run("invalid repo format - extra slashes", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo: "owner/repo/extra",
+		}
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error for repo with extra slashes")
+		}
+	})
+
+	t.Run("invalid repo format - leading special char", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo: "-owner/repo",
+		}
+		err := CreateProjectConfig(opts)
+		if err == nil {
+			t.Error("Expected error for repo with leading special char")
 		}
 	})
 

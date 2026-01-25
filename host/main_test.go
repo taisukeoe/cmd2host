@@ -88,6 +88,98 @@ func TestHashTokenCLI(t *testing.T) {
 	}
 }
 
+func TestTemplatesCLI(t *testing.T) {
+	// Build the binary first
+	buildCmd := exec.Command("go", "build", "-o", "cmd2host-test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build binary: %v", err)
+	}
+	defer exec.Command("rm", "cmd2host-test").Run()
+
+	t.Run("templates list", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "templates")
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("templates command failed: %v", err)
+		}
+
+		outputStr := string(output)
+		expectedTemplates := []string{"readonly", "github_write", "git_write"}
+		for _, tmpl := range expectedTemplates {
+			if !strings.Contains(outputStr, tmpl) {
+				t.Errorf("templates output missing %q, got: %s", tmpl, outputStr)
+			}
+		}
+	})
+
+	t.Run("templates show readonly", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "templates", "show", "readonly")
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("templates show command failed: %v", err)
+		}
+
+		outputStr := string(output)
+		// Should contain JSON with OWNER/REPO placeholder
+		if !strings.Contains(outputStr, "OWNER/REPO") {
+			t.Errorf("templates show output missing OWNER/REPO placeholder, got: %s", outputStr)
+		}
+	})
+
+	t.Run("templates show unknown", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "templates", "show", "nonexistent")
+		err := cmd.Run()
+		if err == nil {
+			t.Error("Expected error for unknown template")
+		}
+	})
+}
+
+func TestConfigInitCLI(t *testing.T) {
+	// Build the binary first
+	buildCmd := exec.Command("go", "build", "-o", "cmd2host-test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build binary: %v", err)
+	}
+	defer exec.Command("rm", "cmd2host-test").Run()
+
+	t.Run("config init help", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "config", "init", "--help")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+
+		// --help exits with 0 when repo is not required
+		cmd.Run()
+
+		output := stderr.String()
+		if !strings.Contains(output, "Usage:") {
+			t.Errorf("help output missing Usage, got: %s", output)
+		}
+		if !strings.Contains(output, "--repo=") {
+			t.Errorf("help output missing --repo option, got: %s", output)
+		}
+		if !strings.Contains(output, "--template=") {
+			t.Errorf("help output missing --template option, got: %s", output)
+		}
+	})
+
+	t.Run("config init without repo", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "config", "init")
+		err := cmd.Run()
+		if err == nil {
+			t.Error("Expected error when repo is not specified")
+		}
+	})
+
+	t.Run("config init with invalid repo format", func(t *testing.T) {
+		cmd := exec.Command("./cmd2host-test", "config", "init", "--repo=invalidrepo")
+		err := cmd.Run()
+		if err == nil {
+			t.Error("Expected error for invalid repo format")
+		}
+	})
+}
+
 func TestHashTokenDeterministic(t *testing.T) {
 	// Build the binary first
 	buildCmd := exec.Command("go", "build", "-o", "cmd2host-test", ".")
