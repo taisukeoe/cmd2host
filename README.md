@@ -8,13 +8,17 @@ DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`)
 DevContainer                      Host Machine (macOS)
 +------------------+             +------------------+
 | AI Agent         |             | cmd2host daemon  |
-|   ↓              |   TCP:9876  |   ↓              |
-| cmd2host-mcp     | ----------> | cmd2host (Go)    |
-| (MCP server)     | <---------- |   ↓              |
-|   ↓              |             | gh (real CLI)    |
+|   ↓              |  TCP:9876   |   ↓              |
+| cmd2host-mcp     | ----or----> | cmd2host (Go)    |
+| (MCP server)     | Unix socket |   ↓              |
+|   ↓              | <---------- | gh (real CLI)    |
 | Operations API   |             |                  |
 +------------------+             +------------------+
 ```
+
+Connection modes:
+- **TCP** (default): Uses `host.docker.internal:9876` - works with most DevContainers
+- **Unix socket**: Uses mounted socket file - required for `--network none` containers
 
 Note: Wrapper scripts (e.g., `gh`) are installed but display MCP usage instructions instead of executing commands directly.
 
@@ -142,6 +146,7 @@ cmd2host --version                 # Show version
 |--------|------|---------|-------------|
 | `commands` | string | `gh` | Comma-separated list of commands to proxy |
 | `installMcpServer` | boolean | `true` | Install cmd2host-mcp (MCP server for AI agent integration) |
+| `connectionMode` | string | `tcp` | Connection mode: `tcp` (default) or `unix` (for `--network none` containers) |
 
 ### Example: Multiple commands
 
@@ -167,6 +172,38 @@ cmd2host --version                 # Show version
   }
 }
 ```
+
+### Example: Unix socket mode (for `--network none`)
+
+For containers with `--network none`, use Unix socket instead of TCP:
+
+```json
+{
+  "initializeCommand": ".devcontainer/init-cmd2host.sh",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/.session/token,target=/run/cmd2host-token,type=bind,readonly",
+    "source=${localEnv:HOME}/.cmd2host/cmd2host.sock,target=/var/run/cmd2host.sock,type=bind"
+  ],
+  "features": {
+    "ghcr.io/taisukeoe/cmd2host/cmd2host:1": {
+      "commands": "gh",
+      "connectionMode": "unix"
+    }
+  },
+  "customizations": {
+    "claude-code": {
+      "mcpServers": {
+        "cmd2host": {
+          "command": "cmd2host-mcp",
+          "args": ["-socket", "/var/run/cmd2host.sock", "-token-file", "/run/cmd2host-token"]
+        }
+      }
+    }
+  }
+}
+```
+
+Or copy `src/cmd2host/mcp-unix.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
 
 ## Security
 
@@ -321,8 +358,9 @@ Set automatically by the feature:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HOST_CMD_PROXY_HOST` | `host.docker.internal` | Host address |
-| `HOST_CMD_PROXY_PORT` | `9876` | Daemon port |
+| `HOST_CMD_PROXY_HOST` | `host.docker.internal` | Host address (TCP mode) |
+| `HOST_CMD_PROXY_PORT` | `9876` | Daemon port (TCP mode) |
+| `HOST_CMD_PROXY_SOCKET` | `/var/run/cmd2host.sock` | Unix socket path (Unix mode) |
 | `HOST_CMD_PROXY_TOKEN_FILE` | `/run/cmd2host-token` | Path to session token file |
 
 ## Development

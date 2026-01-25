@@ -763,6 +763,18 @@ func handleConfigInit() {
 	} else {
 		fmt.Printf("\nTo approve, run: cmd2host config approve %s\n", projectID)
 	}
+
+	// Print setup hints
+	fmt.Println("\nDevContainer setup:")
+	fmt.Println("  1. Copy host/scripts/init-cmd2host.sh to .devcontainer/")
+	fmt.Println("  2. Add to devcontainer.json:")
+	fmt.Println("     - initializeCommand: \".devcontainer/init-cmd2host.sh\"")
+	fmt.Println("     - Mount session token to /run/cmd2host-token")
+	fmt.Println("")
+	fmt.Println("Connection modes:")
+	fmt.Println("  TCP (default): connectionMode: \"tcp\" - uses host.docker.internal:9876")
+	fmt.Println("  Unix socket:   connectionMode: \"unix\" - mount ~/.cmd2host/cmd2host.sock")
+	fmt.Println("                 Required for --network none containers")
 }
 
 // handleConfigDiff shows config status and hash
