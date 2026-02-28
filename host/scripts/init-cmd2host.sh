@@ -86,10 +86,10 @@ if [[ -n "$CURRENT_REPO" ]]; then
         # Get repo path (current directory)
         REPO_PATH="$(pwd)"
 
-        # Create config (without --approve for security - manual approval required)
+        # Create config (without --allow for security - manual allow required)
         if "$CMD2HOST_BIN" config init --repo="$CURRENT_REPO" --template="$TEMPLATE" --repo-path="$REPO_PATH" 2>/dev/null; then
             echo "cmd2host: created project config from template '$TEMPLATE'"
-            echo "cmd2host: to approve, run: cmd2host config approve $PROJECT_ID"
+            echo "cmd2host: to allow, run: cmd2host config allow $PROJECT_ID"
         else
             echo "cmd2host: warning: failed to create project config" >&2
         fi

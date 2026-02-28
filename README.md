@@ -41,8 +41,8 @@ cmd2host templates
 # Create config from template
 cmd2host config init --repo=owner/repo --template=readonly --repo-path=/path/to/repo
 
-# Or create and approve in one step
-cmd2host config init --repo=owner/repo --template=github_write --approve
+# Or create and allow in one step
+cmd2host config init --repo=owner/repo --template=github_write --allow
 ```
 
 Available templates:
@@ -52,10 +52,10 @@ Available templates:
 
 Or create manually at `~/.cmd2host/projects/<owner_repo>/config.json` (see Templates section below).
 
-### 3. Approve the configuration
+### 3. Allow the configuration
 
 ```bash
-cmd2host config approve owner_repo
+cmd2host config allow owner_repo
 ```
 
 ### 4. Add feature and token auth to devcontainer.json
@@ -134,7 +134,7 @@ curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/script
 ```bash
 cmd2host                           # Start daemon
 cmd2host config diff <project-id>  # Show config status and hash
-cmd2host config approve <project-id> # Approve current config
+cmd2host config allow <project-id>   # Allow current config
 cmd2host projects                  # List all configured projects
 cmd2host --hash-token              # Hash a token from stdin
 cmd2host --version                 # Show version
@@ -228,21 +228,21 @@ Each project has its own configuration with:
 
 - **allowed_operations**: Whitelist of permitted operations (default deny)
 - **constraints**: Branch patterns, path restrictions
-- **operations**: Pre-approved command templates with typed parameters
+- **operations**: Predefined command templates with typed parameters
 
-### Config Approval
+### Config Allowance
 
-Configuration changes require explicit approval:
+Configuration changes require explicit allowance:
 
 ```bash
 # View current config status
 cmd2host config diff owner_repo
 
-# Approve changes
-cmd2host config approve owner_repo
+# Allow changes
+cmd2host config allow owner_repo
 ```
 
-If config is modified after approval, operations are denied until re-approved.
+If config is modified after being allowed, operations are denied until re-allowed.
 
 ### Default Deny
 
@@ -258,7 +258,7 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 └── projects/
     ├── owner_repo/
     │   ├── config.json            # Project configuration
-    │   └── approved.sha256        # Approved config hash
+    │   └── allowed.sha256         # Allowed config hash
     └── another_owner_another_repo/
         └── config.json
 ```
@@ -313,11 +313,11 @@ cmd2host templates show <name>  # Show template content
 
 ## MCP Server Integration
 
-The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact with the cmd2host daemon using pre-approved operation templates.
+The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact with the cmd2host daemon using predefined operation templates.
 
 ### Features
 
-- **Type-safe operations**: Pre-approved command templates with typed parameters
+- **Type-safe operations**: Predefined command templates with typed parameters
 - **Project-based policies**: Fine-grained control over what operations are allowed
   - Repository binding (token → repo → project config)
   - Branch allowlist (regex patterns)
@@ -347,7 +347,7 @@ The MCP server binary (`cmd2host-mcp`) is automatically installed in the DevCont
 
 MCP server requests use token authentication. Operations are validated against:
 1. Token → repo binding
-2. Project config approval status (hash verification)
+2. Project config allowance status (hash verification)
 3. Allowed operations list (default deny)
 4. Parameter type checking and validation
 5. Constraint checks (branch patterns, path globs)

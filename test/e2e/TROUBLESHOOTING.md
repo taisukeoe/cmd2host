@@ -18,7 +18,7 @@ just test-e2e
 {"error":"no project config found for repo: owner/repo"}
 ```
 
-**Cause:** Project config not created or not approved for this repository.
+**Cause:** Project config not created or not allowed for this repository.
 
 **Fix:** Create project config at `~/.cmd2host/projects/<owner_repo>/config.json`:
 ```json
@@ -32,9 +32,9 @@ just test-e2e
 }
 ```
 
-Then approve and restart:
+Then allow and restart:
 ```bash
-~/.cmd2host/cmd2host config approve <owner_repo>
+~/.cmd2host/cmd2host config allow <owner_repo>
 launchctl unload ~/Library/LaunchAgents/com.user.cmd2host.plist
 launchctl load ~/Library/LaunchAgents/com.user.cmd2host.plist
 ```
