@@ -172,10 +172,10 @@ ensure_project_config() {
     local project_dir="$INSTALL_DIR/projects/$project_id"
     local config_file="$project_dir/config.json"
 
-    # Skip if config already exists and is approved
+    # Skip if config already exists and is allowed
     if [[ -f "$config_file" ]]; then
-        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: approved"; then
-            log_info "Project config already exists and approved"
+        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: ALLOWED"; then
+            log_info "Project config already exists and allowed"
             return 0
         fi
     fi
@@ -202,8 +202,8 @@ ensure_project_config() {
 }
 EOF
 
-    "$BINARY_PATH" config approve "$project_id"
-    log_info "Project config approved for $project_id"
+    "$BINARY_PATH" config allow "$project_id"
+    log_info "Project config allowed for $project_id"
 }
 
 if ! $SKIP_BUILD; then

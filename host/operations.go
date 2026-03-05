@@ -1,5 +1,5 @@
 // operations.go provides operation template definitions and parameter handling.
-// Operations define pre-approved command patterns with typed parameters.
+// Operations define predefined command patterns with typed parameters.
 package main
 
 import (
@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Operation defines a pre-approved command template
+// Operation defines a predefined command template
 type Operation struct {
 	Command      string                 `json:"command"`       // e.g., "gh", "git"
 	ArgsTemplate []string               `json:"args_template"` // e.g., ["pr", "view", "{number}"]

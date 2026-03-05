@@ -76,9 +76,9 @@ func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	// Approve the config
-	if err := ApproveConfig(projectID); err != nil {
-		t.Fatalf("Failed to approve config: %v", err)
+	// Allow the config
+	if err := AllowConfig(projectID); err != nil {
+		t.Fatalf("Failed to allow config: %v", err)
 	}
 
 	// Create token store in temp directory
@@ -232,8 +232,8 @@ func TestServer_RepoMismatch(t *testing.T) {
 		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	if err := ApproveConfig(projectID); err != nil {
-		t.Fatalf("Failed to approve config: %v", err)
+	if err := AllowConfig(projectID); err != nil {
+		t.Fatalf("Failed to allow config: %v", err)
 	}
 
 	// Create token store with token bound to "owner/repo"

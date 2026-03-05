@@ -61,7 +61,7 @@ func main() {
 		Name:    "cmd2host-mcp",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: `This MCP server provides tools for executing pre-approved commands on the host machine via cmd2host daemon.
+		Instructions: `This MCP server provides tools for executing predefined commands on the host machine via cmd2host daemon.
 
 Available tools:
 - cmd2host_list_operations: List all available operations for this session

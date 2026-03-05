@@ -125,13 +125,13 @@ func (s *Server) resolveProject(tokenData TokenData) (*ProjectConfig, string, er
 		return nil, projectID, fmt.Errorf("config repo mismatch: token bound to %q but config specifies %q", tokenData.Repo, projectConfig.Repo)
 	}
 
-	// Verify config is approved
-	approved, currentHash, err := IsConfigApproved(projectID)
+	// Verify config is allowed
+	allowed, currentHash, err := IsConfigAllowed(projectID)
 	if err != nil {
-		return nil, projectID, fmt.Errorf("failed to check config approval: %w", err)
+		return nil, projectID, fmt.Errorf("failed to check config allowance: %w", err)
 	}
-	if !approved {
-		return nil, projectID, fmt.Errorf("config not approved (hash: %s). Run: cmd2host config approve %s", currentHash[:16], projectID)
+	if !allowed {
+		return nil, projectID, fmt.Errorf("config not allowed (hash: %s). Run: cmd2host config allow %s", currentHash[:16], projectID)
 	}
 
 	return projectConfig, projectID, nil
@@ -666,7 +666,7 @@ func handleConfigCommand() {
 		fmt.Fprintln(os.Stderr, "Commands:")
 		fmt.Fprintln(os.Stderr, "  init --repo=<owner/repo> [options]  Create project config from template")
 		fmt.Fprintln(os.Stderr, "  diff <project-id>                   Show config diff and current hash")
-		fmt.Fprintln(os.Stderr, "  approve <project-id>                Approve current config")
+		fmt.Fprintln(os.Stderr, "  allow <project-id>                  Allow current config")
 		os.Exit(1)
 	}
 
@@ -684,13 +684,13 @@ func handleConfigCommand() {
 		projectID := os.Args[3]
 		handleConfigDiff(projectID)
 
-	case "approve":
+	case "allow":
 		if len(os.Args) < 4 {
-			fmt.Fprintln(os.Stderr, "Usage: cmd2host config approve <project-id>")
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host config allow <project-id>")
 			os.Exit(1)
 		}
 		projectID := os.Args[3]
-		handleConfigApprove(projectID)
+		handleConfigAllow(projectID)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown config command: %s\n", subCmd)
@@ -715,8 +715,8 @@ func handleConfigInit() {
 			opts.Template = strings.TrimPrefix(arg, "--template=")
 		case strings.HasPrefix(arg, "--repo-path="):
 			opts.RepoPath = strings.TrimPrefix(arg, "--repo-path=")
-		case arg == "--approve":
-			opts.Approve = true
+		case arg == "--allow":
+			opts.Allow = true
 		case arg == "--force":
 			opts.Force = true
 		default:
@@ -732,7 +732,7 @@ func handleConfigInit() {
 		fmt.Fprintln(os.Stderr, "  --repo=<owner/repo>   Repository name (required)")
 		fmt.Fprintln(os.Stderr, "  --template=<name>     Template name (default: readonly)")
 		fmt.Fprintln(os.Stderr, "  --repo-path=<path>    Local repository path")
-		fmt.Fprintln(os.Stderr, "  --approve             Approve config after creation")
+		fmt.Fprintln(os.Stderr, "  --allow               Allow config after creation")
 		fmt.Fprintln(os.Stderr, "  --force               Overwrite existing config")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Available templates:")
@@ -758,10 +758,10 @@ func handleConfigInit() {
 	projectID := NormalizeProjectID(opts.Repo)
 	configPath := ProjectConfigPath(projectID)
 	fmt.Printf("Created config: %s\n", configPath)
-	if opts.Approve {
-		fmt.Println("Config approved.")
+	if opts.Allow {
+		fmt.Println("Config allowed.")
 	} else {
-		fmt.Printf("\nTo approve, run: cmd2host config approve %s\n", projectID)
+		fmt.Printf("\nTo allow, run: cmd2host config allow %s\n", projectID)
 	}
 
 	// Print setup hints
@@ -780,7 +780,7 @@ func handleConfigInit() {
 // handleConfigDiff shows config status and hash
 func handleConfigDiff(projectID string) {
 	configPath := ProjectConfigPath(projectID)
-	approvedPath := ApprovedHashPath(projectID)
+	allowedPath := AllowedHashPath(projectID)
 
 	// Check if config exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -795,33 +795,33 @@ func handleConfigDiff(projectID string) {
 		os.Exit(1)
 	}
 
-	// Read approved hash
-	var approvedHash string
-	approvedData, err := os.ReadFile(approvedPath)
+	// Read allowed hash
+	var allowedHash string
+	allowedData, err := os.ReadFile(allowedPath)
 	if err == nil {
-		approvedHash = strings.TrimSpace(string(approvedData))
+		allowedHash = strings.TrimSpace(string(allowedData))
 	}
 
 	fmt.Printf("Project:       %s\n", projectID)
 	fmt.Printf("Config:        %s\n", configPath)
 	fmt.Printf("Current hash:  %s\n", currentHash)
 
-	if approvedHash == "" {
-		fmt.Printf("Approved hash: (none)\n")
-		fmt.Println("\nStatus: NOT APPROVED")
-		fmt.Printf("\nTo approve, run: cmd2host config approve %s\n", projectID)
-	} else if currentHash == approvedHash {
-		fmt.Printf("Approved hash: %s\n", approvedHash)
-		fmt.Println("\nStatus: APPROVED (hashes match)")
+	if allowedHash == "" {
+		fmt.Printf("Allowed hash:  (none)\n")
+		fmt.Println("\nStatus: NOT ALLOWED")
+		fmt.Printf("\nTo allow, run: cmd2host config allow %s\n", projectID)
+	} else if currentHash == allowedHash {
+		fmt.Printf("Allowed hash:  %s\n", allowedHash)
+		fmt.Println("\nStatus: ALLOWED (hashes match)")
 	} else {
-		fmt.Printf("Approved hash: %s\n", approvedHash)
+		fmt.Printf("Allowed hash:  %s\n", allowedHash)
 		fmt.Println("\nStatus: MODIFIED (hashes differ)")
-		fmt.Printf("\nTo approve changes, run: cmd2host config approve %s\n", projectID)
+		fmt.Printf("\nTo allow changes, run: cmd2host config allow %s\n", projectID)
 	}
 }
 
-// handleConfigApprove approves the current config
-func handleConfigApprove(projectID string) {
+// handleConfigAllow allows the current config
+func handleConfigAllow(projectID string) {
 	configPath := ProjectConfigPath(projectID)
 
 	// Check if config exists
@@ -837,14 +837,14 @@ func handleConfigApprove(projectID string) {
 		os.Exit(1)
 	}
 
-	// Approve
-	if err := ApproveConfig(projectID); err != nil {
-		fmt.Fprintf(os.Stderr, "Error approving config: %v\n", err)
+	// Allow
+	if err := AllowConfig(projectID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error allowing config: %v\n", err)
 		os.Exit(1)
 	}
 
 	hash, _ := ComputeConfigHash(configPath)
-	fmt.Printf("Approved config for project: %s\n", projectID)
+	fmt.Printf("Allowed config for project: %s\n", projectID)
 	fmt.Printf("Hash: %s\n", hash)
 }
 
@@ -864,10 +864,10 @@ func handleProjectsCommand() {
 
 	fmt.Println("Configured projects:")
 	for _, p := range projects {
-		approved, _, err := IsConfigApproved(p)
-		status := "approved"
-		if err != nil || !approved {
-			status = "not approved"
+		allowed, _, err := IsConfigAllowed(p)
+		status := "allowed"
+		if err != nil || !allowed {
+			status = "not allowed"
 		}
 		fmt.Printf("  %s (%s)\n", p, status)
 	}

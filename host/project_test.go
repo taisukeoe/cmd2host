@@ -246,7 +246,7 @@ func TestLoadProjectConfig(t *testing.T) {
 	}
 }
 
-func TestConfigApproval(t *testing.T) {
+func TestConfigAllow(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Override ProjectsDir for testing
@@ -267,27 +267,27 @@ func TestConfigApproval(t *testing.T) {
 		t.Fatalf("Failed to write config: %v", err)
 	}
 
-	// Initially not approved
-	approved, _, err := IsConfigApproved(projectID)
+	// Initially not allowed
+	allowed, _, err := IsConfigAllowed(projectID)
 	if err != nil {
-		t.Fatalf("IsConfigApproved failed: %v", err)
+		t.Fatalf("IsConfigAllowed failed: %v", err)
 	}
-	if approved {
-		t.Error("Config should not be approved initially")
+	if allowed {
+		t.Error("Config should not be allowed initially")
 	}
 
-	// Approve
-	if err := ApproveConfig(projectID); err != nil {
-		t.Fatalf("ApproveConfig failed: %v", err)
+	// Allow
+	if err := AllowConfig(projectID); err != nil {
+		t.Fatalf("AllowConfig failed: %v", err)
 	}
 
-	// Now should be approved
-	approved, _, err = IsConfigApproved(projectID)
+	// Now should be allowed
+	allowed, _, err = IsConfigAllowed(projectID)
 	if err != nil {
-		t.Fatalf("IsConfigApproved failed: %v", err)
+		t.Fatalf("IsConfigAllowed failed: %v", err)
 	}
-	if !approved {
-		t.Error("Config should be approved after ApproveConfig")
+	if !allowed {
+		t.Error("Config should be allowed after AllowConfig")
 	}
 
 	// Modify config
@@ -296,15 +296,16 @@ func TestConfigApproval(t *testing.T) {
 		t.Fatalf("Failed to write modified config: %v", err)
 	}
 
-	// Should no longer be approved
-	approved, _, err = IsConfigApproved(projectID)
+	// Should no longer be allowed
+	allowed, _, err = IsConfigAllowed(projectID)
 	if err != nil {
-		t.Fatalf("IsConfigApproved failed: %v", err)
+		t.Fatalf("IsConfigAllowed failed: %v", err)
 	}
-	if approved {
-		t.Error("Config should not be approved after modification")
+	if allowed {
+		t.Error("Config should not be allowed after modification")
 	}
 }
+
 
 func TestMatchDoubleStarGlob(t *testing.T) {
 	tests := []struct {
@@ -421,22 +422,22 @@ func TestCreateProjectConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("with approve flag", func(t *testing.T) {
+	t.Run("with allow flag", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:    "approved/repo",
-			Approve: true,
+			Repo:  "allowed/repo",
+			Allow: true,
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
 		}
 
-		// Check that config is approved
-		approved, _, err := IsConfigApproved("approved_repo")
+		// Check that config is allowed
+		allowed, _, err := IsConfigAllowed("allowed_repo")
 		if err != nil {
-			t.Fatalf("IsConfigApproved failed: %v", err)
+			t.Fatalf("IsConfigAllowed failed: %v", err)
 		}
-		if !approved {
-			t.Error("Config should be approved when Approve=true")
+		if !allowed {
+			t.Error("Config should be allowed when Allow=true")
 		}
 	})
 

@@ -96,8 +96,8 @@ setup_project_config() {
   }
 }
 EOF
-    # Approve the config
-    "$BINARY" config approve "$PROJECT_ID"
+    # Allow the config
+    "$BINARY" config allow "$PROJECT_ID"
 }
 
 log_pass() {

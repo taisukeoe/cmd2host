@@ -55,10 +55,11 @@ func ProjectConfigPath(projectID string) string {
 	return filepath.Join(ProjectsDir(), projectID, "config.json")
 }
 
-// ApprovedHashPath returns the path to a project's approved.sha256
-func ApprovedHashPath(projectID string) string {
-	return filepath.Join(ProjectsDir(), projectID, "approved.sha256")
+// AllowedHashPath returns the path to a project's allowed.sha256
+func AllowedHashPath(projectID string) string {
+	return filepath.Join(ProjectsDir(), projectID, "allowed.sha256")
 }
+
 
 // LoadProjectConfig loads and validates a project configuration
 func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
@@ -261,10 +262,10 @@ func ComputeConfigHash(path string) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// IsConfigApproved checks if the project config hash matches the approved hash
-func IsConfigApproved(projectID string) (bool, string, error) {
+// IsConfigAllowed checks if the project config hash matches the allowed hash
+func IsConfigAllowed(projectID string) (bool, string, error) {
 	configPath := ProjectConfigPath(projectID)
-	approvedPath := ApprovedHashPath(projectID)
+	allowedPath := AllowedHashPath(projectID)
 
 	// Compute current config hash
 	currentHash, err := ComputeConfigHash(configPath)
@@ -272,23 +273,23 @@ func IsConfigApproved(projectID string) (bool, string, error) {
 		return false, "", fmt.Errorf("failed to compute config hash: %w", err)
 	}
 
-	// Read approved hash
-	approvedData, err := os.ReadFile(approvedPath)
+	// Read allowed hash
+	allowedData, err := os.ReadFile(allowedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, currentHash, nil // No approved hash yet
+			return false, currentHash, nil // No allowed hash yet
 		}
 		return false, currentHash, err
 	}
 
-	approvedHash := strings.TrimSpace(string(approvedData))
-	return currentHash == approvedHash, currentHash, nil
+	allowedHash := strings.TrimSpace(string(allowedData))
+	return currentHash == allowedHash, currentHash, nil
 }
 
-// ApproveConfig writes the current config hash as approved
-func ApproveConfig(projectID string) error {
+// AllowConfig writes the current config hash as allowed
+func AllowConfig(projectID string) error {
 	configPath := ProjectConfigPath(projectID)
-	approvedPath := ApprovedHashPath(projectID)
+	allowedPath := AllowedHashPath(projectID)
 
 	// Compute and write hash
 	hash, err := ComputeConfigHash(configPath)
@@ -296,7 +297,7 @@ func ApproveConfig(projectID string) error {
 		return err
 	}
 
-	return os.WriteFile(approvedPath, []byte(hash+"\n"), 0600)
+	return os.WriteFile(allowedPath, []byte(hash+"\n"), 0600)
 }
 
 // ListProjects returns a list of all configured project IDs
@@ -327,7 +328,7 @@ type CreateProjectConfigOptions struct {
 	Repo     string // Repository (owner/repo) - required
 	Template string // Template name (default: "readonly")
 	RepoPath string // Local repository path (optional)
-	Approve  bool   // Approve config after creation
+	Allow    bool   // Allow config after creation
 	Force    bool   // Overwrite existing config
 }
 
@@ -388,10 +389,10 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Approve if requested
-	if opts.Approve {
-		if err := ApproveConfig(projectID); err != nil {
-			return fmt.Errorf("config created but approval failed: %w", err)
+	// Allow if requested
+	if opts.Allow {
+		if err := AllowConfig(projectID); err != nil {
+			return fmt.Errorf("config created but allow step failed: %w", err)
 		}
 	}
 
