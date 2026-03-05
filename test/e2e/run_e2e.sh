@@ -174,7 +174,7 @@ ensure_project_config() {
 
     # Skip if config already exists and is allowed
     if [[ -f "$config_file" ]]; then
-        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: allowed"; then
+        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: ALLOWED"; then
             log_info "Project config already exists and allowed"
             return 0
         fi

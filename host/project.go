@@ -392,7 +392,7 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 	// Allow if requested
 	if opts.Allow {
 		if err := AllowConfig(projectID); err != nil {
-			return fmt.Errorf("config created but allow failed: %w", err)
+			return fmt.Errorf("config created but allow step failed: %w", err)
 		}
 	}
 

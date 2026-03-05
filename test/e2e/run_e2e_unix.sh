@@ -137,7 +137,7 @@ ensure_project_config() {
     local config_file="$project_dir/config.json"
 
     if [[ -f "$config_file" ]]; then
-        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "ALLOWED"; then
+        if "$BINARY_PATH" config diff "$project_id" 2>/dev/null | grep -q "Status: ALLOWED"; then
             log_info "Project config already exists and allowed"
             return 0
         fi
