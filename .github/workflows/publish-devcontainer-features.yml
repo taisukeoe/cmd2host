@@ -29,5 +29,6 @@ jobs:
         with:
           publish-features: 'true'
           base-path-to-features: './src'
+          features-namespace: '${{ github.repository }}'
           generate-docs: 'true'
           disable-repo-tagging: 'true'
