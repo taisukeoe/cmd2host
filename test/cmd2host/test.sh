@@ -40,10 +40,10 @@ else
     exit 1
 fi
 
-# Test that wrapper exits with non-zero code
+# Test that wrapper exits with zero code (caller-friendly under set -euo pipefail)
 if gh --version > /dev/null 2>&1; then
-    echo "FAIL: gh wrapper should exit with non-zero code"
-    exit 1
+    echo "PASS: gh wrapper exits with zero code"
 else
-    echo "PASS: gh wrapper exits with non-zero code"
+    echo "FAIL: gh wrapper should exit with zero code"
+    exit 1
 fi

@@ -31,17 +31,16 @@ SESSION_TOKEN=$(openssl rand -hex 32)
 TOKEN_HASH=$(echo -n "$SESSION_TOKEN" | "$CMD2HOST_BIN" --hash-token)
 
 # Detect current repository from git remote (for repository restriction)
+# Uses git remote directly instead of checking .git directory,
+# so this works in normal repos, worktrees, and subdirectories.
 CURRENT_REPO=""
-if [[ -d ".git" ]]; then
-    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
-    if [[ -n "$remote_url" ]]; then
-        # Extract owner/repo from GitHub URL
-        # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
-        CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
-        # Validate format (owner/repo) - require alphanumeric start, match cmd-wrapper.sh
-        if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-            CURRENT_REPO=""
-        fi
+if remote_url=$(git remote get-url origin 2>/dev/null); then
+    # Extract owner/repo from GitHub URL
+    # Supports: git@github.com:owner/repo.git, https://github.com/owner/repo.git
+    CURRENT_REPO=$(echo "$remote_url" | sed -E 's#(git@github\.com:|https://github\.com/)##' | sed 's/\.git$//')
+    # Validate format (owner/repo) - require alphanumeric start, match cmd-wrapper.sh
+    if [[ ! "$CURRENT_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+        CURRENT_REPO=""
     fi
 fi
 
@@ -51,10 +50,14 @@ fi
 mkdir -p "$TOKEN_DIR"
 echo -n "{\"repo\":\"$CURRENT_REPO\"}" > "$TOKEN_DIR/$TOKEN_HASH"
 
-# Ensure .session/ is in .devcontainer/.gitignore
-GITIGNORE_FILE=".devcontainer/.gitignore"
-if [[ ! -f "$GITIGNORE_FILE" ]] || ! grep -qxF '.session/' "$GITIGNORE_FILE" 2>/dev/null; then
-    echo '.session/' >> "$GITIGNORE_FILE"
+# Ensure .session/ is git-ignored.
+# Skip if already ignored (e.g., by root .gitignore) to avoid generating
+# a redundant .devcontainer/.gitignore that dirties the working tree.
+if ! git check-ignore -q .devcontainer/.session/ 2>/dev/null; then
+    GITIGNORE_FILE=".devcontainer/.gitignore"
+    if [[ ! -f "$GITIGNORE_FILE" ]] || ! grep -qxF '.session/' "$GITIGNORE_FILE" 2>/dev/null; then
+        echo '.session/' >> "$GITIGNORE_FILE"
+    fi
 fi
 
 # Create session directory and write token
