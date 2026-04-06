@@ -3,7 +3,7 @@ name: Publish DevContainer Features
 on:
   push:
     tags:
-      - 'v*'
+      - 'feature-v*'
   workflow_dispatch:
 
 jobs:
@@ -16,6 +16,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
+
+      - name: Validate feature tag matches feature version
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#feature-v}"
+          if [ "$TAG_VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          FEATURE_VERSION="$(sed -n 's/.*"version": "\(.*\)",/\1/p' src/cmd2host/devcontainer-feature.json)"
+          if [ "$TAG_VERSION" != "$FEATURE_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match feature version ($FEATURE_VERSION)" >&2
+            exit 1
+          fi
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # ratchet:docker/login-action@v3
