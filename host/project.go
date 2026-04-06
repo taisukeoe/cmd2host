@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,12 +16,12 @@ import (
 
 // ProjectConfig defines project-specific configuration
 type ProjectConfig struct {
-	Repo              string                `json:"repo"`               // Repository (owner/repo)
-	RepoPath          string                `json:"repo_path"`          // Local repository path
-	AllowedOperations []string              `json:"allowed_operations"` // Allowed operation IDs
-	Constraints       Constraints           `json:"constraints"`        // Policy constraints
-	Operations        map[string]*Operation `json:"operations"`         // Operation definitions
-	Env               map[string]string     `json:"env,omitempty"`      // Environment variables
+	Repo              string                `json:"repo"`                 // Repository (owner/repo)
+	RepoPath          string                `json:"repo_path"`            // Local repository path
+	AllowedOperations []string              `json:"allowed_operations"`   // Allowed operation IDs
+	Constraints       Constraints           `json:"constraints"`          // Policy constraints
+	Operations        map[string]*Operation `json:"operations"`           // Operation definitions
+	Env               map[string]string     `json:"env,omitempty"`        // Environment variables
 	GitConfig         map[string]string     `json:"git_config,omitempty"` // Git config overrides
 
 	// Compiled patterns (not serialized)
@@ -60,6 +61,24 @@ func AllowedHashPath(projectID string) string {
 	return filepath.Join(ProjectsDir(), projectID, "allowed.sha256")
 }
 
+// ResolveOperationCommands rewrites operation commands to absolute paths when
+// they can be discovered on the current host. This avoids daemon PATH drift
+// between interactive shells and background launch contexts.
+func ResolveOperationCommands(config *ProjectConfig, lookupPath func(string) (string, error)) {
+	if config == nil || lookupPath == nil {
+		return
+	}
+
+	for _, op := range config.Operations {
+		if op == nil || op.Command == "" || filepath.IsAbs(op.Command) {
+			continue
+		}
+
+		if resolved, err := lookupPath(op.Command); err == nil && resolved != "" {
+			op.Command = resolved
+		}
+	}
+}
 
 // LoadProjectConfig loads and validates a project configuration
 func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
@@ -368,6 +387,14 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 	if err := json.Unmarshal([]byte(content), &config); err != nil {
 		return fmt.Errorf("invalid config after template expansion: %w", err)
 	}
+
+	ResolveOperationCommands(&config, exec.LookPath)
+
+	updatedContent, err := json.MarshalIndent(&config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to re-encode project config: %w", err)
+	}
+	content = string(updatedContent) + "\n"
 
 	// Create project directory
 	projectID := NormalizeProjectID(opts.Repo)

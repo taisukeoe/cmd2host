@@ -3,6 +3,7 @@
   "repo_path": "/path/to/repo",
   "allowed_operations": [
     "git_fetch",
+    "git_push",
     "gh_pr_view",
     "gh_pr_list",
     "gh_pr_review_comments",
@@ -10,11 +11,12 @@
     "gh_pr_comment",
     "gh_pr_review_comment_reply",
     "gh_issue_view",
-    "gh_issue_list",
-    "gh_issue_create"
+    "gh_issue_list"
   ],
   "constraints": {
-    "remote_hosts_allow": ["github.com"]
+    "branch_allow": ["^ai/"],
+    "remote_hosts_allow": ["github.com"],
+    "path_deny": [".git/hooks/**", ".git/config"]
   },
   "operations": {
     "git_fetch": {
@@ -22,6 +24,14 @@
       "args_template": ["fetch", "origin"],
       "params": {},
       "description": "Fetch from origin remote"
+    },
+    "git_push": {
+      "command": "git",
+      "args_template": ["push", "--no-verify", "origin", "{branch}"],
+      "params": {
+        "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
+      },
+      "description": "Push branch to origin (strict sanitization applied)"
     },
     "gh_pr_view": {
       "command": "gh",
@@ -89,13 +99,6 @@
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--assignee"],
       "description": "List issues"
-    },
-    "gh_issue_create": {
-      "command": "gh",
-      "args_template": ["issue", "create", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--title", "--body", "--label", "--assignee"],
-      "description": "Create an issue"
     }
   }
 }

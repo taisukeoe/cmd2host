@@ -5,8 +5,11 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
+
+var inlinePlaceholderPattern = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 
 // Operation defines a predefined command template
 type Operation struct {
@@ -42,11 +45,11 @@ type ParamValue interface{}
 
 // OperationRequest represents a request to execute an operation
 type OperationRequest struct {
-	RequestID string                 `json:"request_id,omitempty"`
-	Operation string                 `json:"operation"`
-	Params    map[string]ParamValue  `json:"params"`
-	Flags     []string               `json:"flags,omitempty"`
-	Token     string                 `json:"token"`
+	RequestID string                `json:"request_id,omitempty"`
+	Operation string                `json:"operation"`
+	Params    map[string]ParamValue `json:"params"`
+	Flags     []string              `json:"flags,omitempty"`
+	Token     string                `json:"token"`
 }
 
 // OperationResponse represents the response from an operation
@@ -249,6 +252,12 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 				return nil, fmt.Errorf("param %s: %w", paramName, err)
 			}
 			args = append(args, expanded...)
+		} else if strings.Contains(tmpl, "{") && strings.Contains(tmpl, "}") {
+			expanded, err := interpolateTemplateArg(tmpl, params, profileEnv, op.Params)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, expanded)
 		} else {
 			// Literal argument
 			args = append(args, tmpl)
@@ -259,6 +268,59 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 	args = append(args, flags...)
 
 	return args, nil
+}
+
+func interpolateTemplateArg(tmpl string, params map[string]ParamValue, profileEnv map[string]string, schemas map[string]ParamSchema) (string, error) {
+	var interpolationErr error
+
+	result := inlinePlaceholderPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
+		if interpolationErr != nil {
+			return ""
+		}
+
+		paramName := match[1 : len(match)-1]
+
+		if profileEnv != nil {
+			if val, ok := profileEnv[paramName]; ok {
+				return val
+			}
+		}
+
+		value, exists := params[paramName]
+		if !exists {
+			if schema, hasSchema := schemas[paramName]; hasSchema && schema.Optional {
+				return ""
+			}
+			interpolationErr = fmt.Errorf("missing required parameter: %s", paramName)
+			return ""
+		}
+
+		rendered, err := stringifyInlineParamValue(value)
+		if err != nil {
+			interpolationErr = fmt.Errorf("param %s: %w", paramName, err)
+			return ""
+		}
+		return rendered
+	})
+
+	if interpolationErr != nil {
+		return "", interpolationErr
+	}
+
+	return result, nil
+}
+
+func stringifyInlineParamValue(value ParamValue) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case int:
+		return strconv.Itoa(v), nil
+	case float64:
+		return strconv.Itoa(int(v)), nil
+	default:
+		return "", fmt.Errorf("inline placeholder requires scalar value, got %T", value)
+	}
 }
 
 // expandParamValue converts a parameter value to string arguments

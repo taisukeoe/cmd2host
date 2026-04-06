@@ -339,6 +339,37 @@ func TestOperation_BuildArgs_WithRepoInjectionAndFlags(t *testing.T) {
 	}
 }
 
+func TestOperation_BuildArgs_WithInlinePlaceholders(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"api", "repos/{repo}/pulls/{number}/comments"},
+		Params: map[string]ParamSchema{
+			"number": {Type: "integer", Min: intPtr(1)},
+		},
+	}
+
+	params := map[string]ParamValue{
+		"number": float64(82),
+	}
+	profileEnv := map[string]string{
+		"repo": "taisukeoe/dotfiles",
+	}
+
+	args, err := op.BuildArgs(params, []string{"--paginate"}, profileEnv)
+	if err != nil {
+		t.Fatalf("BuildArgs failed: %v", err)
+	}
+
+	expected := []string{"api", "repos/taisukeoe/dotfiles/pulls/82/comments", "--paginate"}
+	if len(args) != len(expected) {
+		t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(expected), args)
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
+}
+
 func TestOperation_ValidateArrayParams(t *testing.T) {
 	op := &Operation{
 		Params: map[string]ParamSchema{

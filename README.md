@@ -43,14 +43,20 @@ cmd2host config init --repo=owner/repo --template=readonly --repo-path=/path/to/
 
 # Or create and allow in one step
 cmd2host config init --repo=owner/repo --template=github_write --allow
+
+# Or create a combined git + GitHub write config
+cmd2host config init --repo=owner/repo --template=git_github_write --allow
 ```
 
 Available templates:
-- `readonly` - Read-only operations (git fetch, gh pr/issue view/list)
-- `github_write` - + PR/Issue creation
+- `readonly` - Read-only operations (git fetch, gh pr/issue view/list, review comments)
+- `github_write` - + PR/Issue creation and PR comment/reply operations
 - `git_write` - + git push (with strict constraints)
+- `git_github_write` - + git push, PR creation, and PR comment/reply operations
 
 Or create manually at `~/.cmd2host/projects/<owner_repo>/config.json` (see Templates section below).
+
+Note: `config init` resolves operation commands like `gh` and `git` to absolute host paths when available. This avoids daemon launch environments with a narrower `PATH` from failing to find Homebrew-installed CLIs.
 
 ### 3. Allow the configuration
 
@@ -307,9 +313,10 @@ cmd2host templates show <name>  # Show template content
 
 | Template | Description | Operations |
 |----------|-------------|------------|
-| `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_issue_view, gh_issue_list |
-| `github_write` | + GitHub write | readonly + gh_pr_create, gh_issue_create |
+| `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_pr_review_comments, gh_issue_view, gh_issue_list |
+| `github_write` | + GitHub write | readonly + gh_pr_create, gh_pr_comment, gh_pr_review_comment_reply, gh_issue_create |
 | `git_write` | + Git push | readonly + git_push (requires branch_allow constraint) |
+| `git_github_write` | Git + GitHub write | git_write + gh_pr_create, gh_pr_comment, gh_pr_review_comment_reply |
 
 ## MCP Server Integration
 
@@ -335,6 +342,9 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 
 - `gh_pr_view` - View a pull request by number
 - `gh_pr_list` - List pull requests with filters
+- `gh_pr_review_comments` - List inline pull request review comments
+- `gh_pr_comment` - Add a pull request summary comment
+- `gh_pr_review_comment_reply` - Reply to an inline pull request review comment
 - `gh_issue_create` - Create a new issue
 - `git_fetch` - Fetch from remote
 - `git_push` - Push to remote (requires branch_allow constraint)
