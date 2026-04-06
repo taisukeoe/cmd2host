@@ -397,12 +397,12 @@ Use separate tags when releasing:
 
 ```bash
 # Binary + MCP release
-git tag cmd2host-v0.1.3
-git push origin cmd2host-v0.1.3
+git tag binary-v0.1.3
+git push origin binary-v0.1.3
 
 # DevContainer feature publish
-git tag feature-v1.2.2
-git push origin feature-v1.2.2
+git tag devcontainer-feature-v1.2.2
+git push origin devcontainer-feature-v1.2.2
 ```
 
 ## License

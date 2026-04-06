@@ -3,7 +3,7 @@ name: Release Binaries
 on:
   push:
     tags:
-      - 'cmd2host-v*'
+      - 'binary-v*'
 
 permissions:
   contents: write
@@ -24,7 +24,7 @@ jobs:
 
       - name: Derive binary version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#cmd2host-v}"
+          VERSION="${GITHUB_REF_NAME#binary-v}"
           if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
             echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
             exit 1
@@ -69,7 +69,7 @@ jobs:
 
       - name: Derive binary version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#cmd2host-v}"
+          VERSION="${GITHUB_REF_NAME#binary-v}"
           if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
             echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
             exit 1
@@ -101,7 +101,7 @@ jobs:
     steps:
       - name: Derive binary version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#cmd2host-v}"
+          VERSION="${GITHUB_REF_NAME#binary-v}"
           if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
             echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
             exit 1

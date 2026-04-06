@@ -3,7 +3,7 @@ name: Publish DevContainer Features
 on:
   push:
     tags:
-      - 'feature-v*'
+      - 'devcontainer-feature-v*'
   workflow_dispatch:
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
       - name: Validate feature tag matches feature version
         if: github.event_name == 'push'
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#feature-v}"
+          TAG_VERSION="${GITHUB_REF_NAME#devcontainer-feature-v}"
           if [ "$TAG_VERSION" = "$GITHUB_REF_NAME" ]; then
             echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
             exit 1
