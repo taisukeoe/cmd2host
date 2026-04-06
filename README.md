@@ -387,6 +387,24 @@ just test-e2e-quick          # Run E2E tests without rebuilding
 just test-all                # Run all tests (unit + host scenario)
 ```
 
+## Release Versioning
+
+Version lines are intentionally separate:
+- `cmd2host` binary and `cmd2host-mcp` use their own semver track
+- The DevContainer feature follows the feature ecosystem convention and stays on `1.x+`
+
+Use separate tags when releasing:
+
+```bash
+# Binary + MCP release
+git tag binary-v0.1.3
+git push origin binary-v0.1.3
+
+# DevContainer feature publish
+git tag devcontainer-feature-v1.2.2
+git push origin devcontainer-feature-v1.2.2
+```
+
 ## License
 
 Apache 2.0 - See [LICENSE](LICENSE)

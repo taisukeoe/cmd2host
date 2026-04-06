@@ -231,12 +231,21 @@ Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP clien
 
 ## Releasing
 
-Tag a version to trigger GitHub Actions release:
+Version lines are intentionally separate:
+- `cmd2host` binary and `cmd2host-mcp` stay on their own semver track
+- DevContainer feature follows the feature ecosystem convention and uses `1.x+`
+
+Use separate tags to trigger releases:
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+# Binary + MCP release
+git tag binary-v0.1.3
+git push origin binary-v0.1.3
+
+# DevContainer feature publish
+git tag devcontainer-feature-v1.2.2
+git push origin devcontainer-feature-v1.2.2
 ```
 
-This builds binaries for macOS:
+The binary release builds:
 - darwin-amd64 (Intel Mac)
 - darwin-arm64 (Apple Silicon)

@@ -3,7 +3,7 @@ name: Release Binaries
 on:
   push:
     tags:
-      - 'v*'
+      - 'binary-v*'
 
 permissions:
   contents: write
@@ -22,6 +22,19 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
 
+      - name: Derive binary version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#binary-v}"
+          if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver in tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
@@ -33,7 +46,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           cd host
-          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o cmd2host-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
@@ -58,6 +71,19 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
 
+      - name: Derive binary version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#binary-v}"
+          if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver in tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # ratchet:actions/setup-go@v5
         with:
@@ -69,7 +95,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           cd mcp-server
-          go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # ratchet:actions/upload-artifact@v4
@@ -81,6 +107,19 @@ jobs:
     needs: [build-host, build-mcp]
     runs-on: ubuntu-slim
     steps:
+      - name: Derive binary version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#binary-v}"
+          if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver in tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Download all artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
         with:
@@ -89,5 +128,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # ratchet:softprops/action-gh-release@v1
         with:
+          name: cmd2host v${{ env.VERSION }}
           files: artifacts/*/cmd2host-*
           generate_release_notes: true
