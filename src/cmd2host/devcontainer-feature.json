@@ -1,6 +1,6 @@
 {
   "id": "cmd2host",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "name": "Host Command Proxy",
   "description": "Proxy commands (gh, etc.) from container to host machine. Requires cmd2host daemon on host.",
   "documentationURL": "https://github.com/taisukeoe/cmd2host",
