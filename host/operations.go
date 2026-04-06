@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -317,6 +318,9 @@ func stringifyInlineParamValue(value ParamValue) (string, error) {
 	case int:
 		return strconv.Itoa(v), nil
 	case float64:
+		if math.Trunc(v) != v {
+			return "", fmt.Errorf("inline placeholder requires an integer-compatible number, got %v", v)
+		}
 		return strconv.Itoa(int(v)), nil
 	default:
 		return "", fmt.Errorf("inline placeholder requires scalar value, got %T", value)

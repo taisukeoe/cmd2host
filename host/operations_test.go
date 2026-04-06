@@ -370,6 +370,27 @@ func TestOperation_BuildArgs_WithInlinePlaceholders(t *testing.T) {
 	}
 }
 
+func TestOperation_BuildArgs_WithInlinePlaceholders_RejectsNonIntegralFloat(t *testing.T) {
+	op := &Operation{
+		ArgsTemplate: []string{"api", "repos/{repo}/pulls/{number}/comments"},
+		Params: map[string]ParamSchema{
+			"number": {Type: "integer", Min: intPtr(1)},
+		},
+	}
+
+	params := map[string]ParamValue{
+		"number": float64(1.5),
+	}
+	profileEnv := map[string]string{
+		"repo": "taisukeoe/dotfiles",
+	}
+
+	_, err := op.BuildArgs(params, nil, profileEnv)
+	if err == nil {
+		t.Fatal("BuildArgs should fail for non-integral float placeholder values")
+	}
+}
+
 func TestOperation_ValidateArrayParams(t *testing.T) {
 	op := &Operation{
 		Params: map[string]ParamSchema{
