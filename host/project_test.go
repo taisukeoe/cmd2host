@@ -306,7 +306,6 @@ func TestConfigAllow(t *testing.T) {
 	}
 }
 
-
 func TestMatchDoubleStarGlob(t *testing.T) {
 	tests := []struct {
 		pattern string
@@ -393,6 +392,33 @@ func TestCreateProjectConfig(t *testing.T) {
 		// github_write should include gh_pr_create
 		if !config.HasOperation("gh_pr_create") {
 			t.Error("github_write template should include gh_pr_create operation")
+		}
+	})
+
+	t.Run("git_github_write template includes push and pr create", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:     "ship/repo",
+			Template: "git_github_write",
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig failed: %v", err)
+		}
+
+		config, err := LoadProjectConfig("ship_repo")
+		if err != nil {
+			t.Fatalf("Failed to load created config: %v", err)
+		}
+		if !config.HasOperation("git_push") {
+			t.Error("git_github_write template should include git_push operation")
+		}
+		if !config.HasOperation("gh_pr_create") {
+			t.Error("git_github_write template should include gh_pr_create operation")
+		}
+		if !config.HasOperation("gh_pr_comment") {
+			t.Error("git_github_write template should include gh_pr_comment operation")
+		}
+		if !config.HasOperation("gh_pr_review_comment_reply") {
+			t.Error("git_github_write template should include gh_pr_review_comment_reply operation")
 		}
 	})
 
@@ -491,4 +517,39 @@ func TestCreateProjectConfig(t *testing.T) {
 			t.Error("Expected error for unknown template")
 		}
 	})
+}
+
+func TestResolveOperationCommands(t *testing.T) {
+	config := &ProjectConfig{
+		Operations: map[string]*Operation{
+			"git_fetch":  {Command: "git"},
+			"gh_pr_view": {Command: "gh"},
+			"custom":     {Command: "/already/absolute/tool"},
+			"missing":    {Command: "missing"},
+		},
+	}
+
+	ResolveOperationCommands(config, func(name string) (string, error) {
+		switch name {
+		case "git":
+			return "/usr/bin/git", nil
+		case "gh":
+			return "/opt/homebrew/bin/gh", nil
+		default:
+			return "", os.ErrNotExist
+		}
+	})
+
+	if got := config.Operations["git_fetch"].Command; got != "/usr/bin/git" {
+		t.Fatalf("git command = %q, want %q", got, "/usr/bin/git")
+	}
+	if got := config.Operations["gh_pr_view"].Command; got != "/opt/homebrew/bin/gh" {
+		t.Fatalf("gh command = %q, want %q", got, "/opt/homebrew/bin/gh")
+	}
+	if got := config.Operations["custom"].Command; got != "/already/absolute/tool" {
+		t.Fatalf("absolute command unexpectedly changed: %q", got)
+	}
+	if got := config.Operations["missing"].Command; got != "missing" {
+		t.Fatalf("missing command should remain unchanged, got %q", got)
+	}
 }

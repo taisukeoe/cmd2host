@@ -6,6 +6,7 @@
     "git_push",
     "gh_pr_view",
     "gh_pr_list",
+    "gh_pr_review_comments",
     "gh_issue_view",
     "gh_issue_list"
   ],
@@ -44,6 +45,15 @@
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--base", "--head"],
       "description": "List pull requests"
+    },
+    "gh_pr_review_comments": {
+      "command": "gh",
+      "args_template": ["api", "repos/{repo}/pulls/{number}/comments"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--paginate", "--jq"],
+      "description": "List inline pull request review comments"
     },
     "gh_issue_view": {
       "command": "gh",

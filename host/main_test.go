@@ -104,7 +104,7 @@ func TestTemplatesCLI(t *testing.T) {
 		}
 
 		outputStr := string(output)
-		expectedTemplates := []string{"readonly", "github_write", "git_write"}
+		expectedTemplates := []string{"readonly", "github_write", "git_write", "git_github_write"}
 		for _, tmpl := range expectedTemplates {
 			if !strings.Contains(outputStr, tmpl) {
 				t.Errorf("templates output missing %q, got: %s", tmpl, outputStr)
