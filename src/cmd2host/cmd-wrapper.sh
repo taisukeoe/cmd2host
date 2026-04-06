@@ -23,4 +23,6 @@ Attempted command: $CMD_NAME $ARGS
 For more information, see: https://github.com/taisukeoe/cmd2host
 EOF
 
-exit 1
+# Exit 0: the wrapper's job is to print MCP guidance (stderr), which always succeeds.
+# Non-zero would kill caller scripts under set -euo pipefail.
+exit 0

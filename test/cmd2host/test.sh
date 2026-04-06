@@ -32,18 +32,18 @@ echo "PASS: cmd2host feature installed correctly"
 echo "  HOST_CMD_PROXY_HOST=$HOST_CMD_PROXY_HOST"
 echo "  HOST_CMD_PROXY_PORT=$HOST_CMD_PROXY_PORT"
 
-# Test that wrapper returns error when executed
-if gh --version 2>&1 | grep -q "cannot be executed inside this container"; then
+# Test that wrapper returns error when executed (use absolute path to avoid testing wrong binary)
+if /usr/local/bin/gh --version 2>&1 | grep -q "cannot be executed inside this container"; then
     echo "PASS: gh wrapper returns expected error message"
 else
     echo "FAIL: gh wrapper did not return expected error message"
     exit 1
 fi
 
-# Test that wrapper exits with non-zero code
-if gh --version > /dev/null 2>&1; then
-    echo "FAIL: gh wrapper should exit with non-zero code"
-    exit 1
+# Test that wrapper exits with zero code (caller-friendly under set -euo pipefail)
+if /usr/local/bin/gh --version > /dev/null 2>&1; then
+    echo "PASS: gh wrapper exits with zero code"
 else
-    echo "PASS: gh wrapper exits with non-zero code"
+    echo "FAIL: gh wrapper should exit with zero code"
+    exit 1
 fi
