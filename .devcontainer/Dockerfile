@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ubuntu:24.04
 
 # Install dependencies (use cache mount for apt to speed up rebuilds)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

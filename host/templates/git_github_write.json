@@ -6,15 +6,18 @@
     "git_push",
     "gh_pr_view",
     "gh_pr_list",
+    "gh_pr_checks",
     "gh_pr_review_comments",
     "gh_pr_create",
+    "gh_pr_edit",
     "gh_pr_comment",
     "gh_pr_review_comment_reply",
     "gh_issue_view",
-    "gh_issue_list"
+    "gh_issue_list",
+    "gh_run_view"
   ],
   "constraints": {
-    "branch_allow": ["^ai/"],
+    "branch_allow": ["^ai/", "^feat/", "^fix/"],
     "remote_hosts_allow": ["github.com"],
     "path_deny": [".git/hooks/**", ".git/config"]
   },
@@ -49,6 +52,15 @@
       "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--base", "--head"],
       "description": "List pull requests"
     },
+    "gh_pr_checks": {
+      "command": "gh",
+      "args_template": ["pr", "checks", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--required"],
+      "description": "Show CI check status for a pull request"
+    },
     "gh_pr_review_comments": {
       "command": "gh",
       "args_template": ["api", "repos/{repo}/pulls/{number}/comments"],
@@ -64,6 +76,15 @@
       "params": {},
       "allowed_flags": ["--title", "--body", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
       "description": "Create a pull request"
+    },
+    "gh_pr_edit": {
+      "command": "gh",
+      "args_template": ["pr", "edit", "{number}", "-R", "{repo}"],
+      "params": {
+        "number": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--title", "--body", "--add-label", "--remove-label", "--add-assignee", "--remove-assignee"],
+      "description": "Edit a pull request (title, body, labels, assignees)"
     },
     "gh_pr_comment": {
       "command": "gh",
@@ -99,6 +120,15 @@
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit", "--author", "--label", "--assignee"],
       "description": "List issues"
+    },
+    "gh_run_view": {
+      "command": "gh",
+      "args_template": ["run", "view", "{run_id}", "-R", "{repo}"],
+      "params": {
+        "run_id": {"type": "integer", "min": 1}
+      },
+      "allowed_flags": ["--json", "--log", "--log-failed", "--exit-status", "--job"],
+      "description": "View a workflow run (supports --log / --log-failed)"
     }
   }
 }
