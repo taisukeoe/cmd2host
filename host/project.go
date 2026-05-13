@@ -42,13 +42,18 @@ func NormalizeProjectID(repo string) string {
 	return strings.ReplaceAll(repo, "/", "_")
 }
 
-// ProjectsDir returns the path to the projects directory
+// ProjectsDir returns the path to the projects directory.
+// Honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir.
+//
+// Preserves the pre-existing contract: returns "" when the base dir cannot
+// be resolved, so callers continue to handle the missing-dir case via
+// downstream os.Stat / os.ReadDir.
 func ProjectsDir() string {
-	home, err := os.UserHomeDir()
+	base, err := cmd2hostConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".cmd2host", "projects")
+	return filepath.Join(base, "projects")
 }
 
 // ProjectConfigPath returns the path to a project's config.json

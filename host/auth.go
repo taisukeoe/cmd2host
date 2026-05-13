@@ -1,5 +1,6 @@
 // auth.go provides session token authentication for cmd2host.
-// Tokens are BLAKE3 hashed and stored as JSON files in ~/.cmd2host/tokens/.
+// Tokens are BLAKE3 hashed and stored as JSON files under the cmd2host
+// base dir's tokens/ subdirectory (see cmd2hostConfigDir in config.go).
 // Token validity is determined by file mtime (24-hour TTL).
 package main
 
@@ -31,9 +32,11 @@ type TokenData struct {
 }
 
 const (
-	tokenTTL          = 24 * time.Hour
-	cleanupBuffer     = 5 * time.Minute // Extra time before cleanup to prevent race conditions
-	tokenDir          = ".cmd2host/tokens"
+	tokenTTL      = 24 * time.Hour
+	cleanupBuffer = 5 * time.Minute // Extra time before cleanup to prevent race conditions
+	// tokenDirName is the tokens subdirectory name relative to cmd2hostConfigDir.
+	// Joined onto the resolved base dir at runtime.
+	tokenDirName = "tokens"
 )
 
 // TokenStore manages session tokens
@@ -41,14 +44,16 @@ type TokenStore struct {
 	dir string
 }
 
-// NewTokenStore creates a new TokenStore
+// NewTokenStore creates a new TokenStore.
+// Honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir, while preserving the
+// pre-existing diagnostic when the underlying home-dir lookup fails.
 func NewTokenStore() (*TokenStore, error) {
-	homeDir, err := os.UserHomeDir()
+	base, err := cmd2hostConfigDir()
 	if err != nil {
-		return nil, fmt.Errorf("cannot determine home directory: %w", err)
+		return nil, fmt.Errorf("cannot determine cmd2host config directory: %w", err)
 	}
 	return &TokenStore{
-		dir: filepath.Join(homeDir, tokenDir),
+		dir: filepath.Join(base, tokenDirName),
 	}, nil
 }
 

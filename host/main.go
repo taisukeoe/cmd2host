@@ -915,13 +915,23 @@ func handleTemplatesCommand() {
 	}
 }
 
+// resolveDaemonConfigPath returns the daemon.json path to load on startup.
+//
+// Priority (most specific first):
+//   1. DAEMON_CONFIG (single-file path override; used by tests and ad-hoc runs)
+//   2. CMD2HOST_CONFIG_DIR/daemon.json (per-session base dir override; via
+//      DefaultDaemonConfigPath → cmd2hostConfigDir)
+//   3. $HOME/.cmd2host/daemon.json (legacy default)
+func resolveDaemonConfigPath() string {
+	if path := os.Getenv("DAEMON_CONFIG"); path != "" {
+		return path
+	}
+	return DefaultDaemonConfigPath()
+}
+
 // runDaemon starts the daemon server
 func runDaemon() {
-	// Allow overriding config path via environment variable (for testing)
-	configPath := os.Getenv("DAEMON_CONFIG")
-	if configPath == "" {
-		configPath = DefaultDaemonConfigPath()
-	}
+	configPath := resolveDaemonConfigPath()
 
 	daemonConfig, err := LoadDaemonConfig(configPath)
 	if err != nil {

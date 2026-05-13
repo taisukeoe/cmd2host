@@ -183,6 +183,7 @@ func TestLoadProjectConfig(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
 
 	// Create project directory
 	projectID := "owner_repo"
@@ -253,6 +254,7 @@ func TestConfigAllow(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
 
 	// Create project directory
 	projectID := "owner_repo"
@@ -344,6 +346,7 @@ func TestCreateProjectConfig(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
 
 	t.Run("successful creation with default template", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
@@ -551,5 +554,32 @@ func TestResolveOperationCommands(t *testing.T) {
 	}
 	if got := config.Operations["missing"].Command; got != "missing" {
 		t.Fatalf("missing command should remain unchanged, got %q", got)
+	}
+}
+
+// TestProjectsDirWithEnv verifies that ProjectsDir routes under
+// CMD2HOST_CONFIG_DIR when the env is non-empty.
+func TestProjectsDirWithEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", tmpDir)
+
+	want := filepath.Join(tmpDir, "projects")
+	got := ProjectsDir()
+	if got != want {
+		t.Errorf("ProjectsDir() = %q, want %q", got, want)
+	}
+}
+
+// TestProjectsDirWithoutEnv verifies the legacy $HOME/.cmd2host/projects
+// default when CMD2HOST_CONFIG_DIR is empty.
+func TestProjectsDirWithoutEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "")
+
+	want := filepath.Join(tmpHome, ".cmd2host", "projects")
+	got := ProjectsDir()
+	if got != want {
+		t.Errorf("ProjectsDir() = %q, want %q", got, want)
 	}
 }
