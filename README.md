@@ -226,7 +226,7 @@ cmd2host uses session tokens to authenticate requests from containers:
 
 Token flow:
 1. `initializeCommand` generates a random token on the host
-2. Token hash is stored in `~/.cmd2host/tokens/` with repo binding
+2. Token hash is stored under the cmd2host base dir's `tokens/` (`$CMD2HOST_CONFIG_DIR/tokens/` when set, otherwise `~/.cmd2host/tokens/`) with repo binding
 3. Raw token is mounted into container at `/run/cmd2host-token`
 4. Container reads token from file and includes it in requests
 
