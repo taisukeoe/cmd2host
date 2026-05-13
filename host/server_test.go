@@ -42,6 +42,7 @@ func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
 
 	// Create project directory and config
 	projectID := "owner_repo"
@@ -206,6 +207,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
 
 	// Create project directory with MISMATCHED repo in config
 	projectID := "owner_repo"

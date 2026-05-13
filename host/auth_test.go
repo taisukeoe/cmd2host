@@ -300,3 +300,36 @@ func TestTokenStoreIsValidMalformedTokens(t *testing.T) {
 		}
 	}
 }
+
+// TestNewTokenStoreWithEnv verifies that NewTokenStore routes its dir under
+// CMD2HOST_CONFIG_DIR/tokens when the env is non-empty.
+func TestNewTokenStoreWithEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", tmpDir)
+
+	ts, err := NewTokenStore()
+	if err != nil {
+		t.Fatalf("NewTokenStore() failed: %v", err)
+	}
+	want := filepath.Join(tmpDir, tokenDirName)
+	if ts.dir != want {
+		t.Errorf("TokenStore.dir = %q, want %q", ts.dir, want)
+	}
+}
+
+// TestNewTokenStoreWithoutEnv verifies the legacy $HOME/.cmd2host/tokens
+// default when CMD2HOST_CONFIG_DIR is empty.
+func TestNewTokenStoreWithoutEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "")
+
+	ts, err := NewTokenStore()
+	if err != nil {
+		t.Fatalf("NewTokenStore() failed: %v", err)
+	}
+	want := filepath.Join(tmpHome, ".cmd2host", tokenDirName)
+	if ts.dir != want {
+		t.Errorf("TokenStore.dir = %q, want %q", ts.dir, want)
+	}
+}

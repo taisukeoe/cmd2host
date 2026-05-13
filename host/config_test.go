@@ -98,7 +98,13 @@ func TestLoadDaemonConfigMissing(t *testing.T) {
 	}
 }
 
-func TestLoadDaemonConfigUnixSocketDefaults(t *testing.T) {
+// TestLoadDaemonConfigUnixSocketDefaultsWithoutEnv verifies the legacy
+// $HOME/.cmd2host/cmd2host.sock default when CMD2HOST_CONFIG_DIR is empty.
+func TestLoadDaemonConfigUnixSocketDefaultsWithoutEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "")
+
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "daemon.json")
 
@@ -119,14 +125,37 @@ func TestLoadDaemonConfigUnixSocketDefaults(t *testing.T) {
 		t.Errorf("Default ListenMode = %q, want %q", config.ListenMode, "both")
 	}
 
-	home, _ := os.UserHomeDir()
-	expectedSocketPath := filepath.Join(home, ".cmd2host", "cmd2host.sock")
+	expectedSocketPath := filepath.Join(tmpHome, ".cmd2host", "cmd2host.sock")
 	if config.SocketPath != expectedSocketPath {
 		t.Errorf("Default SocketPath = %q, want %q", config.SocketPath, expectedSocketPath)
 	}
 
 	if config.SocketMode != 0660 {
 		t.Errorf("Default SocketMode = %o, want %o", config.SocketMode, 0660)
+	}
+}
+
+// TestLoadDaemonConfigUnixSocketDefaultsWithEnv verifies that the SocketPath
+// default relocates to $CMD2HOST_CONFIG_DIR/cmd2host.sock when the env is set.
+func TestLoadDaemonConfigUnixSocketDefaultsWithEnv(t *testing.T) {
+	envDir := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", envDir)
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "daemon.json")
+	configContent := `{}`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+
+	config, err := LoadDaemonConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig failed: %v", err)
+	}
+
+	expectedSocketPath := filepath.Join(envDir, "cmd2host.sock")
+	if config.SocketPath != expectedSocketPath {
+		t.Errorf("Default SocketPath = %q, want %q", config.SocketPath, expectedSocketPath)
 	}
 }
 
@@ -158,5 +187,114 @@ func TestLoadDaemonConfigUnixSocketExplicit(t *testing.T) {
 	// 432 decimal = 0660 octal
 	if config.SocketMode != 432 {
 		t.Errorf("SocketMode = %d, want %d", config.SocketMode, 432)
+	}
+}
+
+// TestCmd2hostConfigDirWithEnv verifies that the helper honors
+// CMD2HOST_CONFIG_DIR when the env is non-empty.
+func TestCmd2hostConfigDirWithEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", tmpDir)
+
+	got, err := cmd2hostConfigDir()
+	if err != nil {
+		t.Fatalf("cmd2hostConfigDir() returned unexpected error: %v", err)
+	}
+	if got != tmpDir {
+		t.Errorf("cmd2hostConfigDir() = %q, want %q", got, tmpDir)
+	}
+}
+
+// TestCmd2hostConfigDirWithoutEnv verifies that the helper falls back to
+// $HOME/.cmd2host when CMD2HOST_CONFIG_DIR is empty.
+func TestCmd2hostConfigDirWithoutEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "")
+
+	want := filepath.Join(tmpHome, ".cmd2host")
+	got, err := cmd2hostConfigDir()
+	if err != nil {
+		t.Fatalf("cmd2hostConfigDir() returned unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("cmd2hostConfigDir() = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDaemonConfigPathWithEnv verifies that DefaultDaemonConfigPath
+// routes daemon.json under CMD2HOST_CONFIG_DIR when set.
+func TestDefaultDaemonConfigPathWithEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", tmpDir)
+
+	want := filepath.Join(tmpDir, "daemon.json")
+	got := DefaultDaemonConfigPath()
+	if got != want {
+		t.Errorf("DefaultDaemonConfigPath() = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDaemonConfigPathWithoutEnv verifies the legacy
+// $HOME/.cmd2host/daemon.json default when CMD2HOST_CONFIG_DIR is empty.
+func TestDefaultDaemonConfigPathWithoutEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("CMD2HOST_CONFIG_DIR", "")
+
+	want := filepath.Join(tmpHome, ".cmd2host", "daemon.json")
+	got := DefaultDaemonConfigPath()
+	if got != want {
+		t.Errorf("DefaultDaemonConfigPath() = %q, want %q", got, want)
+	}
+}
+
+// TestResolveDaemonConfigPathPriority verifies the DAEMON_CONFIG > CMD2HOST_CONFIG_DIR
+// > home fallback priority enforced in main.go's runDaemon.
+//
+// Priority axes:
+//   - DAEMON_CONFIG (specific file override) beats CMD2HOST_CONFIG_DIR
+//   - CMD2HOST_CONFIG_DIR (dir override) beats $HOME/.cmd2host
+//   - Both unset → $HOME/.cmd2host/daemon.json
+func TestResolveDaemonConfigPathPriority(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	tests := []struct {
+		name         string
+		daemonConfig string
+		configDir    string
+		want         func() string
+	}{
+		{
+			name:         "DAEMON_CONFIG specific override wins over CMD2HOST_CONFIG_DIR",
+			daemonConfig: "/explicit/daemon.json",
+			configDir:    "/from/env",
+			want:         func() string { return "/explicit/daemon.json" },
+		},
+		{
+			name:         "CMD2HOST_CONFIG_DIR routes daemon.json when DAEMON_CONFIG empty",
+			daemonConfig: "",
+			configDir:    "/from/env",
+			want:         func() string { return filepath.Join("/from/env", "daemon.json") },
+		},
+		{
+			name:         "both env empty falls back to home default",
+			daemonConfig: "",
+			configDir:    "",
+			want:         func() string { return filepath.Join(tmpHome, ".cmd2host", "daemon.json") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", tmpHome)
+			t.Setenv("DAEMON_CONFIG", tt.daemonConfig)
+			t.Setenv("CMD2HOST_CONFIG_DIR", tt.configDir)
+
+			got := resolveDaemonConfigPath()
+			if got != tt.want() {
+				t.Errorf("resolveDaemonConfigPath() = %q, want %q", got, tt.want())
+			}
+		})
 	}
 }

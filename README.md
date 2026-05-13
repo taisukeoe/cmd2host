@@ -211,6 +211,8 @@ For containers with `--network none`, use Unix socket instead of TCP:
 
 Or copy `src/cmd2host/mcp-unix.json` to `.devcontainer/mcp.json` for manual MCP client configuration.
 
+**Per-session isolation**: The mount above assumes the shared daemon at `~/.cmd2host/cmd2host.sock`. When a session wrapper starts its own daemon with `CMD2HOST_CONFIG_DIR`, the wrapper is responsible for arranging the bind mount to the matching per-session socket path (the daemon's effective `socket_path`, not the legacy default).
+
 ## Security
 
 ### Token Authentication
@@ -224,7 +226,7 @@ cmd2host uses session tokens to authenticate requests from containers:
 
 Token flow:
 1. `initializeCommand` generates a random token on the host
-2. Token hash is stored in `~/.cmd2host/tokens/` with repo binding
+2. Token hash is stored under the cmd2host base dir's `tokens/` (`$CMD2HOST_CONFIG_DIR/tokens/` when set, otherwise `~/.cmd2host/tokens/`) with repo binding
 3. Raw token is mounted into container at `/run/cmd2host-token`
 4. Container reads token from file and includes it in requests
 
@@ -259,8 +261,9 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 ### Directory Structure
 
 ```
-~/.cmd2host/
+~/.cmd2host/                       # Or $CMD2HOST_CONFIG_DIR if set (see "Environment Variables")
 ├── daemon.json                    # Daemon settings (port, limits)
+├── tokens/                        # Session tokens (BLAKE3 hashed)
 └── projects/
     ├── owner_repo/
     │   ├── config.json            # Project configuration
@@ -268,6 +271,17 @@ Only operations listed in `allowed_operations` can be executed. All other operat
     └── another_owner_another_repo/
         └── config.json
 ```
+
+### Environment Variables
+
+| Variable | Scope | Effect |
+|---|---|---|
+| `CMD2HOST_CONFIG_DIR` | Base directory | Relocates `daemon.json`, `projects/`, `tokens/`, and the UDS socket under this directory. Useful for per-session isolation (e.g., wrappers that run multiple sessions against the same repo in parallel). Unset → falls back to `~/.cmd2host/`. |
+| `DAEMON_CONFIG` | Single file (legacy) | Overrides the `daemon.json` path specifically. Wins over `CMD2HOST_CONFIG_DIR` when both are set (most-specific override). |
+
+**Priority for `daemon.json`**: `DAEMON_CONFIG` (specific file) > `CMD2HOST_CONFIG_DIR/daemon.json` (base dir) > `~/.cmd2host/daemon.json` (legacy default).
+
+**Priority for Unix socket path**: `socket_path` in `daemon.json` (explicit override) > `$CMD2HOST_CONFIG_DIR/cmd2host.sock` (env-driven default) > `~/.cmd2host/cmd2host.sock` (legacy default).
 
 ### Config Schema
 

@@ -16,7 +16,7 @@ type DaemonConfig struct {
 	ListenPort    int    `json:"listen_port"`
 
 	// Unix socket settings (used when ListenMode is "unix" or "both")
-	SocketPath string `json:"socket_path,omitempty"` // Default: ~/.cmd2host/cmd2host.sock
+	SocketPath string `json:"socket_path,omitempty"` // Default: $CMD2HOST_CONFIG_DIR/cmd2host.sock, or ~/.cmd2host/cmd2host.sock when unset
 	SocketMode uint32 `json:"socket_mode,omitempty"` // Default: 0660
 
 	// Output limits
@@ -27,13 +27,43 @@ type DaemonConfig struct {
 	DefaultTimeout int `json:"default_timeout,omitempty"` // Default: 60 seconds
 }
 
-// DefaultDaemonConfigPath returns the default daemon config file path
-func DefaultDaemonConfigPath() string {
+// cmd2hostConfigDir returns the base directory for cmd2host's mutable state:
+// daemon config, per-project config, token store, and the default UDS socket.
+// daemon.json socket_path remains the explicit override; see README
+// "Environment Variables" for the full resolution priority.
+//
+// Resolution order:
+//   1. $CMD2HOST_CONFIG_DIR (per-session override)
+//   2. $HOME/.cmd2host (legacy default)
+//
+// Returns an error only when os.UserHomeDir fails AND no env override is set,
+// so NewTokenStore can preserve its original diagnostic. Callers that prefer
+// the legacy "empty path → treated as missing config" semantics collapse the
+// error themselves.
+func cmd2hostConfigDir() (string, error) {
+	if dir := os.Getenv("CMD2HOST_CONFIG_DIR"); dir != "" {
+		return dir, nil
+	}
 	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cmd2host"), nil
+}
+
+// DefaultDaemonConfigPath returns the default daemon config file path.
+// Honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir. The more specific
+// DAEMON_CONFIG env (single-file override) is handled by runDaemon in
+// main.go and takes precedence when set.
+//
+// Preserves the pre-existing contract: returns "" when the base dir cannot
+// be resolved, leaving callers to handle the missing-config case.
+func DefaultDaemonConfigPath() string {
+	base, err := cmd2hostConfigDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".cmd2host", "daemon.json")
+	return filepath.Join(base, "daemon.json")
 }
 
 // LoadDaemonConfig loads and validates the daemon configuration
@@ -77,8 +107,16 @@ func applyDaemonDefaults(config *DaemonConfig) {
 		config.ListenPort = 9876
 	}
 	if config.SocketPath == "" {
-		home, _ := os.UserHomeDir()
-		config.SocketPath = filepath.Join(home, ".cmd2host", "cmd2host.sock")
+		// SocketPath honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir; daemon.json
+		// socket_path stays the explicit override.
+		base, err := cmd2hostConfigDir()
+		if err != nil {
+			// Preserve legacy silent fallback: pre-refactor code used
+			// filepath.Join("", ".cmd2host", "cmd2host.sock") when HOME could
+			// not be resolved, yielding ".cmd2host/cmd2host.sock" relative.
+			base = ".cmd2host"
+		}
+		config.SocketPath = filepath.Join(base, "cmd2host.sock")
 	}
 	if config.SocketMode == 0 {
 		config.SocketMode = 0660 // Owner + group read/write
