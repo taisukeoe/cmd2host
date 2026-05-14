@@ -222,12 +222,56 @@ func (op *Operation) ValidateFlags(flags []string) error {
 	return nil
 }
 
-// BuildArgs builds the final argument list by expanding the template
+// BuildArgs builds the final argument list by expanding the template.
+//
+// Template language convention: standalone optional flag-value pairs.
+// When a whole-argument placeholder "{name}" references a parameter
+// declared with Optional: true and the parameter is not present in
+// params (and not injected via profileEnv), the placeholder is dropped.
+// If the immediately preceding template element is a flag literal
+// (starts with "-" and contains no placeholder syntax), it is dropped
+// together with the placeholder. This is what allows templates like
+// `["pr", "create", "-R", "{repo}", "--body", "{body}"]` to omit both
+// `--body` and `{body}` cleanly when body is not supplied.
+//
+// The convention applies only to whole-argument placeholders. Inline
+// placeholders embedded inside literal strings (e.g. `body={body}`)
+// are processed by interpolation and do not participate in paired-drop.
 func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, profileEnv map[string]string) ([]string, error) {
+	// First pass: identify template indices to skip for optional-placeholder paired-drop.
+	skipIdx := make(map[int]bool)
+	for i, tmpl := range op.ArgsTemplate {
+		if !isWholeArgPlaceholder(tmpl) {
+			continue
+		}
+		paramName := tmpl[1 : len(tmpl)-1]
+		// profileEnv-injected values always resolve, so they are never paired-dropped.
+		if profileEnv != nil {
+			if _, ok := profileEnv[paramName]; ok {
+				continue
+			}
+		}
+		if _, exists := params[paramName]; exists {
+			continue
+		}
+		schema, hasSchema := op.Params[paramName]
+		if !hasSchema || !schema.Optional {
+			continue
+		}
+		// Optional placeholder is missing: drop it, and the preceding flag literal if any.
+		skipIdx[i] = true
+		if i > 0 && isFlagLiteral(op.ArgsTemplate[i-1]) {
+			skipIdx[i-1] = true
+		}
+	}
+
 	var args []string
 
-	for _, tmpl := range op.ArgsTemplate {
-		if strings.HasPrefix(tmpl, "{") && strings.HasSuffix(tmpl, "}") {
+	for i, tmpl := range op.ArgsTemplate {
+		if skipIdx[i] {
+			continue
+		}
+		if isWholeArgPlaceholder(tmpl) {
 			// Template placeholder
 			paramName := tmpl[1 : len(tmpl)-1]
 
@@ -241,10 +285,9 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 
 			value, exists := params[paramName]
 			if !exists {
-				// Check if parameter is optional
-				if schema, hasSchema := op.Params[paramName]; hasSchema && schema.Optional {
-					continue // Skip optional parameter
-				}
+				// Optional placeholders with missing values are handled by the
+				// first-pass skipIdx above. Reaching here means the parameter
+				// is required.
 				return nil, fmt.Errorf("missing required parameter: %s", paramName)
 			}
 
@@ -269,6 +312,26 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 	args = append(args, flags...)
 
 	return args, nil
+}
+
+// isWholeArgPlaceholder reports whether the template element is a single
+// placeholder occupying the entire argument (e.g. "{body}"). Inline
+// templated args like "body={body}" are not whole-arg placeholders.
+func isWholeArgPlaceholder(tmpl string) bool {
+	return len(tmpl) > 2 && strings.HasPrefix(tmpl, "{") && strings.HasSuffix(tmpl, "}")
+}
+
+// isFlagLiteral reports whether the template element is a literal flag
+// argument (starts with "-", contains no placeholder syntax). Used by
+// the optional-placeholder paired-drop convention; see BuildArgs.
+func isFlagLiteral(tmpl string) bool {
+	if !strings.HasPrefix(tmpl, "-") {
+		return false
+	}
+	if strings.Contains(tmpl, "{") || strings.Contains(tmpl, "}") {
+		return false
+	}
+	return true
 }
 
 func interpolateTemplateArg(tmpl string, params map[string]ParamValue, profileEnv map[string]string, schemas map[string]ParamSchema) (string, error) {

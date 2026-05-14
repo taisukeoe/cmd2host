@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -470,6 +471,289 @@ func TestOperation_StringParams(t *testing.T) {
 			err := op.ValidateParams(tt.params)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestOperation_BuildArgs_PairedDrop(t *testing.T) {
+	tests := []struct {
+		name     string
+		template []string
+		schemas  map[string]ParamSchema
+		params   map[string]ParamValue
+		expected []string
+	}{
+		{
+			name:     "optional placeholder absent + preceding flag literal drops both",
+			template: []string{"pr", "create", "-R", "owner/repo", "--body", "{body}"},
+			schemas: map[string]ParamSchema{
+				"body": {Type: "string", Optional: true, MaxLength: 65535},
+			},
+			params:   map[string]ParamValue{},
+			expected: []string{"pr", "create", "-R", "owner/repo"},
+		},
+		{
+			name:     "optional placeholder present + preceding flag literal keeps both (with control chars)",
+			template: []string{"pr", "create", "-R", "owner/repo", "--body", "{body}"},
+			schemas: map[string]ParamSchema{
+				"body": {Type: "string", Optional: true, MaxLength: 65535},
+			},
+			params: map[string]ParamValue{
+				"body": "multi\nline\nwith \"quote\" and \x01 control byte",
+			},
+			expected: []string{"pr", "create", "-R", "owner/repo", "--body", "multi\nline\nwith \"quote\" and \x01 control byte"},
+		},
+		{
+			name:     "optional placeholder absent + preceding non-flag literal drops only placeholder",
+			template: []string{"pr", "view", "{number}"},
+			schemas: map[string]ParamSchema{
+				"number": {Type: "integer", Optional: true, Min: intPtr(1)},
+			},
+			params:   map[string]ParamValue{},
+			expected: []string{"pr", "view"},
+		},
+		{
+			name:     "multiple adjacent paired drops: both absent",
+			template: []string{"cmd", "--body", "{body}", "--title", "{title}", "--draft"},
+			schemas: map[string]ParamSchema{
+				"body":  {Type: "string", Optional: true, MaxLength: 65535},
+				"title": {Type: "string", Optional: true, MaxLength: 255},
+			},
+			params:   map[string]ParamValue{},
+			expected: []string{"cmd", "--draft"},
+		},
+		{
+			name:     "multiple adjacent paired drops: body present, title absent",
+			template: []string{"cmd", "--body", "{body}", "--title", "{title}", "--draft"},
+			schemas: map[string]ParamSchema{
+				"body":  {Type: "string", Optional: true, MaxLength: 65535},
+				"title": {Type: "string", Optional: true, MaxLength: 255},
+			},
+			params: map[string]ParamValue{
+				"body": "hello",
+			},
+			expected: []string{"cmd", "--body", "hello", "--draft"},
+		},
+		{
+			name:     "inline placeholder Pattern B style is not paired-dropped (body provided)",
+			template: []string{"-f", "body={body}"},
+			schemas: map[string]ParamSchema{
+				"body": {Type: "string", Optional: true, MaxLength: 65535},
+			},
+			params: map[string]ParamValue{
+				"body": "hello",
+			},
+			expected: []string{"-f", "body=hello"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := &Operation{
+				ArgsTemplate: tt.template,
+				Params:       tt.schemas,
+			}
+			args, err := op.BuildArgs(tt.params, nil, nil)
+			if err != nil {
+				t.Fatalf("BuildArgs failed: %v", err)
+			}
+			if len(args) != len(tt.expected) {
+				t.Fatalf("BuildArgs returned %d args, want %d: got %v, want %v", len(args), len(tt.expected), args, tt.expected)
+			}
+			for i, arg := range args {
+				if arg != tt.expected[i] {
+					t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
+	// Templates mirror the Pattern A migration applied in host/templates/*.json
+	// for gh_pr_create, gh_pr_edit, and gh_issue_create.
+	longBody := "title line\n\nparagraph with \"quotes\" and `backticks`\n\nline with control \x01 char\n\n" +
+		"multibyte: 日本語の本文 — こんにちは"
+
+	tests := []struct {
+		name        string
+		op          *Operation
+		params      map[string]ParamValue
+		profileEnv  map[string]string
+		expectedArg []string
+	}{
+		{
+			name: "gh_pr_create body present (long content)",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"pr", "create", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"body": {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{"body": longBody},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"pr", "create", "-R", "owner/repo", "--body", longBody},
+		},
+		{
+			name: "gh_pr_create body absent",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"pr", "create", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"body": {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"pr", "create", "-R", "owner/repo"},
+		},
+		{
+			name: "gh_pr_edit body present",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"pr", "edit", "{number}", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"number": {Type: "integer", Min: intPtr(1)},
+					"body":   {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{"number": float64(42), "body": longBody},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"pr", "edit", "42", "-R", "owner/repo", "--body", longBody},
+		},
+		{
+			name: "gh_pr_edit body absent",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"pr", "edit", "{number}", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"number": {Type: "integer", Min: intPtr(1)},
+					"body":   {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{"number": float64(42)},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"pr", "edit", "42", "-R", "owner/repo"},
+		},
+		{
+			name: "gh_issue_create body present",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"issue", "create", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"body": {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{"body": longBody},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"issue", "create", "-R", "owner/repo", "--body", longBody},
+		},
+		{
+			name: "gh_issue_create body absent",
+			op: &Operation{
+				Command:      "gh",
+				ArgsTemplate: []string{"issue", "create", "-R", "{repo}", "--body", "{body}"},
+				Params: map[string]ParamSchema{
+					"body": {Type: "string", Optional: true, MaxLength: 65535},
+				},
+			},
+			params:      map[string]ParamValue{},
+			profileEnv:  map[string]string{"repo": "owner/repo"},
+			expectedArg: []string{"issue", "create", "-R", "owner/repo"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := tt.op.BuildArgs(tt.params, nil, tt.profileEnv)
+			if err != nil {
+				t.Fatalf("BuildArgs failed: %v", err)
+			}
+			if len(args) != len(tt.expectedArg) {
+				t.Fatalf("BuildArgs returned %d args, want %d: got %v, want %v", len(args), len(tt.expectedArg), args, tt.expectedArg)
+			}
+			for i, arg := range args {
+				if arg != tt.expectedArg[i] {
+					t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, tt.expectedArg[i])
+				}
+			}
+		})
+	}
+}
+
+// TestTemplates_BodyOpsMigration asserts the on-disk templates carry the
+// Pattern A migration for gh_pr_create / gh_pr_edit / gh_issue_create.
+// This is the regression gate: if anyone reintroduces "--body" into
+// allowed_flags or drops the body schema, this test fails before the
+// in-memory BuildArgs tests do.
+func TestTemplates_BodyOpsMigration(t *testing.T) {
+	type opCheck struct {
+		template     string // template file basename (no .json)
+		operation    string
+		expectSuffix []string // expected trailing args_template elements
+	}
+
+	checks := []opCheck{
+		{template: "github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}},
+		{template: "github_write", operation: "gh_issue_create", expectSuffix: []string{"--body", "{body}"}},
+		{template: "git_github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}},
+		{template: "git_github_write", operation: "gh_pr_edit", expectSuffix: []string{"--body", "{body}"}},
+	}
+
+	for _, c := range checks {
+		t.Run(c.template+"/"+c.operation, func(t *testing.T) {
+			data, err := GetTemplate(c.template)
+			if err != nil {
+				t.Fatalf("GetTemplate(%q): %v", c.template, err)
+			}
+			var project ProjectConfig
+			if err := json.Unmarshal(data, &project); err != nil {
+				t.Fatalf("Unmarshal template %q: %v", c.template, err)
+			}
+			op, ok := project.Operations[c.operation]
+			if !ok {
+				t.Fatalf("operation %q not in template %q", c.operation, c.template)
+			}
+
+			// args_template ends with the expected suffix
+			if len(op.ArgsTemplate) < len(c.expectSuffix) {
+				t.Fatalf("args_template too short: %v", op.ArgsTemplate)
+			}
+			actualSuffix := op.ArgsTemplate[len(op.ArgsTemplate)-len(c.expectSuffix):]
+			for i, want := range c.expectSuffix {
+				if actualSuffix[i] != want {
+					t.Errorf("args_template[-%d:] = %v, want suffix %v", len(c.expectSuffix), actualSuffix, c.expectSuffix)
+					break
+				}
+			}
+
+			// params.body declared with the expected schema
+			bodySchema, ok := op.Params["body"]
+			if !ok {
+				t.Fatalf("params.body not declared in %q", c.operation)
+			}
+			if bodySchema.Type != "string" {
+				t.Errorf("params.body.type = %q, want \"string\"", bodySchema.Type)
+			}
+			if !bodySchema.Optional {
+				t.Errorf("params.body.optional = false, want true")
+			}
+			if bodySchema.MaxLength != 65535 {
+				t.Errorf("params.body.maxLength = %d, want 65535", bodySchema.MaxLength)
+			}
+
+			// allowed_flags must not include --body (Option β: immediate break)
+			for _, f := range op.AllowedFlags {
+				if f == "--body" {
+					t.Errorf("allowed_flags still contains --body for %q", c.operation)
+				}
+			}
+
+			// ValidateFlags must reject --body=<value> form
+			if err := op.ValidateFlags([]string{"--body=hello"}); err == nil {
+				t.Errorf("ValidateFlags([\"--body=hello\"]) returned nil, want \"flag not allowed\" error")
 			}
 		})
 	}

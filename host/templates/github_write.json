@@ -50,9 +50,11 @@
     },
     "gh_pr_create": {
       "command": "gh",
-      "args_template": ["pr", "create", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--title", "--body", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
+      "args_template": ["pr", "create", "-R", "{repo}", "--body", "{body}"],
+      "params": {
+        "body": {"type": "string", "optional": true, "maxLength": 65535}
+      },
+      "allowed_flags": ["--title", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
       "description": "Create a pull request"
     },
     "gh_pr_comment": {
@@ -92,9 +94,11 @@
     },
     "gh_issue_create": {
       "command": "gh",
-      "args_template": ["issue", "create", "-R", "{repo}"],
-      "params": {},
-      "allowed_flags": ["--title", "--body", "--label", "--assignee"],
+      "args_template": ["issue", "create", "-R", "{repo}", "--body", "{body}"],
+      "params": {
+        "body": {"type": "string", "optional": true, "maxLength": 65535}
+      },
+      "allowed_flags": ["--title", "--label", "--assignee"],
       "description": "Create an issue"
     }
   }
