@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -16,6 +17,27 @@ func writeBodyFile(t *testing.T, root, name, content string) string {
 		t.Fatalf("write body file: %v", err)
 	}
 	return path
+}
+
+// identityOf builds a BodyFileIdentity for path by reading the file's
+// dev/ino via os.Stat. ReadBodyFile-only tests use this helper to skip
+// the ValidateBodyFilePath plumbing while still exercising the
+// validate-then-open contract.
+func identityOf(t *testing.T, path string) BodyFileIdentity {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("unexpected filesystem metadata type for %s", path)
+	}
+	return BodyFileIdentity{
+		Path: path,
+		Dev:  uint64(stat.Dev),
+		Ino:  uint64(stat.Ino),
+	}
 }
 
 func TestReferencesBodyPlaceholder(t *testing.T) {
@@ -112,8 +134,11 @@ func TestValidateBodyFilePath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("eval inside: %v", err)
 		}
-		if got != wantResolved {
-			t.Errorf("got %q, want %q", got, wantResolved)
+		if got.Path != wantResolved {
+			t.Errorf("got path %q, want %q", got.Path, wantResolved)
+		}
+		if got.Ino == 0 {
+			t.Errorf("expected non-zero inode in identity, got %+v", got)
 		}
 	})
 
@@ -197,7 +222,7 @@ func TestReadBodyFile(t *testing.T) {
 
 	t.Run("valid utf-8", func(t *testing.T) {
 		path := writeBodyFile(t, root, "ok.md", "こんにちは body")
-		got, err := ReadBodyFile(path, 1024)
+		got, err := ReadBodyFile(identityOf(t, path), 1024)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -208,7 +233,7 @@ func TestReadBodyFile(t *testing.T) {
 
 	t.Run("size exceeds effective max", func(t *testing.T) {
 		path := writeBodyFile(t, root, "big.md", strings.Repeat("a", 100))
-		_, err := ReadBodyFile(path, 50)
+		_, err := ReadBodyFile(identityOf(t, path), 50)
 		if err == nil || !strings.Contains(err.Error(), "exceeds effective max") {
 			t.Errorf("expected size error, got %v", err)
 		}
@@ -216,7 +241,7 @@ func TestReadBodyFile(t *testing.T) {
 
 	t.Run("null byte rejected", func(t *testing.T) {
 		path := writeBodyFile(t, root, "nul.md", "hello\x00world")
-		_, err := ReadBodyFile(path, 1024)
+		_, err := ReadBodyFile(identityOf(t, path), 1024)
 		if err == nil || !strings.Contains(err.Error(), "null") {
 			t.Errorf("expected null byte error, got %v", err)
 		}
@@ -228,7 +253,7 @@ func TestReadBodyFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte{0xff, 0xfe, 0xfd}, 0600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
-		_, err := ReadBodyFile(path, 1024)
+		_, err := ReadBodyFile(identityOf(t, path), 1024)
 		if err == nil || !strings.Contains(err.Error(), "UTF-8") {
 			t.Errorf("expected UTF-8 error, got %v", err)
 		}
@@ -236,7 +261,7 @@ func TestReadBodyFile(t *testing.T) {
 
 	t.Run("effective max zero rejected", func(t *testing.T) {
 		path := writeBodyFile(t, root, "zero.md", "x")
-		_, err := ReadBodyFile(path, 0)
+		_, err := ReadBodyFile(identityOf(t, path), 0)
 		if err == nil || !strings.Contains(err.Error(), "effective max") {
 			t.Errorf("expected effective-max error, got %v", err)
 		}
@@ -244,7 +269,7 @@ func TestReadBodyFile(t *testing.T) {
 
 	t.Run("size exactly at limit accepted", func(t *testing.T) {
 		path := writeBodyFile(t, root, "exact.md", "12345")
-		got, err := ReadBodyFile(path, 5)
+		got, err := ReadBodyFile(identityOf(t, path), 5)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -348,6 +373,80 @@ func TestInjectBodyIntoRequest(t *testing.T) {
 		err := InjectBodyIntoRequest(req, op, "content")
 		if err == nil || !strings.Contains(err.Error(), "does not accept a body") {
 			t.Errorf("expected unsupported error, got %v", err)
+		}
+	})
+}
+
+func TestValidateBodyFilePathRejectsHardlink(t *testing.T) {
+	root := t.TempDir()
+	target := writeBodyFile(t, root, "target.md", "shared content")
+	link := filepath.Join(root, "link.md")
+	if err := os.Link(target, link); err != nil {
+		t.Fatalf("os.Link: %v", err)
+	}
+
+	// Both endpoints of the hard link must be rejected — link count > 1
+	// means the inode is reachable from more than one path, so containment
+	// under the body root no longer constrains what the read returns.
+	for _, name := range []string{"target.md", "link.md"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ValidateBodyFilePath(filepath.Join(root, name), root)
+			if err == nil || !strings.Contains(err.Error(), "exactly one link") {
+				t.Errorf("expected hardlink rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestReadBodyFileDetectsReplacementAfterValidation(t *testing.T) {
+	t.Run("regular file replaced with different regular file", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeBodyFile(t, root, "swap.md", "original content")
+		identity, err := ValidateBodyFilePath(path, root)
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		// Simulate the caller rewriting the file under the same path between
+		// validation and read. os.Remove + os.WriteFile yields a new inode,
+		// which ReadBodyFile must notice via fstat.
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("remove original: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+			t.Fatalf("write replacement: %v", err)
+		}
+		_, err = ReadBodyFile(identity, 1024)
+		if err == nil || !strings.Contains(err.Error(), "identity changed") {
+			t.Errorf("expected identity-changed rejection, got %v", err)
+		}
+	})
+
+	t.Run("regular file replaced with symlink", func(t *testing.T) {
+		root := t.TempDir()
+		path := writeBodyFile(t, root, "swap2.md", "original content")
+		identity, err := ValidateBodyFilePath(path, root)
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		// External target the caller would prefer the daemon to read.
+		outside := t.TempDir()
+		outsideFile := writeBodyFile(t, outside, "secret.md", "outside content")
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("remove original: %v", err)
+		}
+		if err := os.Symlink(outsideFile, path); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		_, err = ReadBodyFile(identity, 1024)
+		if err == nil {
+			t.Fatal("expected open failure or identity rejection, got nil")
+		}
+		// Accept either branch:
+		//   - O_NOFOLLOW fails the open with ELOOP-equivalent "open body_file"
+		//   - or, if some FS lets the open succeed, fstat catches the dev/ino mismatch
+		if !strings.Contains(err.Error(), "open body_file") &&
+			!strings.Contains(err.Error(), "identity changed") {
+			t.Errorf("unexpected error shape: %v", err)
 		}
 	})
 }

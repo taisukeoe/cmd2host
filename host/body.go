@@ -41,6 +41,19 @@
 // param mode; --body in allowed_flags signals flag mode. If both are
 // present the placeholder wins, since it is the actual command contract.
 //
+// # Identity verification (validate-then-open contract)
+//
+// The body root is bind-mounted into the container, so the caller can
+// write — and rewrite — files there. ValidateBodyFilePath captures the
+// resolved file's device + inode (and rejects files with more than one
+// link) at the moment it confirms containment, and ReadBodyFile reopens
+// that same path with O_NOFOLLOW and fstat-compares the descriptor's
+// device + inode + link count against the recorded identity. If the
+// file the caller intends to deliver is replaced between validation and
+// open, the comparison fails and the read is aborted. The caller's
+// resolved path is never touched between these two steps, so a
+// well-behaved caller observes no behavior change.
+//
 // # Consume-after-success
 //
 // The daemon removes the resolved body_file path only when the operation
@@ -58,6 +71,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -99,58 +113,87 @@ func (op *Operation) AcceptsBodyFlag() bool {
 	return false
 }
 
-// ValidateBodyFilePath verifies that path resolves to a regular file
-// safely contained under root. Resolution follows symlinks so callers
-// cannot bypass containment via symlink chicanery. Returns the
-// resolved (absolute, symlink-resolved) path for use by ReadBodyFile
-// and the post-execution remove step.
+// BodyFileIdentity captures the resolved path and the file identity
+// (device + inode) recorded at the moment ValidateBodyFilePath confirmed
+// the file was a regular, single-link file contained under the body
+// root. ReadBodyFile compares the opened descriptor's identity against
+// this snapshot, so a caller that rewrites the path between validation
+// and open cannot redirect the read at a different file.
+type BodyFileIdentity struct {
+	Path string
+	Dev  uint64
+	Ino  uint64
+}
+
+// ValidateBodyFilePath verifies that path resolves to a regular,
+// single-link file safely contained under root, and returns the file's
+// identity for later open-time verification. Resolution follows
+// symlinks so callers cannot bypass containment via symlink chicanery.
+//
+// Files with more than one hard link are rejected: link count > 1
+// means the inode contents are reachable from some other path on the
+// same filesystem, so containment under the body root no longer
+// constrains what the read will return.
 //
 // Root resolution runs before path resolution so a misconfigured daemon
 // surfaces "resolve body_file root …" rather than masking the issue
 // behind a "body_file does not exist …" message that targets the
 // caller-supplied path.
-func ValidateBodyFilePath(path, root string) (string, error) {
+func ValidateBodyFilePath(path, root string) (BodyFileIdentity, error) {
+	var empty BodyFileIdentity
 	if root == "" {
-		return "", fmt.Errorf("body_file root is not configured")
+		return empty, fmt.Errorf("body_file root is not configured")
 	}
 	if path == "" {
-		return "", fmt.Errorf("body_file path is empty")
+		return empty, fmt.Errorf("body_file path is empty")
 	}
 
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve body_file root %q: %w", root, err)
+		return empty, fmt.Errorf("resolve body_file root %q: %w", root, err)
 	}
 
 	if _, err := os.Lstat(path); err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("body_file does not exist: %s", path)
+			return empty, fmt.Errorf("body_file does not exist: %s", path)
 		}
-		return "", fmt.Errorf("stat body_file %q: %w", path, err)
+		return empty, fmt.Errorf("stat body_file %q: %w", path, err)
 	}
 
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve body_file path %q: %w", path, err)
+		return empty, fmt.Errorf("resolve body_file path %q: %w", path, err)
 	}
 
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("stat resolved body_file %q: %w", resolved, err)
+		return empty, fmt.Errorf("stat resolved body_file %q: %w", resolved, err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("body_file is not a regular file: %s", resolved)
+		return empty, fmt.Errorf("body_file is not a regular file: %s", resolved)
+	}
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return empty, fmt.Errorf("body_file stat: unexpected filesystem metadata type")
+	}
+	if uint64(stat.Nlink) > 1 {
+		return empty, fmt.Errorf("body_file must have exactly one link: %s", resolved)
 	}
 
 	rel, err := filepath.Rel(resolvedRoot, resolved)
 	if err != nil {
-		return "", fmt.Errorf("compute relative path under root: %w", err)
+		return empty, fmt.Errorf("compute relative path under root: %w", err)
 	}
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("body_file is outside the body root: %s", resolved)
+		return empty, fmt.Errorf("body_file is outside the body root: %s", resolved)
 	}
 
-	return resolved, nil
+	return BodyFileIdentity{
+		Path: resolved,
+		Dev:  uint64(stat.Dev),
+		Ino:  uint64(stat.Ino),
+	}, nil
 }
 
 // EffectiveMaxBytes returns the operation-specific cap on body_file
@@ -167,19 +210,43 @@ func EffectiveMaxBytes(op *Operation, sanityCap int) int {
 	return sanityCap
 }
 
-// ReadBodyFile reads at most effectiveMax bytes from path, rejecting
-// content that exceeds the cap, contains null bytes, or is not valid
-// UTF-8. effectiveMax must be > 0.
-func ReadBodyFile(path string, effectiveMax int) (string, error) {
+// ReadBodyFile opens identity.Path with O_NOFOLLOW, confirms the
+// opened descriptor refers to the same regular, single-link file that
+// ValidateBodyFilePath inspected (device + inode + link count match),
+// and reads at most effectiveMax bytes. effectiveMax must be > 0.
+//
+// The open uses O_NOFOLLOW so a symlink that replaced the terminal
+// path component after validation fails the open outright. The fstat
+// comparison covers the non-symlink replacement case (regular file
+// swapped for a different regular file at the same path).
+func ReadBodyFile(identity BodyFileIdentity, effectiveMax int) (string, error) {
 	if effectiveMax <= 0 {
 		return "", fmt.Errorf("body_file effective max must be > 0, got %d", effectiveMax)
 	}
 
-	f, err := os.Open(path)
+	f, err := os.OpenFile(identity.Path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", fmt.Errorf("open body_file: %w", err)
 	}
 	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat opened body_file: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("opened body_file is not a regular file")
+	}
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("body_file fstat: unexpected filesystem metadata type")
+	}
+	if uint64(stat.Dev) != identity.Dev || uint64(stat.Ino) != identity.Ino {
+		return "", fmt.Errorf("body_file identity changed between validation and open")
+	}
+	if uint64(stat.Nlink) > 1 {
+		return "", fmt.Errorf("body_file must have exactly one link")
+	}
 
 	limited := io.LimitReader(f, int64(effectiveMax)+1)
 	content, err := io.ReadAll(limited)
@@ -309,13 +376,13 @@ func processBodyFile(req *OperationRequest, project *ProjectConfig, bodyFileRoot
 		return "", err
 	}
 
-	resolved, err := ValidateBodyFilePath(req.BodyFile, bodyFileRoot)
+	identity, err := ValidateBodyFilePath(req.BodyFile, bodyFileRoot)
 	if err != nil {
 		return "", err
 	}
 
 	effMax := EffectiveMaxBytes(op, bodyFileSanityMaxBytes)
-	content, err := ReadBodyFile(resolved, effMax)
+	content, err := ReadBodyFile(identity, effMax)
 	if err != nil {
 		return "", err
 	}
@@ -324,5 +391,5 @@ func processBodyFile(req *OperationRequest, project *ProjectConfig, bodyFileRoot
 		return "", err
 	}
 
-	return resolved, nil
+	return identity.Path, nil
 }

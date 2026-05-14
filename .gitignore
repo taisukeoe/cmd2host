@@ -26,6 +26,7 @@ mcp-server/cmd2host-mcp*
 # Local test/dev files
 .cmd2host/
 *.local
+.claude/claude.local.md
 
 # Generated MCP config (copied from src/cmd2host/mcp.json by post-create.sh)
 .mcp.json
