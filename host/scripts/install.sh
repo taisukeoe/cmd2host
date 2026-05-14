@@ -182,13 +182,6 @@ fi
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"
 
-# In-place upgrade: stop existing daemon before replacing the plist
-# (unconditional unload; failures tolerated via || true)
-if [[ "$UPGRADE_MODE" == "true" ]]; then
-    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
-    echo "Stopped existing daemon for upgrade"
-fi
-
 # Generate and install launchd plist
 cat > "$LAUNCHD_PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -212,6 +205,12 @@ cat > "$LAUNCHD_PLIST" << EOF
 </dict>
 </plist>
 EOF
+
+# Stop any existing daemon before loading the new plist (idempotent).
+# The fresh plist's Label is constant (com.user.cmd2host), so this is effectively
+# a label-based unload. Covers in-place upgrade AND residual LaunchAgent corner
+# cases (e.g., $INSTALL_DIR manually removed but plist still loaded).
+launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
 
 # Start daemon
 launchctl load "$LAUNCHD_PLIST"
