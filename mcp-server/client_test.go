@@ -214,7 +214,7 @@ func TestClient_RunOperation(t *testing.T) {
 	}()
 
 	client := NewClient("127.0.0.1", addr.Port, "test-token")
-	resp, err := client.RunOperation("test_op", map[string]interface{}{"msg": "hello"}, nil)
+	resp, err := client.RunOperation("test_op", map[string]interface{}{"msg": "hello"}, nil, "")
 	if err != nil {
 		t.Fatalf("RunOperation failed: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestUnixClient_RunOperation(t *testing.T) {
 	}()
 
 	client := NewUnixClient(socketPath, "test-token")
-	resp, err := client.RunOperation("test_op", map[string]interface{}{"msg": "hello"}, nil)
+	resp, err := client.RunOperation("test_op", map[string]interface{}{"msg": "hello"}, nil, "")
 	if err != nil {
 		t.Fatalf("RunOperation via Unix socket failed: %v", err)
 	}
