@@ -113,6 +113,10 @@ Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP clien
 
 ## Host Setup
 
+> **Note**: macOS only. The host daemon is registered as a launchd LaunchAgent
+> and the install / uninstall scripts reject non-darwin platforms. Linux
+> support would require a separate systemd-based integration.
+
 ### Install
 
 ```bash
