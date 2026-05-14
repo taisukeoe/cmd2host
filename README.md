@@ -297,14 +297,12 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 
 | Variable | Scope | Effect |
 |---|---|---|
-| `CMD2HOST_CONFIG_DIR` | Base directory | Relocates `daemon.json`, `projects/`, `tokens/`, the UDS socket, and the body file root under this directory. Useful for per-session isolation (e.g., wrappers that run multiple sessions against the same repo in parallel). Unset → falls back to `~/.cmd2host/`. |
+| `CMD2HOST_CONFIG_DIR` | Base directory | Relocates `daemon.json`, `projects/`, `tokens/`, and the UDS socket under this directory. Useful for per-session isolation (e.g., wrappers that run multiple sessions against the same repo in parallel). Unset → falls back to `~/.cmd2host/`. |
 | `DAEMON_CONFIG` | Single file (legacy) | Overrides the `daemon.json` path specifically. Wins over `CMD2HOST_CONFIG_DIR` when both are set (most-specific override). |
 
 **Priority for `daemon.json`**: `DAEMON_CONFIG` (specific file) > `CMD2HOST_CONFIG_DIR/daemon.json` (base dir) > `~/.cmd2host/daemon.json` (legacy default).
 
 **Priority for Unix socket path**: `socket_path` in `daemon.json` (explicit override) > `$CMD2HOST_CONFIG_DIR/cmd2host.sock` (env-driven default) > `~/.cmd2host/cmd2host.sock` (legacy default).
-
-**Priority for body file root**: `body_file_root` in `daemon.json` (explicit override) > `$CMD2HOST_CONFIG_DIR/body` (env-driven default) > `~/.cmd2host/body` (legacy default). See [Body File Support](#body-file-support) for usage.
 
 ### Config Schema
 
@@ -373,7 +371,7 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 
 - `cmd2host_list_operations` - List available operations (optional `prefix` filter, e.g., `"gh_pr"`)
 - `cmd2host_describe_operation` - Get detailed schema for a specific operation
-- `cmd2host_run_operation` - Execute an operation with typed parameters; accepts optional `body_file` for file-delivered body content (see [Body File Support](#body-file-support))
+- `cmd2host_run_operation` - Execute an operation with typed parameters
 
 ### Example Operations
 
@@ -398,42 +396,6 @@ MCP server requests use token authentication. Operations are validated against:
 3. Allowed operations list (default deny)
 4. Parameter type checking and validation
 5. Constraint checks (branch patterns, path globs)
-
-### Body File Support
-
-For operations that accept a body parameter (`gh_pr_create`, `gh_pr_edit`, `gh_pr_comment`, `gh_pr_review_comment_reply`, `gh_issue_create`, and any future operation that takes a `body` param or `--body` flag), callers may pass `body_file: <path>` instead of inline content. This avoids JSON / shell escaping for long PR descriptions, review summaries, or multi-line bodies.
-
-**Usage**
-
-```json
-{
-  "operation": "gh_pr_create",
-  "params": {},
-  "flags": [],
-  "body_file": "/home/user/.cmd2host/body/pr-body.md",
-  "token": "..."
-}
-```
-
-`body_file` is mutually exclusive with `body` in params or `--body=` in flags. The daemon detects body delivery mode (param vs flag) from the operation template and routes the file content through the same path the inline `--body` value would take, so downstream gh behavior is unchanged.
-
-**File location**
-
-Files must reside under `${CMD2HOST_CONFIG_DIR:-$HOME/.cmd2host}/body` on the host. The daemon creates this directory at startup with mode 0700. DevContainer setups bind-mount this path into the container so caller-written files are visible to the daemon.
-
-**Validation**
-
-- Path is canonicalized (`filepath.EvalSymlinks`) and required to resolve under the body root via `filepath.Rel`; symlink-based escapes and sibling-prefix attacks are rejected
-- File must be a regular file (no directories, devices, FIFOs) and readable by the daemon user
-- Content must be valid UTF-8 with no null bytes
-- Size cap is operation-aware:
-  - `params.body.maxLength` when the operation template defines it
-  - 65535 bytes (GitHub body limit) for operations with `--body` in `allowed_flags`
-  - 100 MiB daemon-level sanity fallback (catches misdirected paths; ARG_MAX on the OS is the practical inline-delivery cap)
-
-**Consume-after-success**
-
-The daemon removes the resolved `body_file` path only after the operation exits with code 0. Validation failures, non-zero exits, and daemon-internal errors all preserve the file so the caller can inspect or retry without rewriting. Callers should use a unique filename per request to avoid race conditions with retries.
 
 ## Environment Variables
 

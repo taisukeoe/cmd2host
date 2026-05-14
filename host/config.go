@@ -25,12 +25,6 @@ type DaemonConfig struct {
 
 	// Execution limits
 	DefaultTimeout int `json:"default_timeout,omitempty"` // Default: 60 seconds
-
-	// body_file root: directory under which OperationRequest.BodyFile paths
-	// must reside. Default: $CMD2HOST_CONFIG_DIR/body, or $HOME/.cmd2host/body
-	// when CMD2HOST_CONFIG_DIR is unset. See host/body.go for the full
-	// design rationale (bind mount layout, validation, consume-after-success).
-	BodyFileRoot string `json:"body_file_root,omitempty"`
 }
 
 // cmd2hostConfigDir returns the base directory for cmd2host's mutable state:
@@ -135,14 +129,6 @@ func applyDaemonDefaults(config *DaemonConfig) {
 	}
 	if config.DefaultTimeout == 0 {
 		config.DefaultTimeout = 60
-	}
-	if config.BodyFileRoot == "" {
-		// Mirrors SocketPath's resolution so body files live alongside the
-		// rest of cmd2host's mutable state.
-		base, err := cmd2hostConfigDir()
-		if err == nil {
-			config.BodyFileRoot = filepath.Join(base, "body")
-		}
 	}
 }
 

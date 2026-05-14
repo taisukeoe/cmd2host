@@ -50,7 +50,6 @@ type OperationRequest struct {
 	Operation string                `json:"operation"`
 	Params    map[string]ParamValue `json:"params"`
 	Flags     []string              `json:"flags,omitempty"`
-	BodyFile  string                `json:"body_file,omitempty"`
 	Token     string                `json:"token"`
 }
 
