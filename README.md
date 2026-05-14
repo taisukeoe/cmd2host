@@ -351,7 +351,7 @@ cmd2host templates show <name>  # Show template content
 | `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_pr_review_comments, gh_issue_view, gh_issue_list |
 | `github_write` | + GitHub write | readonly + gh_pr_create, gh_pr_comment, gh_pr_review_comment_reply, gh_issue_create |
 | `git_write` | + Git push | readonly + git_push (requires branch_allow constraint) |
-| `git_github_write` | Git + GitHub write | git_write + gh_pr_create, gh_pr_comment, gh_pr_review_comment_reply |
+| `git_github_write` | Git + GitHub write | git_write + gh_pr_create, gh_pr_edit, gh_pr_comment, gh_pr_review_comment_reply |
 
 ## MCP Server Integration
 
@@ -378,11 +378,51 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 - `gh_pr_view` - View a pull request by number
 - `gh_pr_list` - List pull requests with filters
 - `gh_pr_review_comments` - List inline pull request review comments
+- `gh_pr_create` - Create a pull request
+- `gh_pr_edit` - Edit a pull request (title, body, labels, assignees)
 - `gh_pr_comment` - Add a pull request summary comment
 - `gh_pr_review_comment_reply` - Reply to an inline pull request review comment
 - `gh_issue_create` - Create a new issue
 - `git_fetch` - Fetch from remote
 - `git_push` - Push to remote (requires branch_allow constraint)
+
+### Body Parameter Operations
+
+The five operations that accept a long-form body (`gh_pr_create`, `gh_pr_edit`,
+`gh_pr_comment`, `gh_pr_review_comment_reply`, `gh_issue_create`) all expose
+the body through the typed `params.body` field. Callers pass the raw body
+string directly; transport handles newlines, quotes, and control characters
+without per-caller escape boilerplate.
+
+Example MCP tool invocation:
+
+```json
+{
+  "operation_id": "gh_pr_create",
+  "params": {
+    "body": "## Summary\n\nMulti-line body with \"quotes\" and other special chars.\n"
+  },
+  "flags": ["--title=Add foo"]
+}
+```
+
+Body length cap is 65535 chars (matches GitHub's body limit).
+
+#### Migration Notes (binary-v0.1.8)
+
+Starting with `binary-v0.1.8`, the previously accepted `flags=["--body=..."]`
+form for `gh_pr_create`, `gh_pr_edit`, and `gh_issue_create` is removed —
+`--body` is no longer in `allowed_flags`. Callers must migrate to the typed
+`params.body` form:
+
+```diff
+- "flags": ["--body=Some body"]
++ "params": {"body": "Some body"}
+```
+
+`gh_pr_comment` and `gh_pr_review_comment_reply` already used `params.body`
+and are unaffected. The change unifies all five body operations under a
+single caller-facing API.
 
 ### Installation
 
