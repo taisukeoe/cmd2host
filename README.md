@@ -119,6 +119,23 @@ Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP clien
 curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
 ```
 
+### Upgrade
+
+Re-running the install one-liner upgrades cmd2host in-place. The binary and launchd plist
+are replaced and the daemon is reloaded, while existing `daemon.json` / `projects/` /
+`tokens/` under `~/.cmd2host/` are preserved.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash
+```
+
+To wipe the existing install and start fresh (`daemon.json` / `projects/` / `tokens/`
+will be deleted), pass `--clean`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --clean
+```
+
 ### Verify
 
 ```bash

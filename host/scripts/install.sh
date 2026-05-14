@@ -8,12 +8,15 @@ GITHUB_REPO="taisukeoe/cmd2host"
 
 # Parse arguments
 BUILD_FROM_SOURCE=false
+CLEAN_INSTALL=false
 
 usage() {
-    echo "Usage: $0 [--build]"
+    echo "Usage: $0 [--build] [--clean]"
     echo ""
     echo "Options:"
     echo "  --build    Build from source (requires Go installed)"
+    echo "  --clean    Wipe existing install (daemon.json / projects / tokens) before reinstalling."
+    echo "             Without this flag, existing installs are upgraded in-place (user data preserved)."
     echo "  -h, --help Show this help message"
     exit 0
 }
@@ -21,20 +24,38 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         --build) BUILD_FROM_SOURCE=true; shift ;;
+        --clean) CLEAN_INSTALL=true; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# Check if already installed
+# Handle existing install: in-place upgrade by default, --clean wipes user data
+UPGRADE_MODE=false
 if [[ -d "$INSTALL_DIR" ]]; then
-    echo "cmd2host already installed at $INSTALL_DIR"
-    echo ""
-    echo "To reinstall: ~/.cmd2host/uninstall.sh && $0"
-    exit 1
+    if [[ "$CLEAN_INSTALL" == "true" ]]; then
+        echo "Existing cmd2host install detected at $INSTALL_DIR"
+        echo "--clean specified: wiping existing install (daemon.json / projects / tokens)"
+        if [[ -f "$INSTALL_DIR/uninstall.sh" ]]; then
+            if [[ ! -x "$INSTALL_DIR/uninstall.sh" ]]; then
+                echo "Warning: $INSTALL_DIR/uninstall.sh is not executable; running it with bash"
+            fi
+            bash "$INSTALL_DIR/uninstall.sh"
+        else
+            echo "Warning: uninstall.sh missing; falling back to manual cleanup"
+            launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+            rm -f "$LAUNCHD_PLIST"
+            rm -rf "$INSTALL_DIR"
+        fi
+    else
+        UPGRADE_MODE=true
+        echo "Existing cmd2host install detected at $INSTALL_DIR"
+        echo "Performing in-place upgrade (daemon.json / projects / tokens preserved)"
+        echo "(Use --clean to wipe and reinstall fresh)"
+    fi
 fi
 
-# Create install directory and tokens directory
+# Create install directory and tokens directory (mkdir -p preserves existing contents)
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR/tokens"
 
@@ -161,6 +182,13 @@ fi
 # Create LaunchAgents directory if needed
 mkdir -p "$HOME/Library/LaunchAgents"
 
+# In-place upgrade: stop existing daemon before replacing the plist
+# (unconditional unload; failures tolerated via || true)
+if [[ "$UPGRADE_MODE" == "true" ]]; then
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+    echo "Stopped existing daemon for upgrade"
+fi
+
 # Generate and install launchd plist
 cat > "$LAUNCHD_PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -189,20 +217,29 @@ EOF
 launchctl load "$LAUNCHD_PLIST"
 
 echo ""
-echo "cmd2host installed to $INSTALL_DIR"
-echo "Daemon started (TCP:9876 + Unix:$INSTALL_DIR/cmd2host.sock)"
-echo ""
-echo "Verify: lsof -i :9876"
-echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
-echo ""
-echo "To uninstall: $INSTALL_DIR/uninstall.sh"
-echo ""
-echo "Next steps:"
-echo "  1. Add init-cmd2host.sh to your .devcontainer/ (see README.md)"
-echo "  2. Create project config: $BINARY_PATH config init --repo=<owner/repo> --repo-path=<path/to/local/repo>"
-echo "  3. Allow config: $BINARY_PATH config allow <owner_repo>"
-echo "     (Note: verify 'repo_path' in the generated config matches your local repository)"
-echo ""
-echo "Connection modes:"
-echo "  TCP (default):  For standard DevContainers"
-echo "  Unix socket:    For --network none containers (mount $INSTALL_DIR/cmd2host.sock)"
+if [[ "$UPGRADE_MODE" == "true" ]]; then
+    echo "cmd2host upgraded in-place at $INSTALL_DIR"
+    echo "Existing daemon.json / projects / tokens preserved"
+    echo "Daemon reloaded (TCP:9876 + Unix:$INSTALL_DIR/cmd2host.sock)"
+    echo ""
+    echo "Verify: lsof -i :9876"
+    echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
+else
+    echo "cmd2host installed to $INSTALL_DIR"
+    echo "Daemon started (TCP:9876 + Unix:$INSTALL_DIR/cmd2host.sock)"
+    echo ""
+    echo "Verify: lsof -i :9876"
+    echo "Logs:   tail -f $INSTALL_DIR/cmd2host.log"
+    echo ""
+    echo "To uninstall: $INSTALL_DIR/uninstall.sh"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Add init-cmd2host.sh to your .devcontainer/ (see README.md)"
+    echo "  2. Create project config: $BINARY_PATH config init --repo=<owner/repo> --repo-path=<path/to/local/repo>"
+    echo "  3. Allow config: $BINARY_PATH config allow <owner_repo>"
+    echo "     (Note: verify 'repo_path' in the generated config matches your local repository)"
+    echo ""
+    echo "Connection modes:"
+    echo "  TCP (default):  For standard DevContainers"
+    echo "  Unix socket:    For --network none containers (mount $INSTALL_DIR/cmd2host.sock)"
+fi
