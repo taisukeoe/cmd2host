@@ -24,6 +24,7 @@ type RunOperationInput struct {
 	OperationID string                 `json:"operation_id" mcp:"The ID of the operation to run"`
 	Params      map[string]interface{} `json:"params,omitempty" mcp:"Parameters for the operation"`
 	Flags       []string               `json:"flags,omitempty" mcp:"Optional flags for the operation"`
+	BodyFile    string                 `json:"body_file,omitempty" mcp:"Path to a file containing the body content. The path must reside under the cmd2host body root on the host. Mutually exclusive with body in params or --body= in flags. The file is consumed (deleted) after the operation exits with code 0; on failure the file is preserved for retry."`
 }
 
 // ToolHandler manages MCP tool registration and execution
@@ -160,7 +161,7 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 		}, nil, nil
 	}
 
-	resp, err := h.client.RunOperation(input.OperationID, input.Params, input.Flags)
+	resp, err := h.client.RunOperation(input.OperationID, input.Params, input.Flags, input.BodyFile)
 	if err != nil {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{

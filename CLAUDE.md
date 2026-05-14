@@ -56,6 +56,7 @@ Commands are validated using **operation mode**: predefined operation templates 
 - `host/operations.go` - Operation template definitions and parameter handling
 - `host/sanitize.go` - Command sanitization (env vars, git config)
 - `host/auth.go` - Token authentication and management
+- `host/body.go` - body_file path validation, content read, template-driven body injection, consume-after-success
 - `host/executor.go` - Command execution
 - `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
 
@@ -175,9 +176,12 @@ Request:
   "operation": "gh_pr_view",
   "params": {"number": 123},
   "flags": ["--json"],
+  "body_file": "",
   "token": "session-token"
 }
 ```
+
+`body_file` is optional and applies only to operations that accept a body (`gh_pr_create`, `gh_pr_edit`, `gh_pr_comment`, `gh_pr_review_comment_reply`, `gh_issue_create`). When set, the daemon reads file content from the validated path under `${CMD2HOST_CONFIG_DIR:-$HOME/.cmd2host}/body` and injects it into the inline `--body` / `{body}` slot. Mutually exclusive with `body` in params or `--body=` in flags. File is removed after the operation exits with code 0; preserved otherwise. See `host/body.go` for the full design.
 
 Response:
 ```json

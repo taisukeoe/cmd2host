@@ -30,6 +30,7 @@ type Server struct {
 	daemonConfig *DaemonConfig
 	validator    *Validator
 	tokenStore   *TokenStore
+	bodyFileRoot string
 	tcpListener  net.Listener
 	unixListener net.Listener
 }
@@ -44,6 +45,7 @@ func NewServer(daemonConfig *DaemonConfig) (*Server, error) {
 		daemonConfig: daemonConfig,
 		validator:    NewValidator(),
 		tokenStore:   tokenStore,
+		bodyFileRoot: daemonConfig.BodyFileRoot,
 	}, nil
 }
 
@@ -178,6 +180,20 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	// Log operation request (params omitted to avoid logging sensitive data like PR body)
 	fmt.Printf("[OP:%s] project=%s request_id=%s\n", req.Operation, projectID, req.RequestID)
 
+	// Resolve body_file before ValidateOperation so the injected body
+	// flows through the normal param / flag validation path. The resolved
+	// (absolute) path is retained for consume-after-success.
+	resolvedBodyPath, err := processBodyFile(&req, projectConfig, s.bodyFileRoot)
+	if err != nil {
+		fmt.Printf("  -> DENIED: %v\n", err)
+		s.sendOperationResponse(conn, OperationResponse{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+
 	// Validate operation
 	op, result := s.validator.ValidateOperation(req, projectConfig)
 	if !result.OK {
@@ -210,6 +226,17 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	// Execute with sanitized environment
 	resp := s.executeWithSanitization(op.Command, args, projectConfig)
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
+
+	// Consume-after-success: remove the resolved body_file only when the
+	// operation exits with code 0. Validation failures, operation failures,
+	// and daemon-internal errors all preserve the file so the caller can
+	// inspect or retry. Removal failures are logged but never reported back
+	// to the caller — the operation result already succeeded.
+	if resolvedBodyPath != "" && resp.ExitCode == 0 {
+		if removeErr := os.Remove(resolvedBodyPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			fmt.Printf("  -> warning: failed to remove body_file %s: %v\n", resolvedBodyPath, removeErr)
+		}
+	}
 
 	s.sendOperationResponse(conn, OperationResponse{
 		RequestID: req.RequestID,
@@ -937,6 +964,15 @@ func runDaemon() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Daemon config error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Ensure body_file root exists. Containers may bind-mount this path,
+	// so the daemon owns directory creation rather than the container init.
+	if daemonConfig.BodyFileRoot != "" {
+		if err := os.MkdirAll(daemonConfig.BodyFileRoot, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create body_file root %s: %v\n", daemonConfig.BodyFileRoot, err)
+			os.Exit(1)
+		}
 	}
 
 	server, err := NewServer(daemonConfig)

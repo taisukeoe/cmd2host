@@ -140,12 +140,17 @@ func (c *Client) DescribeOperation(operationID string) (*DescribeOperationRespon
 	return &resp, nil
 }
 
-// RunOperation executes an operation with the given parameters
-func (c *Client) RunOperation(operationID string, params map[string]interface{}, flags []string) (*OperationResponse, error) {
+// RunOperation executes an operation with the given parameters. bodyFile,
+// when non-empty, references a file under the daemon's body_file_root and
+// is mutually exclusive with the operation's body param / --body flag.
+// See the cmd2host body_file documentation for the resolution and
+// consume-after-success rules.
+func (c *Client) RunOperation(operationID string, params map[string]interface{}, flags []string, bodyFile string) (*OperationResponse, error) {
 	req := OperationRequest{
 		Operation: operationID,
 		Params:    params,
 		Flags:     flags,
+		BodyFile:  bodyFile,
 		Token:     c.token,
 	}
 

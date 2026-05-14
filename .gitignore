@@ -4,6 +4,8 @@ dist/
 # Go binaries
 host/cmd2host
 host/cmd2host-*
+mcp-server/mcp-server
+mcp-server/cmd2host-mcp*
 
 # IDE
 .idea/
