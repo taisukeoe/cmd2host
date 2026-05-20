@@ -2,9 +2,36 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+// initGitRepoOnBranch initializes a git repo at dir and creates one commit
+// on the given branch name. Shared by project_test.go and validator_test.go
+// to exercise CurrentBranch() / current-branch guard paths against real
+// git invocations.
+func initGitRepoOnBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", branch)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("init\n"), 0644); err != nil {
+		t.Fatalf("write README failed: %v", err)
+	}
+	run("add", "README.md")
+	run("commit", "-q", "-m", "init")
+}
 
 func TestProjectConfig_HasOperation(t *testing.T) {
 	project := &ProjectConfig{
@@ -102,6 +129,16 @@ func TestProjectConfig_ValidatePaths(t *testing.T) {
 		{"denied .env", []string{".env"}, true},
 		{"denied .env.local", []string{".env.local"}, true},
 		{"multiple with one denied", []string{"src/main.go", ".env"}, true},
+		{"reject leading-dash flag injection", []string{"--force"}, true},
+		{"reject --pathspec-from-file", []string{"--pathspec-from-file=paths.txt"}, true},
+		{"reject -u single-dash flag", []string{"-u"}, true},
+		{"reject leading-dash among valid paths", []string{"src/main.go", "--patch"}, true},
+		{"reject directory pathspec dot", []string{"."}, true},
+		{"reject directory pathspec dotdot", []string{".."}, true},
+		{"reject trailing slash pathspec", []string{"src/"}, true},
+		{"reject glob pathspec star", []string{"src/*.go"}, true},
+		{"reject glob pathspec question", []string{"foo?.txt"}, true},
+		{"reject glob pathspec brackets", []string{"file[12].txt"}, true},
 	}
 
 	for _, tt := range tests {
@@ -127,6 +164,18 @@ func TestProjectConfig_ValidatePaths_NoRestrictions(t *testing.T) {
 	// Any path should be allowed
 	if err := project.ValidatePaths([]string{".git/config", ".env"}); err != nil {
 		t.Errorf("ValidatePaths should allow all paths when no restrictions: %v", err)
+	}
+
+	// Leading-dash flag injection should still be rejected even without path_deny.
+	if err := project.ValidatePaths([]string{"--force"}); err == nil {
+		t.Errorf("ValidatePaths should reject leading-dash entries even without path_deny")
+	}
+
+	// Directory/glob pathspecs are allowed when path_deny is empty
+	// (the directory-pathspec reject is a path_deny enforcement, not a
+	// universal constraint).
+	if err := project.ValidatePaths([]string{".", "src/", "src/*.go"}); err != nil {
+		t.Errorf("ValidatePaths should allow directory/glob pathspecs without path_deny: %v", err)
 	}
 }
 
@@ -581,5 +630,42 @@ func TestProjectsDirWithoutEnv(t *testing.T) {
 	got := ProjectsDir()
 	if got != want {
 		t.Errorf("ProjectsDir() = %q, want %q", got, want)
+	}
+}
+
+func TestProjectConfig_CurrentBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepoOnBranch(t, tmpDir, "ai/feature")
+
+	p := &ProjectConfig{RepoPath: tmpDir}
+	branch, err := p.CurrentBranch("git")
+	if err != nil {
+		t.Fatalf("CurrentBranch failed: %v", err)
+	}
+	if branch != "ai/feature" {
+		t.Errorf("CurrentBranch() = %q, want %q", branch, "ai/feature")
+	}
+}
+
+func TestProjectConfig_CurrentBranch_DetachedHEAD(t *testing.T) {
+	tmpDir := t.TempDir()
+	initGitRepoOnBranch(t, tmpDir, "main")
+
+	// Detach HEAD.
+	cmd := exec.Command("git", "-C", tmpDir, "checkout", "--detach", "HEAD")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout --detach failed: %v: %s", err, out)
+	}
+
+	p := &ProjectConfig{RepoPath: tmpDir}
+	if _, err := p.CurrentBranch("git"); err == nil {
+		t.Errorf("CurrentBranch should fail on detached HEAD")
+	}
+}
+
+func TestProjectConfig_CurrentBranch_EmptyRepoPath(t *testing.T) {
+	p := &ProjectConfig{}
+	if _, err := p.CurrentBranch("git"); err == nil {
+		t.Errorf("CurrentBranch should fail when RepoPath is empty")
 	}
 }

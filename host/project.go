@@ -172,10 +172,31 @@ func (p *ProjectConfig) ValidateBranch(branch string) error {
 	return fmt.Errorf("branch %q not allowed (must match one of: %v)", branch, p.Constraints.BranchAllow)
 }
 
-// ValidatePaths checks if all paths are allowed (not matching any deny pattern)
+// ValidatePaths checks that all paths are safe and not denied by policy.
+// Rejects path entries beginning with "-" to prevent flag injection
+// (e.g., "--force", "--patch", "--pathspec-from-file=..." reaching git as
+// subcommand options instead of pathspecs). When path_deny is non-empty,
+// also rejects directory and glob pathspecs (".", "..", trailing "/",
+// or any of "*?[]") because ValidatePaths only checks the literal
+// pathspec string and cannot see what files git would expand it to —
+// e.g., `git add .` under path_deny: [".env*"] would otherwise stage
+// .env files since "." does not match the .env* glob.
+// Then applies path_deny globs to literal file paths.
 func (p *ProjectConfig) ValidatePaths(paths []string) error {
+	for _, path := range paths {
+		if strings.HasPrefix(path, "-") {
+			return fmt.Errorf("path %q starts with '-' (flag injection prevention)", path)
+		}
+	}
+
 	if len(p.compiledPathPatterns) == 0 {
 		return nil
+	}
+
+	for _, path := range paths {
+		if isDirOrGlobPathspec(path) {
+			return fmt.Errorf("path %q is a directory or glob pathspec; path_deny enforcement requires per-file paths", path)
+		}
 	}
 
 	for _, path := range paths {
@@ -191,6 +212,58 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	}
 
 	return nil
+}
+
+// isDirOrGlobPathspec reports whether path is a directory pathspec
+// (".", "..", "./", trailing "/") or a glob pathspec (contains *, ?, [, ]).
+// ValidatePaths refuses these when path_deny is set because the literal
+// pathspec gives no visibility into the file set git would actually
+// stage, leaving a path_deny bypass.
+func isDirOrGlobPathspec(path string) bool {
+	if path == "." || path == ".." || path == "./" || path == "../" {
+		return true
+	}
+	if strings.HasSuffix(path, "/") {
+		return true
+	}
+	if strings.ContainsAny(path, "*?[]") {
+		return true
+	}
+	return false
+}
+
+// CurrentBranch resolves the current branch (HEAD) of RepoPath using
+// `git symbolic-ref --short HEAD`. Returns an error when the repository
+// is in detached HEAD state, when RepoPath is unset, or when git fails.
+//
+// gitPath is the git binary to invoke. Callers should pass the absolute
+// path of the same git binary used for execution (typically op.Command
+// after ResolveOperationCommands) so a manipulated PATH cannot spoof the
+// guard while the real operation runs a different binary. Passing "git"
+// is accepted for tests and falls back to PATH lookup.
+//
+// The git invocation runs with a minimal environment (PATH only) so that
+// GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* drift in the daemon environment
+// cannot redirect the guard to a repository different from the one
+// execution will actually mutate.
+func (p *ProjectConfig) CurrentBranch(gitPath string) (string, error) {
+	if p.RepoPath == "" {
+		return "", fmt.Errorf("repo_path is not set")
+	}
+	if gitPath == "" {
+		gitPath = "git"
+	}
+	cmd := exec.Command(gitPath, "-C", p.RepoPath, "symbolic-ref", "--short", "HEAD")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve HEAD branch (detached HEAD or git error): %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return "", fmt.Errorf("failed to resolve HEAD branch: empty output")
+	}
+	return branch, nil
 }
 
 // GetEnvForOperation returns environment variables for operation template expansion

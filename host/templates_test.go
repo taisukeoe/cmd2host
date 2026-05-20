@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,52 @@ func TestGetTemplate_ErrorWrapping(t *testing.T) {
 	// Check that it's a wrapped error (contains original fs error)
 	if !strings.Contains(err.Error(), "failed to read template") {
 		t.Errorf("error message should indicate read failure, got: %v", err)
+	}
+}
+
+// TestTemplates_MutatingGitOpsDeclareMutatesBranch ensures every git
+// subcommand known to mutate HEAD (add, commit, merge, push, rebase,
+// reset, cherry-pick) in any embedded template carries `mutates_branch:
+// true`. Forgetting the flag re-opens the round 1 / round 2 HEAD-guard
+// hole, so this lint test exists to prevent regressions when templates
+// are extended.
+func TestTemplates_MutatingGitOpsDeclareMutatesBranch(t *testing.T) {
+	mutating := map[string]bool{
+		"add":         true,
+		"commit":      true,
+		"merge":       true,
+		"push":        true,
+		"rebase":      true,
+		"reset":       true,
+		"cherry-pick": true,
+	}
+
+	templates, err := ListTemplates()
+	if err != nil {
+		t.Fatalf("ListTemplates() failed: %v", err)
+	}
+
+	for _, name := range templates {
+		t.Run(name, func(t *testing.T) {
+			data, err := GetTemplate(name)
+			if err != nil {
+				t.Fatalf("GetTemplate(%q) failed: %v", name, err)
+			}
+			var cfg struct {
+				Operations map[string]*Operation `json:"operations"`
+			}
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				t.Fatalf("unmarshal template %q: %v", name, err)
+			}
+			for opID, op := range cfg.Operations {
+				if op.Command != "git" || len(op.ArgsTemplate) == 0 {
+					continue
+				}
+				if mutating[op.ArgsTemplate[0]] && !op.MutatesBranch {
+					t.Errorf("template %q op %q (git %s) must declare mutates_branch: true",
+						name, opID, op.ArgsTemplate[0])
+				}
+			}
+		})
 	}
 }
