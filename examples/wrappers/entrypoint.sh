@@ -22,4 +22,31 @@ fi
 chown "$(id -u dev):$(id -g dev)" /home/dev
 [ -d /home/dev/.local ] && chown -R "$(id -u dev):$(id -g dev)" /home/dev/.local
 
+# Generate a transient MCP config that wires cmd2host-mcp to the per-session
+# daemon. cmd2host-mcp only honors `-host` / `-port` CLI flags (its defaults
+# `host.docker.internal:9876` would miss this session's ephemeral port), so
+# the wrapper's HOST_CMD_PROXY_HOST / HOST_CMD_PROXY_PORT env values must
+# reach Claude as explicit `args`. `--mcp-config` is the documented path for
+# this; writing to `/home/dev/.claude.json` (Claude Code-owned state) would
+# risk clobbering OAuth / per-project state.
+if [ -n "${HOST_CMD_PROXY_PORT:-}" ]; then
+  HOST_CMD_PROXY_HOST_VALUE="${HOST_CMD_PROXY_HOST:-host.docker.internal}"
+  install -d -m 0755 -o dev -g dev /run/claude-oneshot
+  jq -n \
+    --arg host "$HOST_CMD_PROXY_HOST_VALUE" \
+    --arg port "$HOST_CMD_PROXY_PORT" \
+    --arg token_file "/run/cmd2host-token" \
+    '{
+       mcpServers: {
+         cmd2host: {
+           command: "cmd2host-mcp",
+           args: ["-host", $host, "-port", $port, "-token-file", $token_file]
+         }
+       }
+     }' > /run/claude-oneshot/mcp.json
+  chown dev:dev /run/claude-oneshot/mcp.json
+  chmod 0644 /run/claude-oneshot/mcp.json
+  exec gosu dev claude --mcp-config /run/claude-oneshot/mcp.json --strict-mcp-config "$@"
+fi
+
 exec gosu dev claude "$@"

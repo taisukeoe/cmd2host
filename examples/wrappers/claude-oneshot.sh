@@ -226,6 +226,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# openssl is used to generate the per-session session token. macOS ships
+# LibreSSL by default but the binary may be absent from PATH in trimmed
+# environments; fail fast with a clear message rather than later under
+# `set -euo pipefail` when `openssl rand` errors out.
+if ! command -v openssl >/dev/null 2>&1; then
+  err "openssl not found in PATH (needed to generate the per-session token)"
+  exit 1
+fi
+
 # --api-only preflight
 if [ "$NETWORK_MODE" = "api-only" ] && [ -z "$PROXY_IMAGE" ]; then
   err "PROXY_IMAGE env is required with --api-only"
@@ -366,6 +375,10 @@ PY
 host_uid="$(id -u)"
 host_gid="$(id -g)"
 echo "claude-oneshot: bootstrapping volume subpath layout for $VOLUME (uid=${host_uid} gid=${host_gid})"
+# chown only the subpath directory itself (not its contents recursively).
+# `/v/claude` is the volume-subpath mount target; Claude Code's persisted
+# auth / cache state lives inside it across sessions, and a recursive walk
+# would scale with that content and risk overwriting persisted ownership.
 docker run --rm \
   --user root \
   --entrypoint sh \
@@ -373,7 +386,7 @@ docker run --rm \
   -e "HOST_UID=${host_uid}" \
   -e "HOST_GID=${host_gid}" \
   "$IMAGE" \
-  -c 'mkdir -p /v/claude && chown -R "${HOST_UID}:${HOST_GID}" /v'
+  -c 'mkdir -p /v/claude && chown "${HOST_UID}:${HOST_GID}" /v/claude'
 
 # ---------------------------------------------------------------------------
 # Repo materialization: ephemeral fresh clone (when no --source)
@@ -545,6 +558,11 @@ fi
 # Docker run: bind mounts + env injection + start
 # ---------------------------------------------------------------------------
 DOCKER_FLAGS=(--rm -it)
+
+# Launch the in-container claude process with the mounted repo as its
+# working directory; without this, WORKDIR=/home/dev (from the Dockerfile)
+# would leave Claude operating outside /workspace/repo.
+DOCKER_FLAGS+=(-w /workspace/repo)
 
 DOCKER_FLAGS+=(
   -v "${WORK_DIR}:/workspace/repo"

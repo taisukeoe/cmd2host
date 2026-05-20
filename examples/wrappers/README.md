@@ -76,9 +76,13 @@ dual-homed proxy/relay sidecar:
 ## Quick start
 
 ```bash
-# Build the main image (CMD2HOST_VERSION must be a cmd2host release tag).
+# Build the main image. CMD2HOST_VERSION is the cmd2host release tag.
+# CLAUDE_CODE_VERSION pins the Claude Code installer to a specific
+# version (`stable`, `latest`, or a version string like `2.0.36`) — both
+# build args are required so builds stay reproducible.
 docker build \
   --build-arg CMD2HOST_VERSION=binary-v0.1.8 \
+  --build-arg CLAUDE_CODE_VERSION=stable \
   -t my-claude-oneshot \
   examples/wrappers/
 
@@ -126,6 +130,20 @@ pointed at the run dir's `cmd2host_state/`. Listen mode is forced to
 9876 is never touched, and two parallel sessions cannot collide on the
 port because each gets a fresh allocation.
 
+### MCP config generation
+
+`cmd2host-mcp` honors only `-host` / `-port` / `-token-file` CLI flags
+(its defaults `host.docker.internal:9876` would miss this session's
+ephemeral port), so the wrapper passes `HOST_CMD_PROXY_HOST` /
+`HOST_CMD_PROXY_PORT` to the container as env, and the entrypoint uses
+`jq` to materialize `/run/claude-oneshot/mcp.json` with those values
+baked into the MCP `args`. Claude is then launched with
+`--mcp-config /run/claude-oneshot/mcp.json --strict-mcp-config` so the
+session uses exactly this MCP wiring and ignores user / project MCP
+config from the auth volume. Writing to `/home/dev/.claude.json`
+directly is avoided because that file is Claude Code-owned state
+(OAuth / per-project session metadata).
+
 ### Host config inheritance
 
 The wrapper does NOT re-derive cmd2host policy. It reads the host config
@@ -163,7 +181,7 @@ The container sees:
 
 | Bind mount | Role |
 |---|---|
-| Working repo at `/workspace/repo` | Read-write workspace (clone or `--source`) |
+| Working repo at `/workspace/repo` | Read-write workspace (clone or `--source`). The wrapper also passes `-w /workspace/repo` so Claude starts with this as its working directory (otherwise WORKDIR from the Dockerfile would leave Claude operating from `/home/dev`) |
 | Raw token at `/run/cmd2host-token` | cmd2host-mcp's session token (mode 600) |
 | Output dir at `/output` | Container writes results back to the host run dir |
 | Auth volume subpath at `/home/dev/.claude` | Survives atomic rename (see above) |
@@ -193,9 +211,10 @@ no default gateway and no route to the open internet. The dual-homed
 proxy sidecar is the container's only egress path:
 
 - `HTTPS_PROXY` / `https_proxy` are set to `http://proxy:8080`, where
-  tinyproxy enforces an allowlist of CONNECT destinations
-  (`api.anthropic.com:443` by default — extend `tinyproxy.filter` for
-  more)
+  tinyproxy enforces an allowlist of CONNECT destinations. The shipped
+  baseline allows `api.anthropic.com`, `claude.ai`, `platform.claude.com`,
+  `downloads.claude.ai`, and `raw.githubusercontent.com` — narrow or
+  widen the list by editing `tinyproxy.filter` to match your policy
 - `cmd2host-mcp` uses `HOST_CMD_PROXY_HOST=cmd2host-relay` /
   `HOST_CMD_PROXY_PORT=9090`, which the sidecar's socat forwards to the
   per-session daemon at `host.docker.internal:<ephemeral port>`
@@ -274,11 +293,17 @@ config overrides are all preserved.
 
 `claude-oneshot.sh` passes `HOST_UID=$(id -u)` / `HOST_GID=$(id -g)` into
 the container. The image's `entrypoint.sh` checks whether the build-time
-`dev` user already matches; if not, it runs `usermod -u` / `groupmod -g`
-and `chown -R dev:dev /home/dev` before dropping privileges with
-`gosu dev claude`. This keeps ownership consistent across the workspace
-bind mount, the auth volume, and the `body_file` directory on hosts
-where the user's uid is not 1000.
+`dev` user already matches; if not, it runs `usermod -u` / `groupmod -g`,
+then chowns `/home/dev` (the home root itself, non-recursive) and
+recursively chowns `/home/dev/.local` (image-owned binaries). The auth
+volume mounted at `/home/dev/.claude` is intentionally left alone — the
+wrapper's volume bootstrap (`mkdir -p /v/claude && chown /v/claude`)
+already gives that subpath the correct ownership at the host uid, and a
+recursive walk inside the entrypoint would scale with persisted auth /
+cache state and risk overwriting volume contents on every start.
+Privileges are then dropped via `gosu dev claude`. The result keeps
+ownership consistent across the workspace bind mount, the auth volume,
+and the `body_file` directory on hosts where the user's uid is not 1000.
 
 ## Customization points
 

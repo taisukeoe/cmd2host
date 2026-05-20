@@ -8,7 +8,11 @@
 # brokers two traffic paths:
 #
 #   - proxy:8080         HTTPS CONNECT allowlist via tinyproxy
-#                        (default allowlist: api.anthropic.com:443)
+#                        (default allowlist baseline: api.anthropic.com,
+#                        claude.ai, platform.claude.com, downloads.claude.ai,
+#                        raw.githubusercontent.com — see tinyproxy.filter
+#                        for the full list and adopter-side tightening
+#                        guidance)
 #   - cmd2host-relay:9090
 #                        Raw TCP relay via socat to
 #                        host.docker.internal:$CMD2HOST_TARGET_PORT
