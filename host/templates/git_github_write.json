@@ -3,6 +3,10 @@
   "repo_path": "/path/to/repo",
   "allowed_operations": [
     "git_fetch",
+    "git_status",
+    "git_add",
+    "git_commit",
+    "git_merge",
     "git_push",
     "gh_pr_view",
     "gh_pr_list",
@@ -27,6 +31,45 @@
       "args_template": ["fetch", "origin"],
       "params": {},
       "description": "Fetch from origin remote"
+    },
+    "git_status": {
+      "command": "git",
+      "args_template": ["status", "{paths}"],
+      "params": {
+        "paths": {"type": "array", "optional": true, "items": {"type": "string"}}
+      },
+      "allowed_flags": ["--short", "-s", "--branch", "-b", "--porcelain", "--long", "--untracked-files", "--ignored"],
+      "description": "Show working tree status (paths optional to scope output)"
+    },
+    "git_add": {
+      "command": "git",
+      "args_template": ["add", "{paths}"],
+      "params": {
+        "paths": {"type": "array", "optional": true, "items": {"type": "string"}}
+      },
+      "allowed_flags": ["--update", "-u", "--all", "-A", "--no-all", "--ignore-removal"],
+      "mutates_branch": true,
+      "description": "Stage changes. Provide paths and/or use --update/-u (tracked-only) or --all/-A (all changes)"
+    },
+    "git_commit": {
+      "command": "git",
+      "args_template": ["commit", "-m", "{message}"],
+      "params": {
+        "message": {"type": "string", "minLength": 1, "maxLength": 10000}
+      },
+      "allowed_flags": ["--allow-empty", "--allow-empty-message", "--signoff", "-s"],
+      "mutates_branch": true,
+      "description": "Create a commit with the given message (repo-side hooks run unless disabled in the repo)"
+    },
+    "git_merge": {
+      "command": "git",
+      "args_template": ["merge", "{branch}"],
+      "params": {
+        "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
+      },
+      "allowed_flags": ["--ff-only", "--no-ff", "--ff", "--no-edit", "--squash"],
+      "mutates_branch": true,
+      "description": "Merge the given branch into the current branch (branch_allow applies to both source branch and HEAD)"
     },
     "git_push": {
       "command": "git",
