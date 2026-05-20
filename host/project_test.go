@@ -7,10 +7,10 @@ import (
 	"testing"
 )
 
-// initGitRepoOnBranch initializes a git repo at dir, creates one commit on
-// the given branch name, and returns dir. Shared by project_test.go and
-// validator_test.go to exercise CurrentBranch() / current-branch guard
-// paths against real git invocations.
+// initGitRepoOnBranch initializes a git repo at dir and creates one commit
+// on the given branch name. Shared by project_test.go and validator_test.go
+// to exercise CurrentBranch() / current-branch guard paths against real
+// git invocations.
 func initGitRepoOnBranch(t *testing.T, dir, branch string) {
 	t.Helper()
 	run := func(args ...string) {
@@ -133,6 +133,12 @@ func TestProjectConfig_ValidatePaths(t *testing.T) {
 		{"reject --pathspec-from-file", []string{"--pathspec-from-file=paths.txt"}, true},
 		{"reject -u single-dash flag", []string{"-u"}, true},
 		{"reject leading-dash among valid paths", []string{"src/main.go", "--patch"}, true},
+		{"reject directory pathspec dot", []string{"."}, true},
+		{"reject directory pathspec dotdot", []string{".."}, true},
+		{"reject trailing slash pathspec", []string{"src/"}, true},
+		{"reject glob pathspec star", []string{"src/*.go"}, true},
+		{"reject glob pathspec question", []string{"foo?.txt"}, true},
+		{"reject glob pathspec brackets", []string{"file[12].txt"}, true},
 	}
 
 	for _, tt := range tests {
@@ -163,6 +169,13 @@ func TestProjectConfig_ValidatePaths_NoRestrictions(t *testing.T) {
 	// Leading-dash flag injection should still be rejected even without path_deny.
 	if err := project.ValidatePaths([]string{"--force"}); err == nil {
 		t.Errorf("ValidatePaths should reject leading-dash entries even without path_deny")
+	}
+
+	// Directory/glob pathspecs are allowed when path_deny is empty
+	// (the directory-pathspec reject is a path_deny enforcement, not a
+	// universal constraint).
+	if err := project.ValidatePaths([]string{".", "src/", "src/*.go"}); err != nil {
+		t.Errorf("ValidatePaths should allow directory/glob pathspecs without path_deny: %v", err)
 	}
 }
 
@@ -625,7 +638,7 @@ func TestProjectConfig_CurrentBranch(t *testing.T) {
 	initGitRepoOnBranch(t, tmpDir, "ai/feature")
 
 	p := &ProjectConfig{RepoPath: tmpDir}
-	branch, err := p.CurrentBranch()
+	branch, err := p.CurrentBranch("git")
 	if err != nil {
 		t.Fatalf("CurrentBranch failed: %v", err)
 	}
@@ -645,14 +658,14 @@ func TestProjectConfig_CurrentBranch_DetachedHEAD(t *testing.T) {
 	}
 
 	p := &ProjectConfig{RepoPath: tmpDir}
-	if _, err := p.CurrentBranch(); err == nil {
+	if _, err := p.CurrentBranch("git"); err == nil {
 		t.Errorf("CurrentBranch should fail on detached HEAD")
 	}
 }
 
 func TestProjectConfig_CurrentBranch_EmptyRepoPath(t *testing.T) {
 	p := &ProjectConfig{}
-	if _, err := p.CurrentBranch(); err == nil {
+	if _, err := p.CurrentBranch("git"); err == nil {
 		t.Errorf("CurrentBranch should fail when RepoPath is empty")
 	}
 }

@@ -123,6 +123,8 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 		{"reject --all without paths", []string{"--all"}},
 		{"reject -u without paths", []string{"-u"}},
 		{"reject --update without paths", []string{"--update"}},
+		{"reject --all=true (normalized form)", []string{"--all=true"}},
+		{"reject --update=1 (normalized form)", []string{"--update=1"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

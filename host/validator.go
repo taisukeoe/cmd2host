@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // Validator validates operations against project configuration
@@ -88,8 +89,14 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 	if filepath.Base(op.Command) == "git" && len(op.ArgsTemplate) > 0 && op.ArgsTemplate[0] == "add" &&
 		len(policyReq.Paths) == 0 && len(project.Constraints.PathDeny) > 0 {
 		for _, flag := range req.Flags {
-			switch flag {
-			case "-A", "-a", "--all", "-u", "--update":
+			// Normalize "--flag=value" to "--flag" to mirror ValidateFlags;
+			// otherwise inputs like "--all=true" would slip past this switch.
+			name := flag
+			if i := strings.Index(flag, "="); i > 0 {
+				name = flag[:i]
+			}
+			switch name {
+			case "-A", "--all", "-u", "--update":
 				return nil, ValidationResult{
 					OK:      false,
 					Message: fmt.Sprintf("git add %s without explicit paths bypasses path_deny; provide explicit paths", flag),
@@ -103,7 +110,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 	// AI could mutate any branch the repo happens to be on (e.g., main),
 	// even though branch_allow constrains the branch param.
 	if op.MutatesBranch && len(project.Constraints.BranchAllow) > 0 {
-		head, err := project.CurrentBranch()
+		head, err := project.CurrentBranch(op.Command)
 		if err != nil {
 			return nil, ValidationResult{
 				OK:      false,
