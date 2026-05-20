@@ -1,0 +1,34 @@
+# Sidecar image for claude-oneshot --api-only mode.
+#
+# Build:
+#   docker build -f examples/wrappers/Dockerfile.proxy -t <name> examples/wrappers/
+#
+# The sidecar is dual-homed on the main container's --internal network
+# (under aliases `proxy` and `cmd2host-relay`) and an external bridge, and
+# brokers two traffic paths:
+#
+#   - proxy:8080         HTTPS CONNECT allowlist via tinyproxy
+#                        (default allowlist: api.anthropic.com:443)
+#   - cmd2host-relay:9090
+#                        Raw TCP relay via socat to
+#                        host.docker.internal:$CMD2HOST_TARGET_PORT
+#
+# Expected environment (injected by claude-oneshot.sh --api-only branch):
+#   CMD2HOST_TARGET_PORT   Per-session daemon port on the host (required)
+#   CMD2HOST_RELAY_PORT    Listen port for the TCP relay (default: 9090)
+
+# syntax=docker/dockerfile:1
+FROM alpine:3.20
+
+# Bash is needed by the entrypoint's trap handling; tinyproxy provides the
+# HTTPS CONNECT proxy; socat provides the raw TCP relay.
+RUN apk add --no-cache bash tinyproxy socat
+
+COPY tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+COPY tinyproxy.filter /etc/tinyproxy/filter
+COPY proxy-entrypoint.sh /usr/local/bin/proxy-entrypoint.sh
+RUN chmod +x /usr/local/bin/proxy-entrypoint.sh
+
+EXPOSE 8080 9090
+
+ENTRYPOINT ["/usr/local/bin/proxy-entrypoint.sh"]
