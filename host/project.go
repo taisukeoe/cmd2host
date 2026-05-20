@@ -172,8 +172,17 @@ func (p *ProjectConfig) ValidateBranch(branch string) error {
 	return fmt.Errorf("branch %q not allowed (must match one of: %v)", branch, p.Constraints.BranchAllow)
 }
 
-// ValidatePaths checks if all paths are allowed (not matching any deny pattern)
+// ValidatePaths checks that all paths are safe and not denied by policy.
+// Rejects path entries beginning with "-" to prevent flag injection
+// (e.g., "--force", "--patch", "--pathspec-from-file=..." reaching git as
+// subcommand options instead of pathspecs). Then applies path_deny globs.
 func (p *ProjectConfig) ValidatePaths(paths []string) error {
+	for _, path := range paths {
+		if strings.HasPrefix(path, "-") {
+			return fmt.Errorf("path %q starts with '-' (flag injection prevention)", path)
+		}
+	}
+
 	if len(p.compiledPathPatterns) == 0 {
 		return nil
 	}
@@ -191,6 +200,31 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	}
 
 	return nil
+}
+
+// CurrentBranch resolves the current branch (HEAD) of RepoPath using
+// `git symbolic-ref --short HEAD`. Returns an error when the repository
+// is in detached HEAD state, when RepoPath is unset, or when git fails.
+//
+// The git invocation runs with a minimal environment (PATH only) so that
+// GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* drift in the daemon environment
+// cannot redirect the guard to a repository different from the one
+// execution will actually mutate.
+func (p *ProjectConfig) CurrentBranch() (string, error) {
+	if p.RepoPath == "" {
+		return "", fmt.Errorf("repo_path is not set")
+	}
+	cmd := exec.Command("git", "-C", p.RepoPath, "symbolic-ref", "--short", "HEAD")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve HEAD branch (detached HEAD or git error): %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return "", fmt.Errorf("failed to resolve HEAD branch: empty output")
+	}
+	return branch, nil
 }
 
 // GetEnvForOperation returns environment variables for operation template expansion

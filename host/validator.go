@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 )
 
 // Validator validates operations against project configuration
@@ -72,6 +73,47 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 			return nil, ValidationResult{
 				OK:      false,
 				Message: err.Error(),
+			}
+		}
+	}
+
+	// Special guard: `git add` with broad staging flags but no explicit paths
+	// stages everything in the working tree, bypassing path_deny entirely
+	// (since ValidatePaths is only called when paths are present). When the
+	// project has a non-empty path_deny, require explicit paths so each one
+	// is validated. Lax projects (no path_deny) keep the flexible behavior.
+	//
+	// Use filepath.Base because ResolveOperationCommands rewrites op.Command
+	// to an absolute path (e.g. "/usr/bin/git") in initialized configs.
+	if filepath.Base(op.Command) == "git" && len(op.ArgsTemplate) > 0 && op.ArgsTemplate[0] == "add" &&
+		len(policyReq.Paths) == 0 && len(project.Constraints.PathDeny) > 0 {
+		for _, flag := range req.Flags {
+			switch flag {
+			case "-A", "-a", "--all", "-u", "--update":
+				return nil, ValidationResult{
+					OK:      false,
+					Message: fmt.Sprintf("git add %s without explicit paths bypasses path_deny; provide explicit paths", flag),
+				}
+			}
+		}
+	}
+
+	// For operations that mutate the current branch (git_add, git_commit,
+	// git_merge, git_push), enforce branch_allow on HEAD too. Without this,
+	// AI could mutate any branch the repo happens to be on (e.g., main),
+	// even though branch_allow constrains the branch param.
+	if op.MutatesBranch && len(project.Constraints.BranchAllow) > 0 {
+		head, err := project.CurrentBranch()
+		if err != nil {
+			return nil, ValidationResult{
+				OK:      false,
+				Message: fmt.Sprintf("current branch guard: %v", err),
+			}
+		}
+		if err := project.ValidateBranch(head); err != nil {
+			return nil, ValidationResult{
+				OK:      false,
+				Message: fmt.Sprintf("current branch %q not allowed for mutating operation: %v", head, err),
 			}
 		}
 	}

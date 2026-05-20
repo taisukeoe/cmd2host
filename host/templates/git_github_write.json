@@ -34,6 +34,7 @@
       "params": {
         "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
       },
+      "mutates_branch": true,
       "description": "Push branch to origin (strict sanitization applied)"
     },
     "gh_pr_view": {

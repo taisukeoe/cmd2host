@@ -14,11 +14,12 @@ var inlinePlaceholderPattern = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 
 // Operation defines a predefined command template
 type Operation struct {
-	Command      string                 `json:"command"`       // e.g., "gh", "git"
-	ArgsTemplate []string               `json:"args_template"` // e.g., ["pr", "view", "{number}"]
-	Params       map[string]ParamSchema `json:"params"`        // Parameter schemas
-	AllowedFlags []string               `json:"allowed_flags"` // e.g., ["--state", "--limit"]
-	Description  string                 `json:"description"`   // Human-readable description
+	Command       string                 `json:"command"`                  // e.g., "gh", "git"
+	ArgsTemplate  []string               `json:"args_template"`            // e.g., ["pr", "view", "{number}"]
+	Params        map[string]ParamSchema `json:"params"`                   // Parameter schemas
+	AllowedFlags  []string               `json:"allowed_flags"`            // e.g., ["--state", "--limit"]
+	Description   string                 `json:"description"`              // Human-readable description
+	MutatesBranch bool                   `json:"mutates_branch,omitempty"` // True if the operation mutates the current branch (HEAD); enforces branch_allow on HEAD
 }
 
 // ItemsSchema defines the schema for array items
