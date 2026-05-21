@@ -70,7 +70,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 
 	// Validate path constraints (for git add, etc.)
 	if len(policyReq.Paths) > 0 {
-		if err := project.ValidatePaths(policyReq.Paths); err != nil {
+		if err := project.ValidatePaths(project.RepoPath, policyReq.Paths); err != nil {
 			return nil, ValidationResult{
 				OK:      false,
 				Message: err.Error(),

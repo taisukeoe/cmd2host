@@ -176,13 +176,16 @@ func (p *ProjectConfig) ValidateBranch(branch string) error {
 // Rejects path entries beginning with "-" to prevent flag injection
 // (e.g., "--force", "--patch", "--pathspec-from-file=..." reaching git as
 // subcommand options instead of pathspecs). When path_deny is non-empty,
-// also rejects directory and glob pathspecs (".", "..", trailing "/",
-// or any of "*?[]") because ValidatePaths only checks the literal
-// pathspec string and cannot see what files git would expand it to —
-// e.g., `git add .` under path_deny: [".env*"] would otherwise stage
-// .env files since "." does not match the .env* glob.
-// Then applies path_deny globs to literal file paths.
-func (p *ProjectConfig) ValidatePaths(paths []string) error {
+// also requires each path to be a per-file repo-relative pathspec — see
+// requireEnforceablePathspec for the full list of rejected forms — then
+// applies path_deny globs to the remaining literal file paths.
+//
+// repoPath is the local repository path used as the resolution base for
+// the repo-relative containment check and Lstat. When path_deny is
+// non-empty, repoPath MUST be non-empty (fail-closed: otherwise
+// containment and Lstat would resolve against the daemon CWD rather
+// than the repository git will actually mutate).
+func (p *ProjectConfig) ValidatePaths(repoPath string, paths []string) error {
 	for _, path := range paths {
 		if strings.HasPrefix(path, "-") {
 			return fmt.Errorf("path %q starts with '-' (flag injection prevention)", path)
@@ -194,8 +197,8 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	}
 
 	for _, path := range paths {
-		if isDirOrGlobPathspec(path) {
-			return fmt.Errorf("path %q is a directory or glob pathspec; path_deny enforcement requires per-file paths", path)
+		if err := p.requireEnforceablePathspec(repoPath, path); err != nil {
+			return err
 		}
 	}
 
@@ -214,22 +217,77 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	return nil
 }
 
-// isDirOrGlobPathspec reports whether path is a directory pathspec
-// (".", "..", "./", trailing "/") or a glob pathspec (contains *, ?, [, ]).
-// ValidatePaths refuses these when path_deny is set because the literal
-// pathspec gives no visibility into the file set git would actually
-// stage, leaving a path_deny bypass.
-func isDirOrGlobPathspec(path string) bool {
-	if path == "." || path == ".." || path == "./" || path == "../" {
-		return true
+// requireEnforceablePathspec returns nil when path is a per-file
+// repo-relative pathspec that path_deny can match literally. Returns a
+// descriptive error otherwise — caller propagates it to the operation
+// request. Rejected forms:
+//   - directory pathspecs (".", "..", "./", "../", trailing "/")
+//   - glob pathspecs (containing *, ?, [, ])
+//   - pathspec magic forms (starting with ":" or the "\:" escape that
+//     git treats as a literal ":" prefix)
+//   - absolute pathspecs (path_deny enforcement expects repo-relative input)
+//   - pathspecs whose normalized form resolves outside repoPath
+//   - bare directory names that exist under repoPath
+//
+// The caller only invokes this when path_deny is non-empty. repoPath
+// must be set in that case; otherwise the function returns an error so
+// the daemon CWD is never used as the resolution base.
+//
+// Lstat errors for nonexistent paths are not policy errors — such
+// pathspecs are delegated to git, which surfaces the proper "did not
+// match" error on its own. Non-ENOENT Lstat errors (EPERM, etc.)
+// return an error so a directory cannot slip past the bare-directory
+// branch when the daemon lacks read permission to detect it.
+func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error {
+	switch {
+	case path == "." || path == ".." || path == "./" || path == "../":
+		return fmt.Errorf("path %q is a directory pathspec; path_deny enforcement requires per-file paths", path)
+	case strings.HasSuffix(path, "/"):
+		return fmt.Errorf("path %q is a directory pathspec; path_deny enforcement requires per-file paths", path)
+	case strings.ContainsAny(path, "*?[]"):
+		return fmt.Errorf("path %q is a glob pathspec; path_deny enforcement requires per-file paths", path)
+	case strings.HasPrefix(path, ":") || strings.HasPrefix(path, `\:`):
+		// Pathspec magic ":(top)foo", ":/foo", ":(glob)pattern", ":!exclude"
+		// is interpreted specially by git. The "\:" escape form is also
+		// rejected: git treats `\:foo` as the literal pathspec `:foo`,
+		// which path_deny cannot enumerate ahead of time.
+		return fmt.Errorf("path %q is a magic pathspec; path_deny enforcement requires per-file paths", path)
+	case filepath.IsAbs(path):
+		return fmt.Errorf("path %q is absolute; path_deny enforcement requires repo-relative paths", path)
 	}
-	if strings.HasSuffix(path, "/") {
-		return true
+	if repoPath == "" {
+		return fmt.Errorf("repo_path required for path_deny enforcement (repo_path is empty)")
 	}
-	if strings.ContainsAny(path, "*?[]") {
-		return true
+	// Normalize repoPath so the repo-relative containment check does not
+	// depend on the daemon CWD (a relative repoPath would resolve against
+	// CWD inside filepath.Rel below).
+	repoAbs, err := filepath.Abs(repoPath)
+	if err != nil {
+		return fmt.Errorf("repo_path %q: resolve failed: %w", repoPath, err)
 	}
-	return false
+	cleanPath := filepath.Clean(path)
+	joined := filepath.Join(repoAbs, cleanPath)
+	rel, err := filepath.Rel(repoAbs, joined)
+	if err != nil {
+		return fmt.Errorf("path %q: repo-relative check failed: %w", path, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes repo_path; path_deny enforcement requires repo-relative paths", path)
+	}
+	info, err := os.Lstat(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nonexistent literal pathspec: let git report the proper
+			// error instead of treating Lstat failure as a policy
+			// violation.
+			return nil
+		}
+		return fmt.Errorf("path %q: lstat failed during path_deny enforcement: %w", path, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path %q is a bare directory; path_deny enforcement requires per-file paths", path)
+	}
+	return nil
 }
 
 // CurrentBranch resolves the current branch (HEAD) of RepoPath using
