@@ -1,0 +1,19 @@
+# HTTPS CONNECT allowlist for the claude-oneshot --api-only sidecar.
+# One host (or extended-regex pattern) per line. Comments start with `#`.
+#
+# Patterns are matched against the CONNECT destination host as extended
+# regular expressions (FilterExtended On in tinyproxy.conf), so anchor
+# with `^` and `$` when you want a literal match.
+#
+# Baseline reflects the hosts Claude Code typically needs for interactive
+# startup, auth flows, and plugin marketplace metadata (per the published
+# network configuration / install troubleshooting guides). Tighten it down
+# (e.g. drop downloads.claude.ai once the image is built and auto-update
+# is disabled) or widen it (e.g. add storage.googleapis.com for older
+# native updater flows) to match your policy.
+
+^api\.anthropic\.com$
+^claude\.ai$
+^platform\.claude\.com$
+^downloads\.claude\.ai$
+^raw\.githubusercontent\.com$

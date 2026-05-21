@@ -22,6 +22,21 @@ Connection modes:
 
 Note: Wrapper scripts (e.g., `gh`) are installed but display MCP usage instructions instead of executing commands directly.
 
+## Choose an integration path
+
+The **DevContainer Feature is the primary supported path** and is what the
+Quick Start below configures. The **per-session wrapper example** is a
+parallel option for agent sessions launched directly from the host instead
+of from an existing `.devcontainer/`.
+
+| Path | Use when |
+|---|---|
+| **DevContainer Feature** (Quick Start below) | You already have a project `.devcontainer/` and want cmd2host installed as part of that environment, so opening the container in VS Code / Codespaces gives the AI agent the `gh` (and friends) wrappers automatically. |
+| **Per-session wrapper example** ([`examples/wrappers/`](examples/wrappers/)) | Your agent session is launched from the host instead of from a `.devcontainer/`, and you want the per-session daemon, token rotation, auth volume, and bind mount layout already wired up. |
+
+Both paths share the same host daemon and project configuration — they
+only differ in how the container side is constructed.
+
 ## Quick Start
 
 ### 1. Install daemon on host (one-time)
@@ -436,6 +451,30 @@ MCP server requests use token authentication. Operations are validated against:
 3. Allowed operations list (default deny)
 4. Parameter type checking and validation
 5. Constraint checks (branch patterns, path globs)
+
+## Per-session wrapper example
+
+[`examples/wrappers/`](examples/wrappers/) ships a reference wrapper that
+launches an ephemeral container per AI agent session, with all of the
+load-bearing wire-up cmd2host expects (per-session daemon under
+`CMD2HOST_CONFIG_DIR`, BLAKE3-hashed session token, auth volume with the
+`volume-subpath` mount, `body_file` bind mount, optional `--api-only`
+kernel-level egress isolation through a tinyproxy + socat sidecar)
+already in place.
+
+Use it as a starting point when:
+
+- Your AI agent setup is host-side rather than `.devcontainer/`-driven
+- You want to run multiple isolated sessions for the same repo in
+  parallel without disturbing the resident daemon on TCP 9876
+- You want a documented walk-through of the per-session wire-up to
+  adapt for a different image / different agent CLI / stricter network
+  policy
+
+The wrapper is intentionally Claude Code specific. The cmd2host wire-up
+itself is agent-neutral; see the wrapper's
+[README](examples/wrappers/README.md#extending-to-other-ai-agents) for
+how to swap the CLI.
 
 ## Environment Variables
 
