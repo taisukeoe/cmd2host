@@ -79,35 +79,130 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-# Download binary from GitHub Releases
+# Verify a binary's sha256 against a checksums.txt entry.
+# Args: $1 = path to checksums.txt, $2 = path to binary, $3 = filename to look up
+# Returns 0 on success, 1 on failure (mismatch, missing entry, or missing tool).
+verify_sha256() {
+    local checksums_path="$1"
+    local binary_path="$2"
+    local expected_name="$3"
+
+    # Extract expected hash. sha256sum format is "<hash>  <name>" (two spaces).
+    # The release pipeline currently emits plain "name" via `sha256sum cmd2host-*`,
+    # but accept "./name" too as a defensive forward-compat safety net for any
+    # alternate generator (`find . | xargs sha256sum`, etc.).
+    local expected_hash
+    expected_hash="$(awk -v name="$expected_name" \
+        '$2 == name || $2 == "./"name { print $1; exit }' "$checksums_path")"
+    if [[ -z "$expected_hash" ]]; then
+        echo "Error: checksum entry for $expected_name not found in checksums.txt" >&2
+        return 1
+    fi
+
+    # Compute actual hash with whatever sha256 tool is available.
+    local actual_hash=""
+    if command -v shasum >/dev/null 2>&1; then
+        actual_hash="$(shasum -a 256 "$binary_path" | awk '{print $1}')"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        actual_hash="$(sha256sum "$binary_path" | awk '{print $1}')"
+    elif command -v openssl >/dev/null 2>&1; then
+        actual_hash="$(openssl dgst -sha256 "$binary_path" | awk '{print $NF}')"
+    else
+        echo "Error: no sha256 tool available (need shasum, sha256sum, or openssl)" >&2
+        return 1
+    fi
+
+    if [[ -z "$actual_hash" ]]; then
+        echo "Error: failed to compute sha256 of $binary_path" >&2
+        return 1
+    fi
+
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+        echo "Error: sha256 mismatch for $expected_name" >&2
+        echo "  expected: $expected_hash" >&2
+        echo "  actual:   $actual_hash" >&2
+        return 1
+    fi
+
+    echo "Verified sha256: $expected_name"
+    return 0
+}
+
+# Download cmd2host binary plus checksums.txt to a temp dir, verify, then move
+# the verified binary to the destination path. The binary is only chmod +x'd by
+# the caller after this function returns 0, so a checksum mismatch keeps the
+# user environment unchanged.
 download_binary() {
-    local platform binary_path
-    platform="$(detect_platform)"
-    binary_path="$1"
+    local final_path binary_name tmp_dir downloaded rc
+    final_path="$1"
+
+    # `set -e` is suppressed inside a function invoked from an `if`/`elif`
+    # condition (this caller passes us through `elif download_binary ...`).
+    # Every load-bearing step is checked explicitly so an unverified binary
+    # cannot reach `$final_path` via a silently-failed `mv` or `detect_platform`.
+    # We deliberately avoid `trap RETURN` for cleanup: under `set -o functrace`,
+    # the outer RETURN trap would be inherited by the nested `verify_sha256`
+    # call and fire prematurely, deleting `tmp_dir` before `mv`. Single-exit
+    # via `rc` + an explicit `rm -rf "$tmp_dir"` is functrace-safe.
+    local platform
+    if ! platform="$(detect_platform)"; then
+        return 1
+    fi
+    binary_name="cmd2host-${platform}"
+
+    if ! tmp_dir="$(mktemp -d -t cmd2host-install.XXXXXX)"; then
+        echo "Error: failed to create temp directory for binary download" >&2
+        return 1
+    fi
 
     echo "Downloading cmd2host for ${platform}..."
 
-    # Try gh CLI first (works for private repos if authenticated)
+    downloaded=false
+    rc=0
+
+    # Try gh CLI first (works for private repos if authenticated). gh accepts
+    # multiple -p patterns, so the binary and checksums.txt land together.
     if command -v gh &> /dev/null; then
-        if gh release download -R "${GITHUB_REPO}" -p "cmd2host-${platform}" -D "$(dirname "$binary_path")" --clobber 2>/dev/null; then
-            mv "$(dirname "$binary_path")/cmd2host-${platform}" "$binary_path"
+        if gh release download -R "${GITHUB_REPO}" \
+            -p "$binary_name" -p "checksums.txt" \
+            -D "$tmp_dir" --clobber 2>/dev/null; then
+            downloaded=true
             echo "Downloaded from GitHub Releases (via gh)"
-            return 0
         fi
     fi
 
-    # Fall back to curl (only works for public repos)
-    local download_url
-    download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/cmd2host-${platform}"
+    # Fall back to curl (only works for public repos). Both files must be
+    # fetched; missing either one is a hard failure.
+    if [[ "$downloaded" != "true" ]]; then
+        local binary_url checksums_url
+        binary_url="https://github.com/${GITHUB_REPO}/releases/latest/download/${binary_name}"
+        checksums_url="https://github.com/${GITHUB_REPO}/releases/latest/download/checksums.txt"
 
-    if curl -fsSL "$download_url" -o "$binary_path" 2>/dev/null; then
-        echo "Downloaded from GitHub Releases (via curl)"
-        return 0
-    else
+        if curl -fsSL "$binary_url" -o "$tmp_dir/$binary_name" 2>/dev/null \
+            && curl -fsSL "$checksums_url" -o "$tmp_dir/checksums.txt" 2>/dev/null; then
+            downloaded=true
+            echo "Downloaded from GitHub Releases (via curl)"
+        fi
+    fi
+
+    if [[ "$downloaded" != "true" ]]; then
         echo "Failed to download from GitHub Releases"
         echo "(Private repos require gh CLI: brew install gh && gh auth login)"
-        return 1
+        rc=1
     fi
+
+    if [[ "$rc" -eq 0 ]] && ! verify_sha256 \
+        "$tmp_dir/checksums.txt" "$tmp_dir/$binary_name" "$binary_name"; then
+        rc=1
+    fi
+
+    if [[ "$rc" -eq 0 ]] && ! mv "$tmp_dir/$binary_name" "$final_path"; then
+        echo "Error: failed to install verified binary to $final_path" >&2
+        rc=1
+    fi
+
+    rm -rf "$tmp_dir"
+    return "$rc"
 }
 
 # Build or download the binary
@@ -164,16 +259,43 @@ fi
 
 chmod +x "$BINARY_PATH"
 
-# Download uninstall script
+# Emit uninstall.sh as a self-contained heredoc. Embedding keeps install.sh
+# self-sufficient (no second network fetch at install time) and makes the
+# uninstall body deterministic for a given install.sh revision. The repository
+# still ships `host/scripts/uninstall.sh` for users who fetch it directly per
+# README; keep the two copies in sync when touching either.
 UNINSTALL_SCRIPT="$INSTALL_DIR/uninstall.sh"
-if [[ -f "$SCRIPT_DIR/uninstall.sh" ]]; then
-    cp "$SCRIPT_DIR/uninstall.sh" "$UNINSTALL_SCRIPT"
-else
-    # Download from GitHub
-    curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/host/scripts/uninstall.sh" \
-        -o "$UNINSTALL_SCRIPT" 2>/dev/null || true
+cat > "$UNINSTALL_SCRIPT" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_DIR="$HOME/.cmd2host"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.user.cmd2host.plist"
+
+echo "Uninstalling cmd2host..."
+
+# Stop daemon (use direct check to avoid SIGPIPE with pipefail)
+if launchctl list com.user.cmd2host >/dev/null 2>&1; then
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+    echo "Daemon stopped"
 fi
-[[ -f "$UNINSTALL_SCRIPT" ]] && chmod +x "$UNINSTALL_SCRIPT"
+
+# Remove launchd plist
+if [[ -f "$LAUNCHD_PLIST" ]]; then
+    rm "$LAUNCHD_PLIST"
+    echo "Removed $LAUNCHD_PLIST"
+fi
+
+# Remove install directory
+if [[ -d "$INSTALL_DIR" ]]; then
+    rm -rf "$INSTALL_DIR"
+    echo "Removed $INSTALL_DIR"
+fi
+
+echo ""
+echo "cmd2host uninstalled successfully"
+EOF
+chmod +x "$UNINSTALL_SCRIPT"
 
 # Note: Daemon config (daemon.json) is optional - defaults are used if not present.
 # Project-specific config must be created manually in ~/.cmd2host/projects/<owner_repo>/config.json.
