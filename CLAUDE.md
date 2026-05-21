@@ -249,3 +249,5 @@ git push origin devcontainer-feature-v1.2.2
 The binary release builds:
 - darwin-amd64 (Intel Mac)
 - darwin-arm64 (Apple Silicon)
+
+@.claude/claude.local.md
