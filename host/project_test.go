@@ -219,7 +219,7 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			},
 			paths:       []string{"secrets"},
 			wantErr:     true,
-			errContains: "directory, glob, or magic pathspec",
+			errContains: "is a bare directory",
 		},
 		{
 			name:     "bare directory + parent glob (secrets/** path_deny + secrets dir)",
@@ -234,7 +234,7 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			},
 			paths:       []string{"secrets"},
 			wantErr:     true,
-			errContains: "directory, glob, or magic pathspec",
+			errContains: "is a bare directory",
 		},
 		{
 			name:     "literal file regression (.git/hooks/** path_deny + literal .git/hooks/foo)",
@@ -269,7 +269,7 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			setup:       func(t *testing.T, dir string) {},
 			paths:       []string{":(top)secrets"},
 			wantErr:     true,
-			errContains: "directory, glob, or magic pathspec",
+			errContains: "is a magic pathspec",
 		},
 		{
 			name:        "pathspec magic :/ reject",
@@ -277,7 +277,7 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			setup:       func(t *testing.T, dir string) {},
 			paths:       []string{":/secrets/.env"},
 			wantErr:     true,
-			errContains: "directory, glob, or magic pathspec",
+			errContains: "is a magic pathspec",
 		},
 		{
 			// `\:foo` escape: git treats this as literal ":foo" pathspec,
@@ -288,7 +288,37 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			setup:       func(t *testing.T, dir string) {},
 			paths:       []string{`\:secrets`},
 			wantErr:     true,
-			errContains: "directory, glob, or magic pathspec",
+			errContains: "is a magic pathspec",
+		},
+		{
+			name:        "repo-relative escape reject (..)",
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{"../../etc/passwd"},
+			wantErr:     true,
+			errContains: "escapes repo_path",
+		},
+		{
+			name:        "absolute path reject",
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{"/etc/passwd"},
+			wantErr:     true,
+			errContains: "is absolute",
+		},
+		{
+			name:     "subdir traversal resolving inside repo allowed",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0755); err != nil {
+					t.Fatalf("mkdir subdir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "subdir", "keep.txt"), []byte("ok\n"), 0644); err != nil {
+					t.Fatalf("write subdir/keep.txt: %v", err)
+				}
+			},
+			paths:   []string{"subdir/../subdir/keep.txt"},
+			wantErr: false,
 		},
 		{
 			name:     "nonexistent literal path delegated to git (allow)",
