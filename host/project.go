@@ -176,13 +176,16 @@ func (p *ProjectConfig) ValidateBranch(branch string) error {
 // Rejects path entries beginning with "-" to prevent flag injection
 // (e.g., "--force", "--patch", "--pathspec-from-file=..." reaching git as
 // subcommand options instead of pathspecs). When path_deny is non-empty,
-// also rejects directory and glob pathspecs (".", "..", trailing "/",
-// or any of "*?[]") because ValidatePaths only checks the literal
-// pathspec string and cannot see what files git would expand it to —
-// e.g., `git add .` under path_deny: [".env*"] would otherwise stage
-// .env files since "." does not match the .env* glob.
-// Then applies path_deny globs to literal file paths.
-func (p *ProjectConfig) ValidatePaths(paths []string) error {
+// also rejects pathspecs that path_deny cannot enforce safely (directory
+// names, glob characters, pathspec magic, and bare directories that exist
+// under repoPath), then applies path_deny globs to remaining literal file
+// paths.
+//
+// repoPath is the local repository path used for Lstat-based bare-directory
+// detection. When path_deny is non-empty, repoPath MUST be non-empty
+// (fail-closed: otherwise Lstat would resolve against the daemon CWD
+// rather than the repository git will actually mutate).
+func (p *ProjectConfig) ValidatePaths(repoPath string, paths []string) error {
 	for _, path := range paths {
 		if strings.HasPrefix(path, "-") {
 			return fmt.Errorf("path %q starts with '-' (flag injection prevention)", path)
@@ -194,8 +197,12 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	}
 
 	for _, path := range paths {
-		if isDirOrGlobPathspec(path) {
-			return fmt.Errorf("path %q is a directory or glob pathspec; path_deny enforcement requires per-file paths", path)
+		unenforceable, err := p.isUnenforceablePathspec(repoPath, path)
+		if err != nil {
+			return err
+		}
+		if unenforceable {
+			return fmt.Errorf("path %q is a directory, glob, or magic pathspec; path_deny enforcement requires per-file paths", path)
 		}
 	}
 
@@ -214,22 +221,56 @@ func (p *ProjectConfig) ValidatePaths(paths []string) error {
 	return nil
 }
 
-// isDirOrGlobPathspec reports whether path is a directory pathspec
-// (".", "..", "./", trailing "/") or a glob pathspec (contains *, ?, [, ]).
-// ValidatePaths refuses these when path_deny is set because the literal
-// pathspec gives no visibility into the file set git would actually
-// stage, leaving a path_deny bypass.
-func isDirOrGlobPathspec(path string) bool {
+// isUnenforceablePathspec reports whether path is a pathspec that
+// path_deny cannot enforce safely against literal file matching:
+//   - directory pathspecs (".", "..", "./", "../", trailing "/")
+//   - glob pathspecs (containing *, ?, [, ])
+//   - pathspec magic forms (starting with ":" or the "\:" escape that
+//     git treats as a literal ":" prefix)
+//   - bare directory names that exist under repoPath
+//
+// Returns an error when path_deny enforcement is in effect (the caller
+// only invokes this when path_deny is non-empty) but repoPath is empty:
+// without repoPath, os.Lstat would resolve relative paths against the
+// daemon CWD rather than the repo that git will mutate, which is unsafe
+// and fails closed.
+//
+// Lstat errors for nonexistent paths are NOT policy errors — such
+// pathspecs are delegated to git, which surfaces the proper "did not
+// match" error on its own.
+func (p *ProjectConfig) isUnenforceablePathspec(repoPath, path string) (bool, error) {
 	if path == "." || path == ".." || path == "./" || path == "../" {
-		return true
+		return true, nil
 	}
 	if strings.HasSuffix(path, "/") {
-		return true
+		return true, nil
 	}
 	if strings.ContainsAny(path, "*?[]") {
-		return true
+		return true, nil
 	}
-	return false
+	// Pathspec magic ":(top)foo", ":/foo", ":(glob)pattern", ":!exclude"
+	// is interpreted specially by git and bypasses literal path_deny
+	// matching. Reject any leading-colon pathspec when path_deny applies.
+	// Also reject the "\:" escape form: git treats `\:foo` as the literal
+	// pathspec `:foo`, which would slip past a plain ":" prefix check
+	// while still pointing at a colon-prefixed entry path_deny cannot
+	// enumerate ahead of time.
+	if strings.HasPrefix(path, ":") || strings.HasPrefix(path, `\:`) {
+		return true, nil
+	}
+	if repoPath == "" {
+		return false, fmt.Errorf("repo_path required for path_deny enforcement (repo_path is empty)")
+	}
+	info, err := os.Lstat(filepath.Join(repoPath, path))
+	if err != nil {
+		// Nonexistent literal pathspec: let git report the proper error
+		// instead of treating Lstat failure as a policy violation.
+		return false, nil
+	}
+	if info.IsDir() {
+		return true, nil
+	}
+	return false, nil
 }
 
 // CurrentBranch resolves the current branch (HEAD) of RepoPath using

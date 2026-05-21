@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,11 @@ func TestProjectConfig_ValidatePaths(t *testing.T) {
 		t.Fatalf("CompilePatterns failed: %v", err)
 	}
 
+	// Use an empty tmp dir as repoPath so Lstat returns "not exist" for
+	// every listed path and falls through to glob matching, preserving the
+	// table's pre-existing literal-pathspec semantics.
+	repoPath := t.TempDir()
+
 	tests := []struct {
 		name    string
 		paths   []string
@@ -143,7 +149,7 @@ func TestProjectConfig_ValidatePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := project.ValidatePaths(tt.paths)
+			err := project.ValidatePaths(repoPath, tt.paths)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidatePaths(%v) error = %v, wantErr %v", tt.paths, err, tt.wantErr)
 			}
@@ -161,21 +167,172 @@ func TestProjectConfig_ValidatePaths_NoRestrictions(t *testing.T) {
 		t.Fatalf("CompilePatterns failed: %v", err)
 	}
 
+	// path_deny is empty so repoPath is not consulted; pass empty here to
+	// document that the no-restriction branch does not depend on it.
+	const repoPath = ""
+
 	// Any path should be allowed
-	if err := project.ValidatePaths([]string{".git/config", ".env"}); err != nil {
+	if err := project.ValidatePaths(repoPath, []string{".git/config", ".env"}); err != nil {
 		t.Errorf("ValidatePaths should allow all paths when no restrictions: %v", err)
 	}
 
 	// Leading-dash flag injection should still be rejected even without path_deny.
-	if err := project.ValidatePaths([]string{"--force"}); err == nil {
+	if err := project.ValidatePaths(repoPath, []string{"--force"}); err == nil {
 		t.Errorf("ValidatePaths should reject leading-dash entries even without path_deny")
 	}
 
 	// Directory/glob pathspecs are allowed when path_deny is empty
 	// (the directory-pathspec reject is a path_deny enforcement, not a
 	// universal constraint).
-	if err := project.ValidatePaths([]string{".", "src/", "src/*.go"}); err != nil {
+	if err := project.ValidatePaths(repoPath, []string{".", "src/", "src/*.go"}); err != nil {
 		t.Errorf("ValidatePaths should allow directory/glob pathspecs without path_deny: %v", err)
+	}
+}
+
+// TestProjectConfig_ValidatePaths_PathspecSafety verifies that
+// ValidatePaths rejects pathspec forms path_deny cannot enforce safely
+// (bare directories that exist under repoPath, ":" pathspec magic,
+// missing repoPath when path_deny is non-empty) and still delegates
+// nonexistent literal paths to git so they reach proper error handling
+// downstream.
+func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
+	tests := []struct {
+		name        string
+		pathDeny    []string
+		setup       func(t *testing.T, dir string)
+		paths       []string
+		emptyRepo   bool // true → pass "" as repoPath instead of tmp
+		wantErr     bool
+		errContains string // optional substring assertion (skipped when wantErr=false)
+	}{
+		{
+			name:     "bare directory bypass closed (.env* path_deny + secrets/.env)",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0755); err != nil {
+					t.Fatalf("mkdir secrets: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "secrets", ".env"), []byte("SECRET\n"), 0600); err != nil {
+					t.Fatalf("write secrets/.env: %v", err)
+				}
+			},
+			paths:       []string{"secrets"},
+			wantErr:     true,
+			errContains: "directory, glob, or magic pathspec",
+		},
+		{
+			name:     "bare directory + parent glob (secrets/** path_deny + secrets dir)",
+			pathDeny: []string{"secrets/**"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0755); err != nil {
+					t.Fatalf("mkdir secrets: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "secrets", ".env"), []byte("SECRET\n"), 0600); err != nil {
+					t.Fatalf("write secrets/.env: %v", err)
+				}
+			},
+			paths:       []string{"secrets"},
+			wantErr:     true,
+			errContains: "directory, glob, or magic pathspec",
+		},
+		{
+			name:     "literal file regression (.git/hooks/** path_deny + literal .git/hooks/foo)",
+			pathDeny: []string{".git/hooks/**", ".git/config"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0755); err != nil {
+					t.Fatalf("mkdir .git/hooks: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "foo"), []byte("#!/bin/sh\n"), 0755); err != nil {
+					t.Fatalf("write .git/hooks/foo: %v", err)
+				}
+			},
+			paths:       []string{".git/hooks/foo"},
+			wantErr:     true,
+			errContains: "denied by pattern",
+		},
+		{
+			name:     "literal file regression (.env* path_deny + literal .env)",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("KEY=value\n"), 0600); err != nil {
+					t.Fatalf("write .env: %v", err)
+				}
+			},
+			paths:       []string{".env"},
+			wantErr:     true,
+			errContains: "denied by pattern",
+		},
+		{
+			name:        "pathspec magic :(top) reject",
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{":(top)secrets"},
+			wantErr:     true,
+			errContains: "directory, glob, or magic pathspec",
+		},
+		{
+			name:        "pathspec magic :/ reject",
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{":/secrets/.env"},
+			wantErr:     true,
+			errContains: "directory, glob, or magic pathspec",
+		},
+		{
+			// `\:foo` escape: git treats this as literal ":foo" pathspec,
+			// which would point at a colon-prefixed entry that path_deny
+			// cannot enumerate ahead of time. Reject as defense in depth.
+			name:        `pathspec escape \: reject`,
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{`\:secrets`},
+			wantErr:     true,
+			errContains: "directory, glob, or magic pathspec",
+		},
+		{
+			name:     "nonexistent literal path delegated to git (allow)",
+			pathDeny: []string{".env*"},
+			setup:    func(t *testing.T, dir string) {},
+			paths:    []string{"src/missing.txt"},
+			wantErr:  false,
+		},
+		{
+			name:        "repo_path empty fails closed when path_deny is non-empty",
+			pathDeny:    []string{".env*"},
+			setup:       func(t *testing.T, dir string) {},
+			paths:       []string{"secrets"},
+			emptyRepo:   true,
+			wantErr:     true,
+			errContains: "repo_path required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			tt.setup(t, tmp)
+			project := &ProjectConfig{
+				Constraints: Constraints{PathDeny: tt.pathDeny},
+			}
+			if err := project.CompilePatterns(); err != nil {
+				t.Fatalf("CompilePatterns: %v", err)
+			}
+			repoPath := tmp
+			if tt.emptyRepo {
+				repoPath = ""
+			}
+			err := project.ValidatePaths(repoPath, tt.paths)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidatePaths(%q, %v) error = %v, wantErr %v", repoPath, tt.paths, err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("ValidatePaths(%q, %v) error = %v, want substring %q", repoPath, tt.paths, err, tt.errContains)
+				}
+			}
+		})
 	}
 }
 
