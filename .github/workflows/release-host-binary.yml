@@ -127,9 +127,70 @@ jobs:
         with:
           path: artifacts
 
+      - name: Stage binaries for release
+        run: |
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in artifacts/*/cmd2host-*; do
+            base="$(basename "$f")"
+            if [ -e "release-assets/$base" ]; then
+              echo "Duplicate binary name detected: $base" >&2
+              exit 1
+            fi
+            cp "$f" "release-assets/$base"
+          done
+          shopt -u nullglob
+
+      - name: Verify expected binary set
+        run: |
+          expected=(
+            cmd2host-darwin-amd64
+            cmd2host-darwin-arm64
+            cmd2host-mcp-linux-amd64
+            cmd2host-mcp-linux-arm64
+            cmd2host-mcp-darwin-amd64
+            cmd2host-mcp-darwin-arm64
+          )
+          missing=0
+          for name in "${expected[@]}"; do
+            if [ ! -f "release-assets/$name" ]; then
+              echo "Missing expected release binary: $name" >&2
+              missing=1
+            fi
+          done
+          count=$(find release-assets -maxdepth 1 -type f -name 'cmd2host-*' | wc -l | tr -d ' ')
+          if [ "$count" -ne "${#expected[@]}" ]; then
+            echo "Unexpected release binary count: got $count, expected ${#expected[@]}" >&2
+            find release-assets -maxdepth 1 -type f -name 'cmd2host-*' -print >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Generate checksums.txt
+        run: |
+          cd release-assets
+          # The Verify-expected-binary-set step has already enforced the exact
+          # set of `cmd2host-*` files in this directory, so the glob is safe
+          # (no surprise extra files). Using the glob (rather than `find . | xargs`)
+          # avoids a leading `./` in the filename column of `sha256sum` output,
+          # which keeps checksums.txt clean for both `sha256sum -c` and humans.
+          sha256sum cmd2host-* > checksums.txt
+          echo "--- checksums.txt ---"
+          cat checksums.txt
+          # Strict guard: checksums.txt must contain one entry per expected binary
+          entries=$(wc -l < checksums.txt | tr -d ' ')
+          if [ "$entries" -ne 6 ]; then
+            echo "checksums.txt has $entries entries, expected 6" >&2
+            exit 1
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # ratchet:softprops/action-gh-release@v1
         with:
           name: cmd2host v${{ env.VERSION }}
-          files: artifacts/*/cmd2host-*
+          files: |
+            release-assets/cmd2host-*
+            release-assets/checksums.txt
           generate_release_notes: true
