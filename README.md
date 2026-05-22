@@ -342,7 +342,6 @@ Only operations listed in `allowed_operations` can be executed. All other operat
   "listen_address": "127.0.0.1",
   "listen_port": 9876,
   "allow_non_loopback": false,
-  "socket_path": "~/.cmd2host/cmd2host.sock",
   "socket_mode": 432,
   "max_stdout_bytes": 1048576,
   "max_stderr_bytes": 65536,
@@ -358,7 +357,7 @@ Only operations listed in `allowed_operations` can be executed. All other operat
 | `listen_address` | string | `"127.0.0.1"` | TCP listen host. Accepts loopback IPs (`127.0.0.0/8`, `::1`, IPv4-mapped IPv6 loopback) or the literal name `"localhost"` (case-insensitive). Non-loopback values are rejected at startup unless `allow_non_loopback` is `true`. Validation runs only when `listen_mode` is `"tcp"` or `"both"`. |
 | `listen_port` | int | `9876` | TCP listen port. |
 | `allow_non_loopback` | bool | `false` | Opt-in to accept non-loopback `listen_address` values (for example `0.0.0.0` in CI runners that need container-to-host TCP access). When enabled, cmd2host emits a single-line stderr warning at startup so the deployment shape is explicit. Set this only when non-loopback reachability is the intended deployment shape. |
-| `socket_path` | string | `$CMD2HOST_CONFIG_DIR/cmd2host.sock` or `~/.cmd2host/cmd2host.sock` | Unix socket path. Used when `listen_mode` is `"unix"` or `"both"`. |
+| `socket_path` | string | `$CMD2HOST_CONFIG_DIR/cmd2host.sock` or `~/.cmd2host/cmd2host.sock` | Unix socket path. Used when `listen_mode` is `"unix"` or `"both"`. Provide an absolute path or rely on the default; `~` is not expanded inside `daemon.json`. |
 | `socket_mode` | uint32 | `0660` | Unix socket file mode (octal in source; JSON stores the decimal equivalent, e.g. `432` for `0660`). |
 | `max_stdout_bytes` | int | `1048576` (1 MiB) | Maximum captured stdout per operation. |
 | `max_stderr_bytes` | int | `65536` (64 KiB) | Maximum captured stderr per operation. |
