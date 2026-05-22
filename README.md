@@ -282,7 +282,7 @@ Token flow:
 Each project has its own configuration with:
 
 - **allowed_operations**: Whitelist of permitted operations (default deny)
-- **constraints**: Path restrictions (`path_deny`)
+- **constraints**: Path restrictions (`path_deny`). `remote_hosts_allow` is reserved in the schema but not yet enforced
 - **operations**: Predefined command templates with typed parameters
 
 ### Config Allowance
@@ -380,9 +380,11 @@ cmd2host templates show <name>  # Show template content
 
 Local-only git operations (`git status`, `git add`, `git commit`, `git merge`, `git log`, `git diff`, etc.) are intentionally absent from default templates — run those directly inside the container (see the [Scope](#scope) section). If you need to proxy them through cmd2host for a specific reason, define them yourself in `~/.cmd2host/projects/<id>/config.json`.
 
-#### Migration from earlier templates
+#### Aligning earlier-generated configs (optional)
 
-If your existing `~/.cmd2host/projects/<id>/config.json` was generated from an older `git_write` / `git_github_write` template that included `git_status`, `git_add`, `git_commit`, or `git_merge`, those operations will no longer load against the current daemon (they reference operation IDs not present in the new templates). Two ways to recover:
+Existing `~/.cmd2host/projects/<id>/config.json` files generated from an older `git_write` / `git_github_write` template continue to load with the current daemon. `LoadProjectConfig` validates `allowed_operations` against the config's own `operations` map, so any local-only ops (`git_status`, `git_add`, `git_commit`, `git_merge`) that were embedded at generation time remain self-contained and functional — your existing config is not broken by this change.
+
+If you want to align your config with the new narrowed defaults (drop local-only ops so AI agents proxy only auth-required operations), pick one:
 
 - **Edit in place (preserves custom operations and `path_deny` / `env` / `git_config`)**: drop the local-only operations from both `allowed_operations` and `operations` in the existing JSON, then re-run `cmd2host config allow <project-id>` to re-approve the new hash.
 - **Regenerate from current template (resets to a clean template, drops any local customization)**: re-run `cmd2host config init --repo=owner/repo --template=<name> --force --allow`. Use this only when you have not customized `operations`, `path_deny`, `env`, or `git_config`.

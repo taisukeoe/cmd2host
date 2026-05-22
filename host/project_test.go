@@ -618,7 +618,10 @@ func TestCreateProjectConfig(t *testing.T) {
 			}
 			for _, op := range localOnly {
 				if config.HasOperation(op) {
-					t.Errorf("template %q must not expose local-only op %q", tmpl, op)
+					t.Errorf("template %q must not list local-only op %q in allowed_operations", tmpl, op)
+				}
+				if _, exists := config.Operations[op]; exists {
+					t.Errorf("template %q must not define local-only op %q in operations map", tmpl, op)
 				}
 			}
 		}
