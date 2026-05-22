@@ -174,7 +174,7 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 	if resp.DeniedReason != nil {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: fmt.Sprintf("Operation denied: %s", *resp.DeniedReason)},
+				&mcp.TextContent{Text: "Operation denied:\n" + wrapAsFencedBlock(*resp.DeniedReason)},
 			},
 			IsError: true,
 		}, nil, nil
@@ -185,21 +185,14 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 	sb.WriteString(fmt.Sprintf("Exit code: %d\n\n", resp.ExitCode))
 
 	if resp.Stdout != "" {
-		sb.WriteString("**stdout:**\n```\n")
-		sb.WriteString(resp.Stdout)
-		if !strings.HasSuffix(resp.Stdout, "\n") {
-			sb.WriteString("\n")
-		}
-		sb.WriteString("```\n\n")
+		sb.WriteString("**stdout:**\n")
+		sb.WriteString(wrapAsFencedBlock(resp.Stdout))
+		sb.WriteString("\n")
 	}
 
 	if resp.Stderr != "" {
-		sb.WriteString("**stderr:**\n```\n")
-		sb.WriteString(resp.Stderr)
-		if !strings.HasSuffix(resp.Stderr, "\n") {
-			sb.WriteString("\n")
-		}
-		sb.WriteString("```\n")
+		sb.WriteString("**stderr:**\n")
+		sb.WriteString(wrapAsFencedBlock(resp.Stderr))
 	}
 
 	return &mcp.CallToolResult{
@@ -208,4 +201,47 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 		},
 		IsError: resp.ExitCode != 0,
 	}, nil, nil
+}
+
+// wrapAsFencedBlock wraps content in a markdown code fence whose backtick run
+// length is one longer than the longest backtick run inside content (minimum
+// 3). Per CommonMark 0.30 §4.5, an opening fence of N backticks is only closed
+// by a fence-only line of at least N backticks (optional indentation and
+// trailing whitespace), so this prevents backtick runs in content from
+// terminating the fence early.
+func wrapAsFencedBlock(content string) string {
+	fence := strings.Repeat("`", fenceLengthFor(content))
+	var sb strings.Builder
+	sb.Grow(len(content) + 2*len(fence) + 2)
+	sb.WriteString(fence)
+	sb.WriteString("\n")
+	sb.WriteString(content)
+	if !strings.HasSuffix(content, "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fence)
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// fenceLengthFor returns the number of backticks to use for a fence that
+// safely wraps content. Counts the longest consecutive backtick run in
+// content (byte-wise; backtick is ASCII 0x60, never part of a multi-byte
+// UTF-8 sequence) and returns max(longest+1, 3).
+func fenceLengthFor(content string) int {
+	longest, run := 0, 0
+	for i := 0; i < len(content); i++ {
+		if content[i] == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	if longest+1 > 3 {
+		return longest + 1
+	}
+	return 3
 }
