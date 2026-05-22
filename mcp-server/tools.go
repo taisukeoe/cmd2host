@@ -211,8 +211,12 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 // terminating the fence early.
 func wrapAsFencedBlock(content string) string {
 	fence := strings.Repeat("`", fenceLengthFor(content))
+	size := len(content) + 2*len(fence) + 2
+	if !strings.HasSuffix(content, "\n") {
+		size++
+	}
 	var sb strings.Builder
-	sb.Grow(len(content) + 2*len(fence) + 2)
+	sb.Grow(size)
 	sb.WriteString(fence)
 	sb.WriteString("\n")
 	sb.WriteString(content)
