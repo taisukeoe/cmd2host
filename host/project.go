@@ -247,6 +247,48 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path %q escapes repo_path; path_deny enforcement requires repo-relative paths", path)
 	}
+	// The lexical Rel check above only compares strings. An intermediate
+	// component along joined can be a symlink that escapes repoAbs (for
+	// example repoAbs/dir/x.txt where dir is a symlink to /etc). git
+	// follows intermediate symlinks during worktree operations, so the
+	// containment policy must match those semantics. Resolve symlinks in
+	// both endpoints and re-check repo-relative containment.
+	resolvedRepoAbs, err := filepath.EvalSymlinks(repoAbs)
+	if err != nil {
+		return fmt.Errorf("repo_path %q: resolve symlinks failed: %w", repoPath, err)
+	}
+	resolvedJoined, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("path %q: resolve symlinks failed: %w", path, err)
+		}
+		// Leaf does not yet exist (path will be created by git). Resolve
+		// the parent so that an intermediate symlink redirecting parent
+		// outside repoAbs is still rejected.
+		parent := filepath.Dir(joined)
+		resolvedParent, perr := filepath.EvalSymlinks(parent)
+		if perr != nil {
+			if os.IsNotExist(perr) {
+				// Parent also absent — the lexical containment check
+				// above already verified the string-level path. Let git
+				// surface the proper not-found error downstream.
+				resolvedJoined = ""
+			} else {
+				return fmt.Errorf("path %q: resolve parent symlinks failed: %w", path, perr)
+			}
+		} else {
+			resolvedJoined = filepath.Join(resolvedParent, filepath.Base(joined))
+		}
+	}
+	if resolvedJoined != "" {
+		rel2, err := filepath.Rel(resolvedRepoAbs, resolvedJoined)
+		if err != nil {
+			return fmt.Errorf("path %q: resolved repo-relative check failed: %w", path, err)
+		}
+		if rel2 == ".." || strings.HasPrefix(rel2, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("path %q escapes repo_path after symlink resolution; path_deny enforcement requires paths contained within repo_path", path)
+		}
+	}
 	info, err := os.Lstat(joined)
 	if err != nil {
 		if os.IsNotExist(err) {

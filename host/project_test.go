@@ -263,6 +263,69 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			wantErr:     true,
 			errContains: "repo_path required",
 		},
+		{
+			name:     "intermediate symlink redirecting outside repo reject",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				outside := t.TempDir()
+				if err := os.WriteFile(filepath.Join(outside, "passwd"), []byte("root::0:0\n"), 0644); err != nil {
+					t.Fatalf("write outside/passwd: %v", err)
+				}
+				if err := os.Symlink(outside, filepath.Join(dir, "etc")); err != nil {
+					t.Fatalf("symlink dir/etc -> outside: %v", err)
+				}
+			},
+			paths:       []string{"etc/passwd"},
+			wantErr:     true,
+			errContains: "escapes repo_path after symlink resolution",
+		},
+		{
+			name:     "leaf symlink redirecting outside repo reject",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				outside := t.TempDir()
+				outsideFile := filepath.Join(outside, "secret")
+				if err := os.WriteFile(outsideFile, []byte("S\n"), 0644); err != nil {
+					t.Fatalf("write outside/secret: %v", err)
+				}
+				if err := os.Symlink(outsideFile, filepath.Join(dir, "alias")); err != nil {
+					t.Fatalf("symlink dir/alias -> outside file: %v", err)
+				}
+			},
+			paths:       []string{"alias"},
+			wantErr:     true,
+			errContains: "escapes repo_path after symlink resolution",
+		},
+		{
+			name:     "intermediate symlink redirecting inside repo allowed",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "real"), 0755); err != nil {
+					t.Fatalf("mkdir real: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "real", "keep.txt"), []byte("ok\n"), 0644); err != nil {
+					t.Fatalf("write real/keep.txt: %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(dir, "link")); err != nil {
+					t.Fatalf("symlink link -> real: %v", err)
+				}
+			},
+			paths:   []string{"link/keep.txt"},
+			wantErr: false,
+		},
+		{
+			name:     "nonexistent leaf under symlinked parent outside repo reject",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				outside := t.TempDir()
+				if err := os.Symlink(outside, filepath.Join(dir, "etc")); err != nil {
+					t.Fatalf("symlink dir/etc -> outside: %v", err)
+				}
+			},
+			paths:       []string{"etc/will-be-created.txt"},
+			wantErr:     true,
+			errContains: "escapes repo_path after symlink resolution",
+		},
 	}
 
 	for _, tt := range tests {
