@@ -1,6 +1,17 @@
 # cmd2host
 
-DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`) on the host machine via MCP.
+A DevContainer Feature that proxies authentication-required CLI invocations from inside a container to the host, so AI agents never need to receive the host's credentials. Nothing more, nothing less.
+
+## Scope
+
+cmd2host owns one job: take CLI calls that require the host's credentials (for example `gh` against GitHub, or `git push` over SSH) and run them on the host through a typed MCP operation contract. Any feature in the source tree exists to support that contract.
+
+- **Source code (strict core)**: only what is necessary to proxy auth-required operations — token-based session auth, MCP server, operation templates, project-bound policies (`allowed_operations`, `path_deny`, `env`, `git_config`). New behavior outside this scope does not go into the source tree.
+- **Config layer (user-controlled)**: project configs can define any custom operation a user wants to expose via this proxy. cmd2host does not police what users put in their own `~/.cmd2host/projects/<id>/config.json` — that flexibility is intentional.
+
+### Container precondition
+
+cmd2host assumes the DevContainer (or wrapper-managed container) already has `git` installed and the project's `.git` directory accessible. Local-only git operations (`git commit`, `git merge`, `git add`, `git status`, `git log`, `git diff`, etc.) run **inside the container** directly. Default templates therefore expose only auth-required operations — git pushes / fetches over the network, and GitHub API calls via `gh`. If your environment needs cmd2host to proxy additional commands, define them in your project config; the source tree intentionally does not ship a built-in template for them.
 
 ## Architecture
 
@@ -63,11 +74,11 @@ cmd2host config init --repo=owner/repo --template=github_write --allow
 cmd2host config init --repo=owner/repo --template=git_github_write --allow
 ```
 
-Available templates:
-- `readonly` - Read-only operations (git fetch, gh pr/issue view/list, review comments)
-- `github_write` - + PR/Issue creation and PR comment/reply operations
-- `git_write` - + git push (with strict constraints)
-- `git_github_write` - + git push, PR creation, and PR comment/reply operations
+Available templates (all default to auth-required operations only — local git work is expected to happen inside the container):
+- `readonly` - Read-only host operations (`git fetch`, `gh pr/issue view/list`, review comments)
+- `github_write` - readonly + GitHub write via `gh` (PR / issue creation, PR comment / reply)
+- `git_write` - readonly + `git push` (strict sanitization applied)
+- `git_github_write` - readonly + `git push` + GitHub write via `gh`
 
 Or create manually at `~/.cmd2host/projects/<owner_repo>/config.json` (see Templates section below).
 
@@ -271,7 +282,7 @@ Token flow:
 Each project has its own configuration with:
 
 - **allowed_operations**: Whitelist of permitted operations (default deny)
-- **constraints**: Branch patterns, path restrictions
+- **constraints**: Path restrictions (`path_deny`)
 - **operations**: Predefined command templates with typed parameters
 
 ### Config Allowance
@@ -327,7 +338,6 @@ Only operations listed in `allowed_operations` can be executed. All other operat
   "repo_path": "/absolute/path/to/repo",
   "allowed_operations": ["op1", "op2"],
   "constraints": {
-    "branch_allow": ["^pattern1", "^pattern2"],
     "path_deny": ["glob1", "glob2"],
     "remote_hosts_allow": ["github.com"]
   },
@@ -363,10 +373,19 @@ cmd2host templates show <name>  # Show template content
 
 | Template | Description | Operations |
 |----------|-------------|------------|
-| `readonly` | Read-only access | git_fetch, gh_pr_view, gh_pr_list, gh_pr_review_comments, gh_issue_view, gh_issue_list |
-| `github_write` | + GitHub write | readonly + gh_pr_create, gh_pr_comment, gh_pr_review_comment_reply, gh_issue_create |
-| `git_write` | + Git push | readonly + git_push (requires branch_allow constraint) |
-| `git_github_write` | Git + GitHub write | git_write + gh_pr_create, gh_pr_edit, gh_pr_comment, gh_pr_review_comment_reply |
+| `readonly` | Read-only host operations | `git_fetch`, `gh_pr_view`, `gh_pr_list`, `gh_pr_review_comments`, `gh_issue_view`, `gh_issue_list` |
+| `github_write` | readonly + GitHub write via `gh` | readonly + `gh_pr_create`, `gh_pr_comment`, `gh_pr_review_comment_reply`, `gh_issue_create` |
+| `git_write` | readonly + `git push` | readonly + `git_push` |
+| `git_github_write` | readonly + `git push` + GitHub write via `gh` | readonly + `git_push` + `gh_pr_checks`, `gh_pr_create`, `gh_pr_edit`, `gh_pr_comment`, `gh_pr_review_comment_reply`, `gh_run_view` |
+
+Local-only git operations (`git status`, `git add`, `git commit`, `git merge`, `git log`, `git diff`, etc.) are intentionally absent from default templates — run those directly inside the container (see the [Scope](#scope) section). If you need to proxy them through cmd2host for a specific reason, define them yourself in `~/.cmd2host/projects/<id>/config.json`.
+
+#### Migration from earlier templates
+
+If your existing `~/.cmd2host/projects/<id>/config.json` was generated from an older `git_write` / `git_github_write` template that included `git_status`, `git_add`, `git_commit`, or `git_merge`, those operations will no longer load against the current daemon (they reference operation IDs not present in the new templates). Two ways to recover:
+
+- **Edit in place (preserves custom operations and `path_deny` / `env` / `git_config`)**: drop the local-only operations from both `allowed_operations` and `operations` in the existing JSON, then re-run `cmd2host config allow <project-id>` to re-approve the new hash.
+- **Regenerate from current template (resets to a clean template, drops any local customization)**: re-run `cmd2host config init --repo=owner/repo --template=<name> --force --allow`. Use this only when you have not customized `operations`, `path_deny`, `env`, or `git_config`.
 
 ## MCP Server Integration
 
@@ -377,7 +396,6 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 - **Type-safe operations**: Predefined command templates with typed parameters
 - **Project-based policies**: Fine-grained control over what operations are allowed
   - Repository binding (token → repo → project config)
-  - Branch allowlist (regex patterns)
   - Path denylist (glob patterns)
   - Git config overrides
 - **AI-friendly**: Provides structured operations instead of raw shell access
@@ -399,7 +417,7 @@ The MCP server (`cmd2host-mcp`) enables AI agents (like Claude Code) to interact
 - `gh_pr_review_comment_reply` - Reply to an inline pull request review comment
 - `gh_issue_create` - Create a new issue
 - `git_fetch` - Fetch from remote
-- `git_push` - Push to remote (requires branch_allow constraint)
+- `git_push` - Push to remote (strict sanitization applied)
 
 ### Body Parameter Operations
 

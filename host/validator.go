@@ -58,16 +58,6 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 	// Extract and validate policy-specific parameters
 	policyReq := extractPolicyParams(req)
 
-	// Validate branch constraint (for git operations)
-	if policyReq.Branch != "" {
-		if err := project.ValidateBranch(policyReq.Branch); err != nil {
-			return nil, ValidationResult{
-				OK:      false,
-				Message: err.Error(),
-			}
-		}
-	}
-
 	// Validate path constraints (for git add, etc.)
 	if len(policyReq.Paths) > 0 {
 		if err := project.ValidatePaths(project.RepoPath, policyReq.Paths); err != nil {
@@ -79,10 +69,10 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 	}
 
 	// Special guard: `git add` with broad staging flags but no explicit paths
-	// stages everything in the working tree, bypassing path_deny entirely
-	// (since ValidatePaths is only called when paths are present). When the
-	// project has a non-empty path_deny, require explicit paths so each one
-	// is validated. Lax projects (no path_deny) keep the flexible behavior.
+	// would skip path_deny enforcement (ValidatePaths is only called when
+	// paths are present). When the project has a non-empty path_deny, require
+	// explicit paths so each one is validated. Lax projects (no path_deny)
+	// keep the flexible behavior.
 	//
 	// Use filepath.Base because ResolveOperationCommands rewrites op.Command
 	// to an absolute path (e.g. "/usr/bin/git") in initialized configs.
@@ -90,7 +80,7 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 		len(policyReq.Paths) == 0 && len(project.Constraints.PathDeny) > 0 {
 		for _, flag := range req.Flags {
 			// Normalize "--flag=value" to "--flag" to mirror ValidateFlags;
-			// otherwise inputs like "--all=true" would slip past this switch.
+			// otherwise inputs like "--all=true" would not match this switch.
 			name := flag
 			if i := strings.Index(flag, "="); i > 0 {
 				name = flag[:i]
@@ -99,28 +89,8 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 			case "-A", "--all", "-u", "--update":
 				return nil, ValidationResult{
 					OK:      false,
-					Message: fmt.Sprintf("git add %s without explicit paths bypasses path_deny; provide explicit paths", flag),
+					Message: fmt.Sprintf("git add %s requires explicit paths when path_deny is configured", flag),
 				}
-			}
-		}
-	}
-
-	// For operations that mutate the current branch (git_add, git_commit,
-	// git_merge, git_push), enforce branch_allow on HEAD too. Without this,
-	// AI could mutate any branch the repo happens to be on (e.g., main),
-	// even though branch_allow constrains the branch param.
-	if op.MutatesBranch && len(project.Constraints.BranchAllow) > 0 {
-		head, err := project.CurrentBranch(op.Command)
-		if err != nil {
-			return nil, ValidationResult{
-				OK:      false,
-				Message: fmt.Sprintf("current branch guard: %v", err),
-			}
-		}
-		if err := project.ValidateBranch(head); err != nil {
-			return nil, ValidationResult{
-				OK:      false,
-				Message: fmt.Sprintf("current branch %q not allowed for mutating operation: %v", head, err),
 			}
 		}
 	}
@@ -132,7 +102,6 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 type PolicyValidationRequest struct {
 	OperationID string
 	Params      map[string]ParamValue
-	Branch      string   // For git operations
 	Paths       []string // For git add, etc.
 }
 
@@ -141,13 +110,6 @@ func extractPolicyParams(req OperationRequest) PolicyValidationRequest {
 	policyReq := PolicyValidationRequest{
 		OperationID: req.Operation,
 		Params:      req.Params,
-	}
-
-	// Extract branch from params if present
-	if branch, ok := req.Params["branch"]; ok {
-		if branchStr, ok := branch.(string); ok {
-			policyReq.Branch = branchStr
-		}
 	}
 
 	// Extract paths from params if present

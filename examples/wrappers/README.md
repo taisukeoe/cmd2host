@@ -152,9 +152,9 @@ at `~/.cmd2host/projects/<owner>_<repo>/config.json`, overrides only
 (ephemeral clone or `--source` bind mount), writes the patched copy into
 the per-session config dir, and re-runs `cmd2host config allow` so the
 daemon's hash check passes. Every other field — allowed operations,
-branch allowlist, path denylist, env, git config — is preserved
-bit-for-bit, so any customization an adopter has made to the host config
-flows through automatically.
+path denylist, env, git config — is preserved bit-for-bit, so any
+customization an adopter has made to the host config flows through
+automatically.
 
 When the host config does not exist for the derived `owner/repo`, the
 wrapper offers an interactive template chooser. Non-interactive sessions
@@ -286,8 +286,8 @@ Order of operations when the wrapper starts:
    dir
 
 Step 3 is the key invariant: nothing besides `repo_path` is rewritten.
-Branch allowlists, path denylists, allowed operations, env, and git
-config overrides are all preserved.
+Path denylists, allowed operations, env, and git config overrides are all
+preserved.
 
 ## Container uid/gid alignment
 
