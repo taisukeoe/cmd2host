@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // DaemonConfig represents daemon-level configuration (listen settings, limits)
@@ -15,6 +18,12 @@ type DaemonConfig struct {
 	ListenAddress string `json:"listen_address"`
 	ListenPort    int    `json:"listen_port"`
 
+	// AllowNonLoopback opts the TCP listener into binding beyond loopback
+	// addresses (e.g., 0.0.0.0 / non-loopback IPs). Default false; cmd2host
+	// is intended for same-host proxy deployments, so loopback is the only
+	// accepted listen_address unless this is set explicitly.
+	AllowNonLoopback bool `json:"allow_non_loopback,omitempty"`
+
 	// Unix socket settings (used when ListenMode is "unix" or "both")
 	SocketPath string `json:"socket_path,omitempty"` // Default: $CMD2HOST_CONFIG_DIR/cmd2host.sock, or ~/.cmd2host/cmd2host.sock when unset
 	SocketMode uint32 `json:"socket_mode,omitempty"` // Default: 0660
@@ -25,6 +34,11 @@ type DaemonConfig struct {
 
 	// Execution limits
 	DefaultTimeout int `json:"default_timeout,omitempty"` // Default: 60 seconds
+
+	// Warnings collects non-fatal advisories produced during LoadDaemonConfig.
+	// Callers (typically runDaemon) print these to stderr after a successful
+	// load. Excluded from JSON marshalling so it cannot be set via daemon.json.
+	Warnings []string `json:"-"`
 }
 
 // cmd2hostConfigDir returns the base directory for cmd2host's mutable state:
@@ -85,7 +99,58 @@ func LoadDaemonConfig(path string) (*DaemonConfig, error) {
 	// Apply defaults
 	applyDaemonDefaults(&config)
 
+	if err := validateListenAddress(&config); err != nil {
+		return nil, err
+	}
+
 	return &config, nil
+}
+
+// isValidHost reports whether s is a syntactically acceptable host token for
+// listen_address: either the literal name "localhost" (case-insensitive) or a
+// value net.ParseIP can interpret as an IP literal.
+func isValidHost(s string) bool {
+	if strings.EqualFold(s, "localhost") {
+		return true
+	}
+	return net.ParseIP(s) != nil
+}
+
+// isLoopbackHost reports whether s names a loopback bind target. "localhost"
+// is treated as a literal name token and is not DNS-resolved; loopback IPs
+// follow net.IP.IsLoopback (covers 127.0.0.0/8, ::1, and IPv4-mapped IPv6
+// loopback).
+func isLoopbackHost(s string) bool {
+	if strings.EqualFold(s, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// validateListenAddress runs after applyDaemonDefaults. It only inspects the
+// TCP-using modes ("tcp" / "both"); unix-only deployments do not exercise
+// listen_address and skip validation entirely. Non-loopback values produce a
+// fatal error unless AllowNonLoopback is set, in which case a warning is
+// appended to config.Warnings for runDaemon to surface at startup.
+func validateListenAddress(config *DaemonConfig) error {
+	if config.ListenMode != "tcp" && config.ListenMode != "both" {
+		return nil
+	}
+	if !isValidHost(config.ListenAddress) {
+		return fmt.Errorf("invalid listen_address %q: expected IP literal or \"localhost\"", config.ListenAddress)
+	}
+	if isLoopbackHost(config.ListenAddress) {
+		return nil
+	}
+	if !config.AllowNonLoopback {
+		return fmt.Errorf("listen_address %q must be a loopback address (127.0.0.0/8, ::1, \"localhost\"); set \"allow_non_loopback\": true to override", config.ListenAddress)
+	}
+	config.Warnings = append(config.Warnings,
+		fmt.Sprintf("TCP listen_address %q binds beyond loopback (allow_non_loopback=true); intended for advanced deployments", config.ListenAddress))
+	return nil
 }
 
 // defaultDaemonConfig returns a DaemonConfig with default values

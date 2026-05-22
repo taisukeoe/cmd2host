@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -246,6 +247,157 @@ func TestDefaultDaemonConfigPathWithoutEnv(t *testing.T) {
 	got := DefaultDaemonConfigPath()
 	if got != want {
 		t.Errorf("DefaultDaemonConfigPath() = %q, want %q", got, want)
+	}
+}
+
+// writeDaemonConfig is a test helper that writes the given JSON body to a
+// temp daemon.json and returns the path. It does not call LoadDaemonConfig.
+func writeDaemonConfig(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.json")
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatalf("write daemon config: %v", err)
+	}
+	return path
+}
+
+// TestLoadDaemonConfigListenAddressAccept covers listen_address values that
+// LoadDaemonConfig must accept without error and without an opt-in warning,
+// across IPv4, IPv6, and the literal "localhost" name token.
+func TestLoadDaemonConfigListenAddressAccept(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"ipv4 loopback explicit", `{"listen_mode":"tcp","listen_address":"127.0.0.1","listen_port":9876}`},
+		{"ipv4 loopback other 127/8", `{"listen_mode":"tcp","listen_address":"127.0.0.5","listen_port":9876}`},
+		{"ipv6 loopback", `{"listen_mode":"tcp","listen_address":"::1","listen_port":9876}`},
+		{"ipv4-mapped ipv6 loopback", `{"listen_mode":"tcp","listen_address":"::ffff:127.0.0.1","listen_port":9876}`},
+		{"literal localhost lower", `{"listen_mode":"tcp","listen_address":"localhost","listen_port":9876}`},
+		{"literal localhost mixed case", `{"listen_mode":"tcp","listen_address":"LocalHost","listen_port":9876}`},
+		{"empty falls back to default loopback", `{"listen_mode":"tcp","listen_port":9876}`},
+		{"both mode loopback", `{"listen_mode":"both","listen_address":"127.0.0.1","listen_port":9876}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeDaemonConfig(t, tc.body)
+			config, err := LoadDaemonConfig(path)
+			if err != nil {
+				t.Fatalf("LoadDaemonConfig returned error: %v", err)
+			}
+			if len(config.Warnings) != 0 {
+				t.Errorf("Warnings = %v, want none", config.Warnings)
+			}
+		})
+	}
+}
+
+// TestLoadDaemonConfigListenAddressRejectNonLoopback covers listen_address
+// values that must be rejected when AllowNonLoopback is not set, for both
+// the "tcp" and "both" listen_mode.
+func TestLoadDaemonConfigListenAddressRejectNonLoopback(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"ipv4 wildcard", `{"listen_mode":"tcp","listen_address":"0.0.0.0","listen_port":9876}`},
+		{"ipv6 wildcard", `{"listen_mode":"tcp","listen_address":"::","listen_port":9876}`},
+		{"private ipv4", `{"listen_mode":"tcp","listen_address":"192.168.1.1","listen_port":9876}`},
+		{"public ipv4", `{"listen_mode":"tcp","listen_address":"8.8.8.8","listen_port":9876}`},
+		{"ipv6 link-local", `{"listen_mode":"tcp","listen_address":"fe80::1","listen_port":9876}`},
+		{"both mode non-loopback", `{"listen_mode":"both","listen_address":"0.0.0.0","listen_port":9876}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeDaemonConfig(t, tc.body)
+			_, err := LoadDaemonConfig(path)
+			if err == nil {
+				t.Fatalf("expected error for non-loopback listen_address, got nil")
+			}
+			if !strings.Contains(err.Error(), "must be a loopback address") {
+				t.Errorf("error %q does not mention loopback requirement", err.Error())
+			}
+			if !strings.Contains(err.Error(), "allow_non_loopback") {
+				t.Errorf("error %q does not surface the opt-in field name", err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadDaemonConfigListenAddressInvalid covers values that are not parseable
+// as IP literals and are not the literal "localhost" name. These take a
+// distinct invalid-syntax error path before the loopback policy check.
+func TestLoadDaemonConfigListenAddressInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"whitespace only", `{"listen_mode":"tcp","listen_address":"   ","listen_port":9876}`},
+		{"bogus hostname", `{"listen_mode":"tcp","listen_address":"not-a-valid-host","listen_port":9876}`},
+		{"trailing octet too many", `{"listen_mode":"tcp","listen_address":"127.0.0.1.1","listen_port":9876}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeDaemonConfig(t, tc.body)
+			_, err := LoadDaemonConfig(path)
+			if err == nil {
+				t.Fatalf("expected error for invalid listen_address, got nil")
+			}
+			if !strings.Contains(err.Error(), "invalid listen_address") {
+				t.Errorf("error %q does not mention invalid listen_address", err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadDaemonConfigAllowNonLoopbackBypass verifies that allow_non_loopback
+// lets non-loopback values load successfully and surfaces a single warning
+// that names "TCP" and the offending address so the operator can confirm the
+// opt-in took effect.
+func TestLoadDaemonConfigAllowNonLoopbackBypass(t *testing.T) {
+	body := `{"listen_mode":"tcp","listen_address":"0.0.0.0","listen_port":9876,"allow_non_loopback":true}`
+	path := writeDaemonConfig(t, body)
+
+	config, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig returned error: %v", err)
+	}
+	if !config.AllowNonLoopback {
+		t.Errorf("AllowNonLoopback = false, want true")
+	}
+	if len(config.Warnings) != 1 {
+		t.Fatalf("Warnings = %v, want exactly 1 entry", config.Warnings)
+	}
+	w := config.Warnings[0]
+	if !strings.HasPrefix(w, "TCP listen_address") {
+		t.Errorf("warning %q does not start with TCP listen_address prefix", w)
+	}
+	if !strings.Contains(w, "0.0.0.0") {
+		t.Errorf("warning %q does not include the offending address", w)
+	}
+	if !strings.Contains(w, "allow_non_loopback=true") {
+		t.Errorf("warning %q does not record the opt-in flag", w)
+	}
+}
+
+// TestLoadDaemonConfigListenAddressUnixModeSkip verifies that listen_address
+// validation is silent when the daemon only listens on the unix socket.
+// listen_address is unused in that mode, so a non-loopback value must not
+// produce an error or a warning.
+func TestLoadDaemonConfigListenAddressUnixModeSkip(t *testing.T) {
+	body := `{"listen_mode":"unix","listen_address":"0.0.0.0","socket_path":"/tmp/cmd2host-test.sock"}`
+	path := writeDaemonConfig(t, body)
+
+	config, err := LoadDaemonConfig(path)
+	if err != nil {
+		t.Fatalf("LoadDaemonConfig returned error: %v", err)
+	}
+	if len(config.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want none in unix mode", config.Warnings)
 	}
 }
 

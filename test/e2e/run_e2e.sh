@@ -274,10 +274,13 @@ if ! $SKIP_BUILD; then
             # Create daemon config for CI environment
             # SECURITY NOTE: listen_address is 0.0.0.0 to allow container-to-host communication.
             # This is safe in CI where the runner is isolated. Do NOT use 0.0.0.0 in production.
+            # allow_non_loopback opts into the non-loopback bind explicitly so the daemon
+            # accepts the 0.0.0.0 listen_address; production deployments should leave it false.
             cat > "$INSTALL_DIR/daemon.json" << EOF
 {
   "listen_address": "0.0.0.0",
-  "listen_port": 9876
+  "listen_port": 9876,
+  "allow_non_loopback": true
 }
 EOF
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -498,7 +499,7 @@ func (s *Server) Run() error {
 
 // runTCP starts only the TCP listener
 func (s *Server) runTCP() error {
-	addr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
+	addr := net.JoinHostPort(s.daemonConfig.ListenAddress, strconv.Itoa(s.daemonConfig.ListenPort))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on TCP %s: %w", addr, err)
@@ -522,7 +523,7 @@ func (s *Server) runUnix() error {
 // runBoth starts both TCP and Unix socket listeners
 func (s *Server) runBoth() error {
 	// Start TCP listener
-	tcpAddr := fmt.Sprintf("%s:%d", s.daemonConfig.ListenAddress, s.daemonConfig.ListenPort)
+	tcpAddr := net.JoinHostPort(s.daemonConfig.ListenAddress, strconv.Itoa(s.daemonConfig.ListenPort))
 	tcpListener, err := net.Listen("tcp", tcpAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on TCP %s: %w", tcpAddr, err)
@@ -937,6 +938,9 @@ func runDaemon() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Daemon config error: %v\n", err)
 		os.Exit(1)
+	}
+	for _, w := range daemonConfig.Warnings {
+		fmt.Fprintf(os.Stderr, "cmd2host: %s\n", w)
 	}
 
 	server, err := NewServer(daemonConfig)
