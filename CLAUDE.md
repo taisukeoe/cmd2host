@@ -4,7 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cmd2host is a DevContainer Feature that enables AI agents to execute CLI commands (e.g., `gh`) on the host machine via MCP (Model Context Protocol). This allows AI agents running inside DevContainers to use host-installed tools with their credentials.
+cmd2host is a DevContainer Feature that proxies authentication-required CLI invocations from inside a container to the host, so AI agents never need to receive the host's credentials. Nothing more, nothing less.
+
+### Scope (load-bearing for future contributors and AI agents)
+
+cmd2host owns exactly one job: take CLI calls that require the host's credentials (for example `gh` against GitHub, or `git push` over SSH) and run them on the host through a typed MCP operation contract.
+
+- **Source code (strict core)**: only features needed to proxy auth-required operations — token-based session auth, MCP server, operation templates, project-bound policies (`allowed_operations`, `path_deny`, `env`, `git_config`). Behavior outside this scope does not belong in the source tree, even if a config-layer extension could express it.
+- **Config layer (user-controlled)**: project configs (`~/.cmd2host/projects/<id>/config.json`) can define any custom operation a user wants to expose. cmd2host does not police user configs — that flexibility is intentional and lives entirely on the user side.
+
+When evaluating a proposed feature, ask first whether it is required to proxy an auth-required operation. If not, it belongs in user config (or outside cmd2host entirely), not in the source tree.
+
+### Container precondition
+
+cmd2host assumes the container already has `git` installed and the project's `.git` directory accessible. Local-only git operations (`git commit`, `git merge`, `git add`, `git status`, `git log`, `git diff`, etc.) run **inside the container** directly. Default templates therefore expose only auth-required operations — git pushes / fetches over the network, and GitHub API calls via `gh`.
 
 ## Architecture
 
@@ -34,7 +47,6 @@ Commands are validated using **operation mode**: predefined operation templates 
 **Project-based policies** (per-project config in `~/.cmd2host/projects/<project-id>/`):
 - Repository binding (token → repo → project config)
 - Default deny (only `allowed_operations` can execute)
-- Branch allowlist (regex patterns)
 - Path denylist (glob patterns)
 - Git config overrides
 - Environment variables

@@ -1,38 +1,24 @@
 package main
 
 import (
-	"strings"
 	"testing"
 )
 
-// makeMutationProject returns a ProjectConfig backed by a real git repo at
-// the given branch, containing a mutating "git_add" op and a non-mutating
-// "git_status" op. branchAllow controls whether HEAD must match a pattern.
-func makeMutationProject(t *testing.T, repoDir, branchAllow string) *ProjectConfig {
+// makeGitAddProject returns a ProjectConfig containing a "git_add" op.
+// Used to exercise the path_deny broad-flag guard.
+func makeGitAddProject(t *testing.T, repoDir string) *ProjectConfig {
 	t.Helper()
-	var constraints Constraints
-	if branchAllow != "" {
-		constraints.BranchAllow = []string{branchAllow}
-	}
 	p := &ProjectConfig{
 		Repo:              "owner/repo",
 		RepoPath:          repoDir,
-		AllowedOperations: []string{"git_add", "git_status"},
-		Constraints:       constraints,
+		AllowedOperations: []string{"git_add"},
 		Operations: map[string]*Operation{
 			"git_add": {
-				Command:       "git",
-				ArgsTemplate:  []string{"add", "{paths}"},
-				Params:        map[string]ParamSchema{"paths": {Type: "array", Optional: true, Items: &ItemsSchema{Type: "string"}}},
-				AllowedFlags:  []string{"-u", "--update", "-A", "--all"},
-				MutatesBranch: true,
-				Description:   "Stage changes",
-			},
-			"git_status": {
 				Command:      "git",
-				ArgsTemplate: []string{"status"},
-				Params:       map[string]ParamSchema{},
-				Description:  "Show working tree status",
+				ArgsTemplate: []string{"add", "{paths}"},
+				Params:       map[string]ParamSchema{"paths": {Type: "array", Optional: true, Items: &ItemsSchema{Type: "string"}}},
+				AllowedFlags: []string{"-u", "--update", "-A", "--all"},
+				Description:  "Stage changes",
 			},
 		},
 	}
@@ -47,67 +33,10 @@ func makeMutationProject(t *testing.T, repoDir, branchAllow string) *ProjectConf
 	return p
 }
 
-func TestValidator_MutatesBranch_AcceptsHEADInAllow(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "ai/feature")
-	p := makeMutationProject(t, tmpDir, "^ai/")
-
-	v := NewValidator()
-	req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: []string{"-u"}}
-	_, result := v.ValidateOperation(req, p)
-	if !result.OK {
-		t.Errorf("ValidateOperation should accept when HEAD matches branch_allow: %s", result.Message)
-	}
-}
-
-func TestValidator_MutatesBranch_RejectsHEADOutsideAllow(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "main")
-	p := makeMutationProject(t, tmpDir, "^ai/")
-
-	v := NewValidator()
-	req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: []string{"-u"}}
-	_, result := v.ValidateOperation(req, p)
-	if result.OK {
-		t.Errorf("ValidateOperation should reject when HEAD (main) is outside branch_allow")
-	}
-	if !strings.Contains(result.Message, "current branch") {
-		t.Errorf("error message should mention current branch, got: %s", result.Message)
-	}
-}
-
-func TestValidator_NonMutating_SkipsCurrentBranchCheck(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "main")
-	p := makeMutationProject(t, tmpDir, "^ai/")
-
-	v := NewValidator()
-	req := OperationRequest{Operation: "git_status", Params: map[string]ParamValue{}}
-	_, result := v.ValidateOperation(req, p)
-	if !result.OK {
-		t.Errorf("ValidateOperation should accept non-mutating op regardless of HEAD: %s", result.Message)
-	}
-}
-
-func TestValidator_MutatesBranch_NoBranchAllow_NoOp(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "main")
-	// No branch_allow constraint -> HEAD is unconstrained.
-	p := makeMutationProject(t, tmpDir, "")
-
-	v := NewValidator()
-	req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: []string{"-u"}}
-	_, result := v.ValidateOperation(req, p)
-	if !result.OK {
-		t.Errorf("ValidateOperation should accept when branch_allow is empty: %s", result.Message)
-	}
-}
-
 func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "ai/feature")
 
-	p := makeMutationProject(t, tmpDir, "^ai/")
+	p := makeGitAddProject(t, tmpDir)
 	p.Constraints.PathDeny = []string{".env*"}
 	if err := p.CompilePatterns(); err != nil {
 		t.Fatalf("CompilePatterns failed: %v", err)
@@ -150,9 +79,8 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 
 func TestValidator_GitAdd_BroadFlags_NoPathDeny_Allowed(t *testing.T) {
 	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "ai/feature")
 
-	p := makeMutationProject(t, tmpDir, "^ai/")
+	p := makeGitAddProject(t, tmpDir)
 	// path_deny intentionally empty -> broad flag without paths is allowed.
 
 	v := NewValidator()
@@ -165,9 +93,8 @@ func TestValidator_GitAdd_BroadFlags_NoPathDeny_Allowed(t *testing.T) {
 
 func TestValidator_GitAdd_BroadFlagsGuard_AbsolutePath(t *testing.T) {
 	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "ai/feature")
 
-	p := makeMutationProject(t, tmpDir, "^ai/")
+	p := makeGitAddProject(t, tmpDir)
 	p.Constraints.PathDeny = []string{".env*"}
 	if err := p.CompilePatterns(); err != nil {
 		t.Fatalf("CompilePatterns failed: %v", err)

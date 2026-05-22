@@ -25,13 +25,11 @@ type ProjectConfig struct {
 	GitConfig         map[string]string     `json:"git_config,omitempty"` // Git config overrides
 
 	// Compiled patterns (not serialized)
-	compiledBranchPatterns []*regexp.Regexp
-	compiledPathPatterns   []string
+	compiledPathPatterns []string
 }
 
 // Constraints defines policy constraints for a project
 type Constraints struct {
-	BranchAllow      []string `json:"branch_allow,omitempty"`       // Regex patterns for allowed branches
 	RemoteHostsAllow []string `json:"remote_hosts_allow,omitempty"` // TODO: Not yet implemented. For git push URL validation (prevent .git/config remote URL tampering)
 	PathDeny         []string `json:"path_deny,omitempty"`          // Glob patterns for denied paths
 }
@@ -123,17 +121,8 @@ func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
 	return &config, nil
 }
 
-// CompilePatterns compiles regex and glob patterns in constraints
+// CompilePatterns compiles glob patterns in constraints
 func (p *ProjectConfig) CompilePatterns() error {
-	// Compile branch patterns
-	for _, pattern := range p.Constraints.BranchAllow {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid branch pattern %q: %w", pattern, err)
-		}
-		p.compiledBranchPatterns = append(p.compiledBranchPatterns, re)
-	}
-
 	// Store path patterns for glob matching
 	p.compiledPathPatterns = p.Constraints.PathDeny
 
@@ -154,22 +143,6 @@ func (p *ProjectConfig) HasOperation(operationID string) bool {
 func (p *ProjectConfig) GetOperation(id string) (*Operation, bool) {
 	op, exists := p.Operations[id]
 	return op, exists
-}
-
-// ValidateBranch checks if a branch name is allowed by the constraints
-func (p *ProjectConfig) ValidateBranch(branch string) error {
-	// If no branch restrictions, allow all
-	if len(p.compiledBranchPatterns) == 0 {
-		return nil
-	}
-
-	for _, re := range p.compiledBranchPatterns {
-		if re.MatchString(branch) {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("branch %q not allowed (must match one of: %v)", branch, p.Constraints.BranchAllow)
 }
 
 // ValidatePaths checks that all paths are safe and not denied by policy.
@@ -288,40 +261,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 		return fmt.Errorf("path %q is a bare directory; path_deny enforcement requires per-file paths", path)
 	}
 	return nil
-}
-
-// CurrentBranch resolves the current branch (HEAD) of RepoPath using
-// `git symbolic-ref --short HEAD`. Returns an error when the repository
-// is in detached HEAD state, when RepoPath is unset, or when git fails.
-//
-// gitPath is the git binary to invoke. Callers should pass the absolute
-// path of the same git binary used for execution (typically op.Command
-// after ResolveOperationCommands) so a manipulated PATH cannot spoof the
-// guard while the real operation runs a different binary. Passing "git"
-// is accepted for tests and falls back to PATH lookup.
-//
-// The git invocation runs with a minimal environment (PATH only) so that
-// GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* drift in the daemon environment
-// cannot redirect the guard to a repository different from the one
-// execution will actually mutate.
-func (p *ProjectConfig) CurrentBranch(gitPath string) (string, error) {
-	if p.RepoPath == "" {
-		return "", fmt.Errorf("repo_path is not set")
-	}
-	if gitPath == "" {
-		gitPath = "git"
-	}
-	cmd := exec.Command(gitPath, "-C", p.RepoPath, "symbolic-ref", "--short", "HEAD")
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve HEAD branch (detached HEAD or git error): %w", err)
-	}
-	branch := strings.TrimSpace(string(out))
-	if branch == "" {
-		return "", fmt.Errorf("failed to resolve HEAD branch: empty output")
-	}
-	return branch, nil
 }
 
 // GetEnvForOperation returns environment variables for operation template expansion

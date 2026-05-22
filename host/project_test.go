@@ -1,38 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-// initGitRepoOnBranch initializes a git repo at dir and creates one commit
-// on the given branch name. Shared by project_test.go and validator_test.go
-// to exercise CurrentBranch() / current-branch guard paths against real
-// git invocations.
-func initGitRepoOnBranch(t *testing.T, dir, branch string) {
-	t.Helper()
-	run := func(args ...string) {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test",
-			"GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test",
-			"GIT_COMMITTER_EMAIL=test@example.com",
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v: %s", args, err, out)
-		}
-	}
-	run("init", "-q", "-b", branch)
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("init\n"), 0644); err != nil {
-		t.Fatalf("write README failed: %v", err)
-	}
-	run("add", "README.md")
-	run("commit", "-q", "-m", "init")
-}
 
 func TestProjectConfig_HasOperation(t *testing.T) {
 	project := &ProjectConfig{
@@ -57,53 +31,6 @@ func TestProjectConfig_HasOperation(t *testing.T) {
 				t.Errorf("HasOperation(%q) = %v, want %v", tt.opID, result, tt.expect)
 			}
 		})
-	}
-}
-
-func TestProjectConfig_ValidateBranch(t *testing.T) {
-	project := &ProjectConfig{
-		Constraints: Constraints{
-			BranchAllow: []string{"^ai/", "^feature/ai-"},
-		},
-	}
-	if err := project.CompilePatterns(); err != nil {
-		t.Fatalf("CompilePatterns failed: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		branch  string
-		wantErr bool
-	}{
-		{"allowed ai/ prefix", "ai/feature-123", false},
-		{"allowed feature/ai- prefix", "feature/ai-assistant", false},
-		{"disallowed main", "main", true},
-		{"disallowed feature/ without ai", "feature/new-feature", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := project.ValidateBranch(tt.branch)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateBranch(%q) error = %v, wantErr %v", tt.branch, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestProjectConfig_ValidateBranch_NoRestrictions(t *testing.T) {
-	project := &ProjectConfig{
-		Constraints: Constraints{
-			BranchAllow: []string{}, // No restrictions
-		},
-	}
-	if err := project.CompilePatterns(); err != nil {
-		t.Fatalf("CompilePatterns failed: %v", err)
-	}
-
-	// Any branch should be allowed
-	if err := project.ValidateBranch("main"); err != nil {
-		t.Errorf("ValidateBranch should allow all branches when no restrictions: %v", err)
 	}
 }
 
@@ -432,9 +359,6 @@ func TestLoadProjectConfig(t *testing.T) {
 		"repo": "owner/repo",
 		"repo_path": "/path/to/repo",
 		"allowed_operations": ["gh_pr_view", "gh_pr_list"],
-		"constraints": {
-			"branch_allow": ["^ai/"]
-		},
 		"operations": {
 			"gh_pr_view": {
 				"command": "gh",
@@ -661,6 +585,48 @@ func TestCreateProjectConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("git_write template includes push", func(t *testing.T) {
+		opts := CreateProjectConfigOptions{
+			Repo:     "push/repo",
+			Template: "git_write",
+		}
+		if err := CreateProjectConfig(opts); err != nil {
+			t.Fatalf("CreateProjectConfig failed: %v", err)
+		}
+
+		config, err := LoadProjectConfig("push_repo")
+		if err != nil {
+			t.Fatalf("Failed to load created config: %v", err)
+		}
+		if !config.HasOperation("git_push") {
+			t.Error("git_write template should include git_push operation")
+		}
+	})
+
+	t.Run("all templates load and only expose auth-required ops", func(t *testing.T) {
+		localOnly := []string{"git_status", "git_add", "git_commit", "git_merge", "git_reset", "git_stash", "git_log", "git_diff"}
+		for i, tmpl := range []string{"readonly", "github_write", "git_write", "git_github_write"} {
+			projectID := fmt.Sprintf("loadcheck%d_repo", i)
+			repo := fmt.Sprintf("loadcheck%d/repo", i)
+			opts := CreateProjectConfigOptions{Repo: repo, Template: tmpl}
+			if err := CreateProjectConfig(opts); err != nil {
+				t.Fatalf("CreateProjectConfig(%s) failed: %v", tmpl, err)
+			}
+			config, err := LoadProjectConfig(projectID)
+			if err != nil {
+				t.Fatalf("LoadProjectConfig(%s) failed: %v", tmpl, err)
+			}
+			for _, op := range localOnly {
+				if config.HasOperation(op) {
+					t.Errorf("template %q must not list local-only op %q in allowed_operations", tmpl, op)
+				}
+				if _, exists := config.Operations[op]; exists {
+					t.Errorf("template %q must not define local-only op %q in operations map", tmpl, op)
+				}
+			}
+		}
+	})
+
 	t.Run("existing config without force", func(t *testing.T) {
 		// First creation
 		opts := CreateProjectConfigOptions{
@@ -817,42 +783,5 @@ func TestProjectsDirWithoutEnv(t *testing.T) {
 	got := ProjectsDir()
 	if got != want {
 		t.Errorf("ProjectsDir() = %q, want %q", got, want)
-	}
-}
-
-func TestProjectConfig_CurrentBranch(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "ai/feature")
-
-	p := &ProjectConfig{RepoPath: tmpDir}
-	branch, err := p.CurrentBranch("git")
-	if err != nil {
-		t.Fatalf("CurrentBranch failed: %v", err)
-	}
-	if branch != "ai/feature" {
-		t.Errorf("CurrentBranch() = %q, want %q", branch, "ai/feature")
-	}
-}
-
-func TestProjectConfig_CurrentBranch_DetachedHEAD(t *testing.T) {
-	tmpDir := t.TempDir()
-	initGitRepoOnBranch(t, tmpDir, "main")
-
-	// Detach HEAD.
-	cmd := exec.Command("git", "-C", tmpDir, "checkout", "--detach", "HEAD")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("checkout --detach failed: %v: %s", err, out)
-	}
-
-	p := &ProjectConfig{RepoPath: tmpDir}
-	if _, err := p.CurrentBranch("git"); err == nil {
-		t.Errorf("CurrentBranch should fail on detached HEAD")
-	}
-}
-
-func TestProjectConfig_CurrentBranch_EmptyRepoPath(t *testing.T) {
-	p := &ProjectConfig{}
-	if _, err := p.CurrentBranch("git"); err == nil {
-		t.Errorf("CurrentBranch should fail when RepoPath is empty")
 	}
 }
