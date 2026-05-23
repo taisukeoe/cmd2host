@@ -20,7 +20,7 @@ GITHUB_REPO="taisukeoe/cmd2host"
 # per .github/workflows/release-host-binary.yml), because it is concatenated
 # into release-download URLs as `releases/download/${BINARY_VERSION}/...` —
 # a bare semver would resolve to a non-existent path.
-BINARY_VERSION="binary-v0.1.9"
+BINARY_VERSION="binary-v0.2.0"
 
 # Install netcat if needed
 install_netcat() {
