@@ -326,6 +326,41 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 			wantErr:     true,
 			errContains: "escapes repo_path after symlink resolution",
 		},
+		{
+			// Multiple trailing components missing: "etc" exists as a
+			// symlink pointing outside the repo, "newdir" and the leaf
+			// do not exist yet. The walk-up ancestor logic must still
+			// detect the intermediate symlink and reject.
+			name:     "nonexistent multi-level leaves under symlinked ancestor outside repo reject",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				outside := t.TempDir()
+				if err := os.Symlink(outside, filepath.Join(dir, "etc")); err != nil {
+					t.Fatalf("symlink dir/etc -> outside: %v", err)
+				}
+			},
+			paths:       []string{"etc/newdir/will-be-created.txt"},
+			wantErr:     true,
+			errContains: "escapes repo_path after symlink resolution",
+		},
+		{
+			// Multi-level missing components inside the repo with a
+			// symlink that stays in-repo: walk-up resolves the
+			// ancestor inside repoAbs, the suffix joins cleanly, and
+			// containment passes.
+			name:     "nonexistent multi-level leaves under in-repo symlink allowed",
+			pathDeny: []string{".env*"},
+			setup: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "real"), 0755); err != nil {
+					t.Fatalf("mkdir real: %v", err)
+				}
+				if err := os.Symlink("real", filepath.Join(dir, "link")); err != nil {
+					t.Fatalf("symlink link -> real: %v", err)
+				}
+			},
+			paths:   []string{"link/newdir/will-be-created.txt"},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

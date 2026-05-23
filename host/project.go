@@ -262,22 +262,39 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("path %q: resolve symlinks failed: %w", path, err)
 		}
-		// Leaf does not yet exist (path will be created by git). Resolve
-		// the parent so that an intermediate symlink redirecting parent
-		// outside repoAbs is still rejected.
-		parent := filepath.Dir(joined)
-		resolvedParent, perr := filepath.EvalSymlinks(parent)
-		if perr != nil {
-			if os.IsNotExist(perr) {
-				// Parent also absent — the lexical containment check
-				// above already verified the string-level path. Let git
-				// surface the proper not-found error downstream.
-				resolvedJoined = ""
-			} else {
-				return fmt.Errorf("path %q: resolve parent symlinks failed: %w", path, perr)
+		// Leaf does not yet exist (path will be created by git).
+		// Multiple trailing components may be missing — walk up to the
+		// deepest existing ancestor, resolve symlinks there, then append
+		// the missing suffix. This ensures an intermediate symlink that
+		// redirects outside repoAbs is still rejected even when several
+		// later path components do not exist yet.
+		current := joined
+		for {
+			if _, lerr := os.Lstat(current); lerr == nil {
+				break
+			} else if !os.IsNotExist(lerr) {
+				return fmt.Errorf("path %q: lstat ancestor failed: %w", path, lerr)
 			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				// Reached filesystem root with no existing ancestor.
+				current = ""
+				break
+			}
+			current = parent
+		}
+		if current == "" {
+			// No existing ancestor — the lexical containment check
+			// above already verified the string-level path. Let git
+			// surface the proper not-found error downstream.
+			resolvedJoined = ""
 		} else {
-			resolvedJoined = filepath.Join(resolvedParent, filepath.Base(joined))
+			resolvedAncestor, rerr := filepath.EvalSymlinks(current)
+			if rerr != nil {
+				return fmt.Errorf("path %q: resolve ancestor symlinks failed: %w", path, rerr)
+			}
+			suffix := strings.TrimPrefix(joined, current)
+			resolvedJoined = filepath.Join(resolvedAncestor, suffix)
 		}
 	}
 	if resolvedJoined != "" {

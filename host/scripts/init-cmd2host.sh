@@ -66,7 +66,6 @@ TEMP_TOKEN=$(mktemp)
 chmod 600 "$TEMP_TOKEN"
 echo -n "$SESSION_TOKEN" > "$TEMP_TOKEN"
 mv "$TEMP_TOKEN" "$SESSION_TOKEN_FILE"
-chmod 600 "$SESSION_TOKEN_FILE"
 
 echo "cmd2host: session token initialized"
 
