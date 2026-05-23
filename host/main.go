@@ -51,6 +51,11 @@ func NewServer(daemonConfig *DaemonConfig) (*Server, error) {
 // handleClient processes a single client connection
 func (s *Server) handleClient(conn net.Conn) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("  -> PANIC recovered in handleClient: %v\n", r)
+		}
+	}()
 
 	// Set read deadline
 	conn.SetReadDeadline(time.Now().Add(readTimeout))
