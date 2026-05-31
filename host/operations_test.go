@@ -693,12 +693,13 @@ func TestTemplates_BodyOpsMigration(t *testing.T) {
 		template     string // template file basename (no .json)
 		operation    string
 		expectSuffix []string // expected trailing args_template elements
+		bodyRequired bool     // gh_pr_create requires a non-empty body (non-interactive contract)
 	}
 
 	checks := []opCheck{
-		{template: "github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}},
+		{template: "github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}, bodyRequired: true},
 		{template: "github_write", operation: "gh_issue_create", expectSuffix: []string{"--body", "{body}"}},
-		{template: "git_github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}},
+		{template: "git_github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}, bodyRequired: true},
 		{template: "git_github_write", operation: "gh_pr_edit", expectSuffix: []string{"--body", "{body}"}},
 	}
 
@@ -737,7 +738,21 @@ func TestTemplates_BodyOpsMigration(t *testing.T) {
 			if bodySchema.Type != "string" {
 				t.Errorf("params.body.type = %q, want \"string\"", bodySchema.Type)
 			}
-			if !bodySchema.Optional {
+			if c.bodyRequired {
+				// gh pr create is non-interactive (no --fill allowed), so a
+				// missing or blank body would silently create an empty-body PR.
+				// Body must therefore be required (not optional) and non-blank
+				// (minLength + non-whitespace pattern).
+				if bodySchema.Optional {
+					t.Errorf("params.body.optional = true, want false (body required)")
+				}
+				if bodySchema.MinLength != 1 {
+					t.Errorf("params.body.minLength = %d, want 1", bodySchema.MinLength)
+				}
+				if bodySchema.Pattern == "" {
+					t.Errorf("params.body.pattern is empty, want a non-whitespace pattern")
+				}
+			} else if !bodySchema.Optional {
 				t.Errorf("params.body.optional = false, want true")
 			}
 			if bodySchema.MaxLength != 65535 {

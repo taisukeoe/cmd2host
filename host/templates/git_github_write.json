@@ -72,7 +72,7 @@
       "command": "gh",
       "args_template": ["pr", "create", "-R", "{repo}", "--body", "{body}"],
       "params": {
-        "body": {"type": "string", "optional": true, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
       "description": "Create a pull request"
