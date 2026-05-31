@@ -52,7 +52,7 @@
       "command": "gh",
       "args_template": ["pr", "create", "-R", "{repo}", "--body", "{body}"],
       "params": {
-        "body": {"type": "string", "optional": true, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
       "description": "Create a pull request"
@@ -62,7 +62,7 @@
       "args_template": ["pr", "comment", "{number}", "-R", "{repo}", "--body", "{body}"],
       "params": {
         "number": {"type": "integer", "min": 1},
-        "body": {"type": "string", "minLength": 1, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "description": "Add a pull request summary comment"
     },
@@ -72,7 +72,7 @@
       "params": {
         "number": {"type": "integer", "min": 1},
         "comment_id": {"type": "integer", "min": 1},
-        "body": {"type": "string", "minLength": 1, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "description": "Reply to an inline pull request review comment"
     },
@@ -96,7 +96,7 @@
       "command": "gh",
       "args_template": ["issue", "create", "-R", "{repo}", "--body", "{body}"],
       "params": {
-        "body": {"type": "string", "optional": true, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--label", "--assignee"],
       "description": "Create an issue"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -109,4 +110,135 @@ func TestGetTemplate_ErrorWrapping(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to read template") {
 		t.Errorf("error message should indicate read failure, got: %v", err)
 	}
+}
+
+// loadTemplateOperation parses an embedded template and returns one of its
+// operations with patterns compiled, mirroring LoadProjectConfig's per-op
+// CompilePatterns step so pattern validation is exercised.
+func loadTemplateOperation(t *testing.T, templateName, opID string) *Operation {
+	t.Helper()
+	data, err := GetTemplate(templateName)
+	if err != nil {
+		t.Fatalf("GetTemplate(%q) error = %v", templateName, err)
+	}
+	var config ProjectConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("unmarshal template %q: %v", templateName, err)
+	}
+	op, ok := config.Operations[opID]
+	if !ok {
+		t.Fatalf("template %q has no operation %q", templateName, opID)
+	}
+	if err := op.CompilePatterns(); err != nil {
+		t.Fatalf("CompilePatterns(%q.%q): %v", templateName, opID, err)
+	}
+	return op
+}
+
+// TestTemplate_RequiresNonEmptyBody is a regression guard for the
+// non-interactive create contract. `gh pr create` / `gh issue create` prompt
+// unless a body is supplied, and --fill is not in allowed_flags, so
+// params.body is the only body channel. If body is optional, an agent that
+// omits or empties it creates a PR / issue with an empty body that still
+// exits 0. The two validation layers must together reject every empty-body
+// shape:
+//   - present-but-blank body (empty / whitespace / newline) is rejected by
+//     ValidateParams via minLength + a non-whitespace pattern.
+//   - a missing body is rejected by BuildArgs, because making the param
+//     required disables the optional-placeholder paired-drop that would
+//     otherwise silently omit --body.
+func TestTemplate_RequiresNonEmptyBody(t *testing.T) {
+	repoEnv := map[string]string{"repo": "owner/repo"}
+
+	required := []struct{ templateName, opID string }{
+		{"git_github_write", "gh_pr_create"},
+		{"github_write", "gh_pr_create"},
+		{"github_write", "gh_issue_create"},
+	}
+	for _, rc := range required {
+		t.Run(rc.templateName+"/"+rc.opID, func(t *testing.T) {
+			op := loadTemplateOperation(t, rc.templateName, rc.opID)
+
+			// Layer 1: ValidateParams rejects present-but-blank bodies.
+			blank := map[string]string{
+				"empty body":            "",
+				"whitespace-only body":  "   ",
+				"newline/tab-only body": "\n\t ",
+			}
+			for name, body := range blank {
+				if err := op.ValidateParams(map[string]ParamValue{"body": body}); err == nil {
+					t.Errorf("%s: ValidateParams = nil, want rejection", name)
+				}
+			}
+			if err := op.ValidateParams(map[string]ParamValue{"body": "real body"}); err != nil {
+				t.Errorf("non-empty body: ValidateParams = %v, want nil", err)
+			}
+
+			// Layer 2: BuildArgs rejects a missing body (required param).
+			if _, err := op.BuildArgs(map[string]ParamValue{}, nil, repoEnv); err == nil {
+				t.Error("missing body: BuildArgs = nil error, want missing-required-parameter")
+			}
+			// With a body, BuildArgs still renders --body <body>.
+			args, err := op.BuildArgs(map[string]ParamValue{"body": "real body"}, nil, repoEnv)
+			if err != nil {
+				t.Fatalf("BuildArgs with body: %v", err)
+			}
+			if !argsContainPair(args, "--body", "real body") {
+				t.Errorf("BuildArgs args = %v, want --body followed by the body", args)
+			}
+		})
+	}
+}
+
+// TestTemplate_BodyStaysOptionalForEdit guards the other side of the change:
+// gh_pr_edit edits only the title / labels, so its body stays optional and
+// requiring it on the create operations must not leak to it.
+func TestTemplate_BodyStaysOptionalForEdit(t *testing.T) {
+	op := loadTemplateOperation(t, "git_github_write", "gh_pr_edit")
+	body, ok := op.Params["body"]
+	if !ok {
+		t.Fatal("gh_pr_edit has no body param")
+	}
+	if !body.Optional {
+		t.Error("gh_pr_edit body.Optional = false, want true (must stay optional)")
+	}
+}
+
+// TestTemplate_CommentBodyRejectsWhitespaceOnly guards the already-required
+// comment bodies (gh_pr_comment / gh_pr_review_comment_reply): minLength alone
+// admits a whitespace-only body, so the non-whitespace pattern must reject a
+// blank comment that would otherwise be pure noise.
+func TestTemplate_CommentBodyRejectsWhitespaceOnly(t *testing.T) {
+	pairs := []struct{ templateName, opID string }{
+		{"git_github_write", "gh_pr_comment"},
+		{"git_github_write", "gh_pr_review_comment_reply"},
+		{"github_write", "gh_pr_comment"},
+		{"github_write", "gh_pr_review_comment_reply"},
+	}
+	for _, p := range pairs {
+		t.Run(p.templateName+"/"+p.opID, func(t *testing.T) {
+			op := loadTemplateOperation(t, p.templateName, p.opID)
+			for name, body := range map[string]string{
+				"whitespace-only":  "   ",
+				"newline/tab-only": "\n\t ",
+			} {
+				if err := op.ValidateParams(map[string]ParamValue{"body": body}); err == nil {
+					t.Errorf("%s: ValidateParams = nil, want rejection", name)
+				}
+			}
+			if err := op.ValidateParams(map[string]ParamValue{"body": "ok"}); err != nil {
+				t.Errorf("non-blank body: ValidateParams = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// argsContainPair reports whether want followed immediately by val appears in args.
+func argsContainPair(args []string, want, val string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == want && args[i+1] == val {
+			return true
+		}
+	}
+	return false
 }
