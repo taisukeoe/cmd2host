@@ -96,7 +96,7 @@
       "command": "gh",
       "args_template": ["issue", "create", "-R", "{repo}", "--body", "{body}"],
       "params": {
-        "body": {"type": "string", "optional": true, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--label", "--assignee"],
       "description": "Create an issue"

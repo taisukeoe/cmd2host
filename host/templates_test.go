@@ -135,23 +135,29 @@ func loadTemplateOperation(t *testing.T, templateName, opID string) *Operation {
 	return op
 }
 
-// TestTemplate_GhPrCreate_RequiresNonEmptyBody is a regression guard for the
-// non-interactive PR-create contract. `gh pr create` prompts unless a body is
-// supplied, and --fill is not in allowed_flags, so params.body is the only
-// body channel. If body is optional, an agent that omits or empties it creates
-// a PR with an empty body that still exits 0. The two validation layers must
-// together reject every empty-body shape:
+// TestTemplate_RequiresNonEmptyBody is a regression guard for the
+// non-interactive create contract. `gh pr create` / `gh issue create` prompt
+// unless a body is supplied, and --fill is not in allowed_flags, so
+// params.body is the only body channel. If body is optional, an agent that
+// omits or empties it creates a PR / issue with an empty body that still
+// exits 0. The two validation layers must together reject every empty-body
+// shape:
 //   - present-but-blank body (empty / whitespace / newline) is rejected by
 //     ValidateParams via minLength + a non-whitespace pattern.
 //   - a missing body is rejected by BuildArgs, because making the param
 //     required disables the optional-placeholder paired-drop that would
 //     otherwise silently omit --body.
-func TestTemplate_GhPrCreate_RequiresNonEmptyBody(t *testing.T) {
+func TestTemplate_RequiresNonEmptyBody(t *testing.T) {
 	repoEnv := map[string]string{"repo": "owner/repo"}
 
-	for _, templateName := range []string{"git_github_write", "github_write"} {
-		t.Run(templateName, func(t *testing.T) {
-			op := loadTemplateOperation(t, templateName, "gh_pr_create")
+	required := []struct{ templateName, opID string }{
+		{"git_github_write", "gh_pr_create"},
+		{"github_write", "gh_pr_create"},
+		{"github_write", "gh_issue_create"},
+	}
+	for _, rc := range required {
+		t.Run(rc.templateName+"/"+rc.opID, func(t *testing.T) {
+			op := loadTemplateOperation(t, rc.templateName, rc.opID)
 
 			// Layer 1: ValidateParams rejects present-but-blank bodies.
 			blank := map[string]string{
@@ -164,7 +170,7 @@ func TestTemplate_GhPrCreate_RequiresNonEmptyBody(t *testing.T) {
 					t.Errorf("%s: ValidateParams = nil, want rejection", name)
 				}
 			}
-			if err := op.ValidateParams(map[string]ParamValue{"body": "real PR body"}); err != nil {
+			if err := op.ValidateParams(map[string]ParamValue{"body": "real body"}); err != nil {
 				t.Errorf("non-empty body: ValidateParams = %v, want nil", err)
 			}
 
@@ -173,39 +179,28 @@ func TestTemplate_GhPrCreate_RequiresNonEmptyBody(t *testing.T) {
 				t.Error("missing body: BuildArgs = nil error, want missing-required-parameter")
 			}
 			// With a body, BuildArgs still renders --body <body>.
-			args, err := op.BuildArgs(map[string]ParamValue{"body": "real PR body"}, nil, repoEnv)
+			args, err := op.BuildArgs(map[string]ParamValue{"body": "real body"}, nil, repoEnv)
 			if err != nil {
 				t.Fatalf("BuildArgs with body: %v", err)
 			}
-			if !argsContainPair(args, "--body", "real PR body") {
+			if !argsContainPair(args, "--body", "real body") {
 				t.Errorf("BuildArgs args = %v, want --body followed by the body", args)
 			}
 		})
 	}
 }
 
-// TestTemplate_BodyStaysOptionalForEditAndIssue guards the other side of the
-// change: gh_pr_edit (edits only title/labels) and gh_issue_create keep an
-// optional body, so requiring it on gh_pr_create must not leak to them.
-func TestTemplate_BodyStaysOptionalForEditAndIssue(t *testing.T) {
-	cases := []struct {
-		templateName string
-		opID         string
-	}{
-		{"git_github_write", "gh_pr_edit"},
-		{"github_write", "gh_issue_create"},
+// TestTemplate_BodyStaysOptionalForEdit guards the other side of the change:
+// gh_pr_edit edits only the title / labels, so its body stays optional and
+// requiring it on the create operations must not leak to it.
+func TestTemplate_BodyStaysOptionalForEdit(t *testing.T) {
+	op := loadTemplateOperation(t, "git_github_write", "gh_pr_edit")
+	body, ok := op.Params["body"]
+	if !ok {
+		t.Fatal("gh_pr_edit has no body param")
 	}
-	for _, tc := range cases {
-		t.Run(tc.templateName+"/"+tc.opID, func(t *testing.T) {
-			op := loadTemplateOperation(t, tc.templateName, tc.opID)
-			body, ok := op.Params["body"]
-			if !ok {
-				t.Fatalf("%s has no body param", tc.opID)
-			}
-			if !body.Optional {
-				t.Errorf("%s body.Optional = false, want true (must stay optional)", tc.opID)
-			}
-		})
+	if !body.Optional {
+		t.Error("gh_pr_edit body.Optional = false, want true (must stay optional)")
 	}
 }
 

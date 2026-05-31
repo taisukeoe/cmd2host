@@ -484,13 +484,13 @@ Example MCP tool invocation:
 
 Body length cap is 65535 chars (matches GitHub's body limit).
 
-`gh_pr_create` requires a non-empty `body`. `gh pr create` is run
-non-interactively and `--fill` is not allowed, so an omitted or blank body
-would otherwise create a pull request with an empty body. A missing,
-empty, or whitespace-only body is rejected. `gh_pr_comment` and
-`gh_pr_review_comment_reply` likewise require a non-empty body (`minLength:
-1`). `gh_pr_edit` and `gh_issue_create` keep an optional body (e.g. editing
-only a title or labels).
+`gh_pr_create` and `gh_issue_create` require a non-empty `body`. `gh pr
+create` / `gh issue create` run non-interactively and `--fill` is not
+allowed, so an omitted or blank body would otherwise create a pull request
+or issue with an empty body. A missing, empty, or whitespace-only body is
+rejected. `gh_pr_comment` and `gh_pr_review_comment_reply` likewise require
+a non-empty body (`minLength: 1`). `gh_pr_edit` keeps an optional body
+(e.g. editing only a title or labels).
 
 #### Migration Notes (binary-v0.1.8)
 
