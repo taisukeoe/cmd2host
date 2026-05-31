@@ -204,6 +204,35 @@ func TestTemplate_BodyStaysOptionalForEdit(t *testing.T) {
 	}
 }
 
+// TestTemplate_CommentBodyRejectsWhitespaceOnly guards the already-required
+// comment bodies (gh_pr_comment / gh_pr_review_comment_reply): minLength alone
+// admits a whitespace-only body, so the non-whitespace pattern must reject a
+// blank comment that would otherwise be pure noise.
+func TestTemplate_CommentBodyRejectsWhitespaceOnly(t *testing.T) {
+	pairs := []struct{ templateName, opID string }{
+		{"git_github_write", "gh_pr_comment"},
+		{"git_github_write", "gh_pr_review_comment_reply"},
+		{"github_write", "gh_pr_comment"},
+		{"github_write", "gh_pr_review_comment_reply"},
+	}
+	for _, p := range pairs {
+		t.Run(p.templateName+"/"+p.opID, func(t *testing.T) {
+			op := loadTemplateOperation(t, p.templateName, p.opID)
+			for name, body := range map[string]string{
+				"whitespace-only":  "   ",
+				"newline/tab-only": "\n\t ",
+			} {
+				if err := op.ValidateParams(map[string]ParamValue{"body": body}); err == nil {
+					t.Errorf("%s: ValidateParams = nil, want rejection", name)
+				}
+			}
+			if err := op.ValidateParams(map[string]ParamValue{"body": "ok"}); err != nil {
+				t.Errorf("non-blank body: ValidateParams = %v, want nil", err)
+			}
+		})
+	}
+}
+
 // argsContainPair reports whether want followed immediately by val appears in args.
 func argsContainPair(args []string, want, val string) bool {
 	for i := 0; i+1 < len(args); i++ {

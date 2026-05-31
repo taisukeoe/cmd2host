@@ -92,7 +92,7 @@
       "args_template": ["pr", "comment", "{number}", "-R", "{repo}", "--body", "{body}"],
       "params": {
         "number": {"type": "integer", "min": 1},
-        "body": {"type": "string", "minLength": 1, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "description": "Add a pull request summary comment"
     },
@@ -102,7 +102,7 @@
       "params": {
         "number": {"type": "integer", "min": 1},
         "comment_id": {"type": "integer", "min": 1},
-        "body": {"type": "string", "minLength": 1, "maxLength": 65535}
+        "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "description": "Reply to an inline pull request review comment"
     },
