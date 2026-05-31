@@ -571,8 +571,11 @@ func TestOperation_BuildArgs_PairedDrop(t *testing.T) {
 }
 
 func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
-	// Templates mirror the Pattern A migration applied in host/templates/*.json
-	// for gh_pr_create, gh_pr_edit, and gh_issue_create.
+	// Mirrors the body-param handling in host/templates/*.json. gh_pr_create
+	// now requires a non-empty body (rejection of a missing body is covered by
+	// TestTemplate_GhPrCreate_RequiresNonEmptyBody), so only its body-present
+	// case is modelled here; gh_pr_edit and gh_issue_create keep an optional
+	// body that paired-drops --body when absent.
 	longBody := "title line\n\nparagraph with \"quotes\" and `backticks`\n\nline with control \x01 char\n\n" +
 		"multibyte: 日本語の本文 — こんにちは"
 
@@ -589,25 +592,12 @@ func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
 				Command:      "gh",
 				ArgsTemplate: []string{"pr", "create", "-R", "{repo}", "--body", "{body}"},
 				Params: map[string]ParamSchema{
-					"body": {Type: "string", Optional: true, MaxLength: 65535},
+					"body": {Type: "string", MinLength: 1, MaxLength: 65535, Pattern: "\\S"},
 				},
 			},
 			params:      map[string]ParamValue{"body": longBody},
 			profileEnv:  map[string]string{"repo": "owner/repo"},
 			expectedArg: []string{"pr", "create", "-R", "owner/repo", "--body", longBody},
-		},
-		{
-			name: "gh_pr_create body absent",
-			op: &Operation{
-				Command:      "gh",
-				ArgsTemplate: []string{"pr", "create", "-R", "{repo}", "--body", "{body}"},
-				Params: map[string]ParamSchema{
-					"body": {Type: "string", Optional: true, MaxLength: 65535},
-				},
-			},
-			params:      map[string]ParamValue{},
-			profileEnv:  map[string]string{"repo": "owner/repo"},
-			expectedArg: []string{"pr", "create", "-R", "owner/repo"},
 		},
 		{
 			name: "gh_pr_edit body present",
