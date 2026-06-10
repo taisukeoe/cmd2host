@@ -570,7 +570,7 @@ func TestOperation_BuildArgs_PairedDrop(t *testing.T) {
 }
 
 func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
-	// Mirrors the body-param handling in host/templates/*.json. gh_pr_create
+	// Mirrors the body-param handling in pkg/config/templates/*.json. gh_pr_create
 	// and gh_issue_create now require a non-empty body (rejection of a missing
 	// body is covered by TestTemplate_RequiresNonEmptyBody), so only their
 	// body-present cases are modelled here; gh_pr_edit keeps an optional body
