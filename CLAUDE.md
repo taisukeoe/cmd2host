@@ -23,7 +23,7 @@ cmd2host assumes the container already has `git` installed and the project's `.g
 
 Three-part system:
 1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs MCP server and wrapper scripts
-2. **Host side** (`host/`): Go daemon that receives and executes commands
+2. **Host side** (`cmd/cmd2host/` + `pkg/`): Go daemon that receives and executes commands. Business logic lives in importable packages under `pkg/`; the CLI binary is a thin wrapper
 3. **MCP server** (`mcp-server/`): Model Context Protocol server for AI agent integration
 
 Communication flow:
@@ -60,22 +60,23 @@ Commands are validated using **operation mode**: predefined operation templates 
 - `src/cmd2host/cmd-wrapper.sh` - Wrapper that displays MCP usage instructions (does not execute commands)
 - `src/cmd2host/mcp.json` - MCP server configuration template
 
-### Host daemon
-- `host/main.go` - TCP server entry point, CLI commands
-- `host/config.go` - Daemon configuration loading
-- `host/project.go` - Project configuration, allowance, constraints validation
-- `host/validator.go` - Operation validation logic
-- `host/operations.go` - Operation template definitions and parameter handling
-- `host/sanitize.go` - Command sanitization (env vars, git config)
-- `host/auth.go` - Token authentication and management
-- `host/executor.go` - Command execution
+### Host daemon (root Go module `github.com/taisukeoe/cmd2host`)
+- `cmd/cmd2host/main.go` - CLI entry point (daemon startup, config subcommands)
+- `pkg/daemon/server.go` - TCP/Unix server, request dispatch, sanitized execution
+- `pkg/daemon/validator.go` - Operation validation logic
+- `pkg/daemon/sanitize.go` - Command sanitization (env vars, git config)
+- `pkg/config/config.go` - Daemon configuration loading
+- `pkg/config/project.go` - Project configuration, allowance, constraints validation
+- `pkg/operations/operations.go` - Operation template definitions and parameter handling
+- `pkg/auth/auth.go` - Token authentication and management
+- `internal/configdir/configdir.go` - Base directory resolution (CMD2HOST_CONFIG_DIR)
 - `host/scripts/install.sh` - Host install script (downloads binary, sets up launchd on macOS)
 
 ### Templates (embedded in binary)
-- `host/templates/readonly.json` - Read-only operations template
-- `host/templates/github_write.json` - GitHub write operations template
-- `host/templates/git_write.json` - Git push operations template (with strict constraints)
-- `host/templates.go` - Template embedding and listing functions
+- `pkg/config/templates/readonly.json` - Read-only operations template
+- `pkg/config/templates/github_write.json` - GitHub write operations template
+- `pkg/config/templates/git_write.json` - Git push operations template (with strict constraints)
+- `pkg/config/templates.go` - Template embedding and listing functions
 
 ### MCP server
 - `mcp-server/main.go` - MCP server entry point

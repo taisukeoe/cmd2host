@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"encoding/json"
@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/taisukeoe/cmd2host/pkg/auth"
+	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // testToken must be 64 hex chars to pass format validation
@@ -33,7 +37,7 @@ func writeAndCloseWrite(t *testing.T, conn net.Conn, data []byte) {
 }
 
 // setupServerWithProject creates a test server with project-based configuration
-func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
+func setupServerWithProject(t *testing.T) (*Server, *auth.TokenStore, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -42,7 +46,7 @@ func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
 
 	// Create project directory and config
 	projectID := "owner_repo"
@@ -78,7 +82,7 @@ func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 	}
 
 	// Allow the config
-	if err := AllowConfig(projectID); err != nil {
+	if err := config.AllowConfig(projectID); err != nil {
 		t.Fatalf("Failed to allow config: %v", err)
 	}
 
@@ -87,17 +91,17 @@ func setupServerWithProject(t *testing.T) (*Server, *TokenStore, string) {
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("Failed to create token dir: %v", err)
 	}
-	tokenStore := &TokenStore{dir: tokenDir}
+	tokenStore := auth.NewTokenStoreAt(tokenDir)
 
 	// Create a test token with repo assigned
-	hash := hashToken(testToken)
+	hash := auth.HashToken(testToken)
 	tokenPath := filepath.Join(tokenDir, hash)
 	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
 	// Create daemon config
-	daemonConfig := defaultDaemonConfig()
+	daemonConfig := config.DefaultDaemonConfig()
 
 	server, err := NewServer(daemonConfig)
 	if err != nil {
@@ -136,7 +140,7 @@ func TestServer_ListOperations(t *testing.T) {
 		}
 		defer conn.Close()
 
-		req := ListOperationsRequest{
+		req := operations.ListOperationsRequest{
 			ListOperations: true,
 			Token:          testToken,
 		}
@@ -150,7 +154,7 @@ func TestServer_ListOperations(t *testing.T) {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
-		var resp ListOperationsResponse
+		var resp operations.ListOperationsResponse
 		if err := json.Unmarshal(buf[:n], &resp); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -175,7 +179,7 @@ func TestServer_ListOperations(t *testing.T) {
 		}
 		defer conn.Close()
 
-		req := ListOperationsRequest{
+		req := operations.ListOperationsRequest{
 			ListOperations: true,
 			Token:          "invalid-token",
 		}
@@ -189,7 +193,7 @@ func TestServer_ListOperations(t *testing.T) {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
-		var resp ListOperationsResponse
+		var resp operations.ListOperationsResponse
 		if err := json.Unmarshal(buf[:n], &resp); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -207,7 +211,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
 
 	// Create project directory with MISMATCHED repo in config
 	projectID := "owner_repo"
@@ -234,7 +238,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	if err := AllowConfig(projectID); err != nil {
+	if err := config.AllowConfig(projectID); err != nil {
 		t.Fatalf("Failed to allow config: %v", err)
 	}
 
@@ -243,16 +247,16 @@ func TestServer_RepoMismatch(t *testing.T) {
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("Failed to create token dir: %v", err)
 	}
-	tokenStore := &TokenStore{dir: tokenDir}
+	tokenStore := auth.NewTokenStoreAt(tokenDir)
 
-	hash := hashToken(testToken)
+	hash := auth.HashToken(testToken)
 	tokenPath := filepath.Join(tokenDir, hash)
 	// Token is bound to "owner/repo" but config specifies "evil/repo"
 	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
-	daemonConfig := defaultDaemonConfig()
+	daemonConfig := config.DefaultDaemonConfig()
 	server, err := NewServer(daemonConfig)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
@@ -283,7 +287,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 	}
 	defer conn.Close()
 
-	req := ListOperationsRequest{
+	req := operations.ListOperationsRequest{
 		ListOperations: true,
 		Token:          testToken,
 	}
@@ -297,7 +301,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 		t.Fatalf("Failed to read: %v", err)
 	}
 
-	var resp ListOperationsResponse
+	var resp operations.ListOperationsResponse
 	if err := json.Unmarshal(buf[:n], &resp); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
@@ -339,7 +343,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 		}
 		defer conn.Close()
 
-		req := DescribeOperationRequest{
+		req := operations.DescribeOperationRequest{
 			DescribeOperation: "test_op",
 			Token:             testToken,
 		}
@@ -353,7 +357,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
-		var resp DescribeOperationResponse
+		var resp operations.DescribeOperationResponse
 		if err := json.Unmarshal(buf[:n], &resp); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -380,7 +384,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 		defer conn.Close()
 
 		// other_op exists but is not in allowed_operations
-		req := DescribeOperationRequest{
+		req := operations.DescribeOperationRequest{
 			DescribeOperation: "other_op",
 			Token:             testToken,
 		}
@@ -394,7 +398,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
-		var resp DescribeOperationResponse
+		var resp operations.DescribeOperationResponse
 		if err := json.Unmarshal(buf[:n], &resp); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
@@ -411,7 +415,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 		}
 		defer conn.Close()
 
-		req := DescribeOperationRequest{
+		req := operations.DescribeOperationRequest{
 			DescribeOperation: "test_op",
 			Token:             "invalid-token",
 		}
@@ -425,7 +429,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
-		var resp DescribeOperationResponse
+		var resp operations.DescribeOperationResponse
 		if err := json.Unmarshal(buf[:n], &resp); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}

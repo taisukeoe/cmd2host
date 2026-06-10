@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"os"
@@ -10,15 +10,15 @@ import (
 func TestHashToken(t *testing.T) {
 	// Same token should produce same hash
 	token := "test-token-123"
-	hash1 := hashToken(token)
-	hash2 := hashToken(token)
+	hash1 := HashToken(token)
+	hash2 := HashToken(token)
 
 	if hash1 != hash2 {
 		t.Errorf("Same token produced different hashes: %s vs %s", hash1, hash2)
 	}
 
 	// Different tokens should produce different hashes
-	hash3 := hashToken("different-token")
+	hash3 := HashToken("different-token")
 	if hash1 == hash3 {
 		t.Error("Different tokens produced same hash")
 	}
@@ -35,7 +35,7 @@ func TestTokenStoreIsValid(t *testing.T) {
 
 	// Must be 64 hex chars to pass format validation
 	token := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	hash := hashToken(token)
+	hash := HashToken(token)
 	tokenPath := filepath.Join(tmpDir, hash)
 
 	// Token file doesn't exist -> invalid
@@ -75,7 +75,7 @@ func TestTokenStoreGetTokenData(t *testing.T) {
 	ts := &TokenStore{dir: tmpDir}
 
 	token := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	hash := hashToken(token)
+	hash := HashToken(token)
 	tokenPath := filepath.Join(tmpDir, hash)
 
 	// Token file doesn't exist -> invalid
@@ -100,7 +100,7 @@ func TestTokenStoreGetTokenData(t *testing.T) {
 
 	// Empty repo in JSON
 	token2 := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	hash2 := hashToken(token2)
+	hash2 := HashToken(token2)
 	tokenPath2 := filepath.Join(tmpDir, hash2)
 	if err := os.WriteFile(tokenPath2, []byte(`{"repo":""}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
@@ -116,7 +116,7 @@ func TestTokenStoreGetTokenData(t *testing.T) {
 
 	// Malformed JSON should be treated as invalid
 	token3 := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	hash3 := hashToken(token3)
+	hash3 := HashToken(token3)
 	tokenPath3 := filepath.Join(tmpDir, hash3)
 	if err := os.WriteFile(tokenPath3, []byte(`{invalid json}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
@@ -132,7 +132,7 @@ func TestTokenStoreGetTokenData(t *testing.T) {
 
 	// Empty file should be treated as invalid
 	token4 := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	hash4 := hashToken(token4)
+	hash4 := HashToken(token4)
 	tokenPath4 := filepath.Join(tmpDir, hash4)
 	if err := os.WriteFile(tokenPath4, []byte(``), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
@@ -153,7 +153,7 @@ func TestTokenStoreExpiredToken(t *testing.T) {
 
 	// Must be 64 hex chars to pass format validation
 	token := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	hash := hashToken(token)
+	hash := HashToken(token)
 	tokenPath := filepath.Join(tmpDir, hash)
 
 	// Create token file with JSON content
@@ -179,7 +179,7 @@ func TestTokenStoreCleanupExpired(t *testing.T) {
 
 	// Create fresh token (must be 64 hex chars)
 	freshToken := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	freshHash := hashToken(freshToken)
+	freshHash := HashToken(freshToken)
 	freshPath := filepath.Join(tmpDir, freshHash)
 	if err := os.WriteFile(freshPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create fresh token file: %v", err)
@@ -187,7 +187,7 @@ func TestTokenStoreCleanupExpired(t *testing.T) {
 
 	// Create expired token (must be 64 hex chars)
 	expiredToken := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	expiredHash := hashToken(expiredToken)
+	expiredHash := HashToken(expiredToken)
 	expiredPath := filepath.Join(tmpDir, expiredHash)
 	if err := os.WriteFile(expiredPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create expired token file: %v", err)
@@ -226,7 +226,7 @@ func TestTokenStoreBruteForceProtection(t *testing.T) {
 	// 256-bit token (64 hex chars) is cryptographically secure
 	// This test just verifies the hash function produces the expected length
 	token := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	hash := hashToken(token)
+	hash := HashToken(token)
 
 	// BLAKE3-256 produces 32 bytes = 64 hex chars
 	if len(hash) != 64 {
@@ -234,7 +234,7 @@ func TestTokenStoreBruteForceProtection(t *testing.T) {
 	}
 
 	// Verify hash is deterministic
-	hash2 := hashToken(token)
+	hash2 := HashToken(token)
 	if hash != hash2 {
 		t.Error("Hash function should be deterministic")
 	}
@@ -274,7 +274,7 @@ func TestTokenStoreIsValidMalformedTokens(t *testing.T) {
 
 	// Create a valid token file with JSON content
 	validToken := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	hash := hashToken(validToken)
+	hash := HashToken(validToken)
 	tokenPath := filepath.Join(tmpDir, hash)
 	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)

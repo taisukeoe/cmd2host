@@ -1,9 +1,11 @@
-package main
+package daemon
 
 import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/taisukeoe/cmd2host/pkg/config"
 )
 
 func TestSanitizedEnv_Set(t *testing.T) {
@@ -133,7 +135,7 @@ func TestSanitizedEnv_InheritsBaseEnvVars(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGH(t *testing.T) {
-	project := &ProjectConfig{
+	project := &config.ProjectConfig{
 		Repo: "owner/repo",
 	}
 	sanitizer := NewCommandSanitizer(project)
@@ -192,7 +194,7 @@ func TestCommandSanitizer_SanitizeForGH_NoRepo(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
-	project := &ProjectConfig{
+	project := &config.ProjectConfig{
 		GitConfig: map[string]string{
 			"user.name": "Test",
 		},
@@ -205,9 +207,9 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 	result := env.BuildEnv()
 
 	checks := map[string]bool{
-		"GIT_TERMINAL_PROMPT=0":    false,
+		"GIT_TERMINAL_PROMPT=0":        false,
 		"GIT_ALLOW_PROTOCOL=https:ssh": false,
-		"GIT_ADVICE=0":             false,
+		"GIT_ADVICE=0":                 false,
 	}
 
 	for _, e := range result {
@@ -238,7 +240,7 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
-	project := &ProjectConfig{
+	project := &config.ProjectConfig{
 		GitConfig: map[string]string{
 			"user.name": "Test",
 		},
@@ -258,7 +260,7 @@ func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
 		"GIT_ADVICE=0":                 false,
 		// Strict push additions
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new": false,
-		"GIT_ASKPASS=":        false,
+		"GIT_ASKPASS=":          false,
 		"GIT_CONFIG_NOSYSTEM=1": false,
 	}
 
@@ -297,7 +299,7 @@ func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
-	project := &ProjectConfig{
+	project := &config.ProjectConfig{
 		Repo:     "owner/repo",
 		RepoPath: "/path/to/repo",
 		Env: map[string]string{
@@ -337,7 +339,7 @@ func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
-	project := &ProjectConfig{
+	project := &config.ProjectConfig{
 		RepoPath: "/path/to/repo",
 		GitConfig: map[string]string{
 			"user.name": "Test User",

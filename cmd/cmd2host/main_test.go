@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/taisukeoe/cmd2host/pkg/auth"
 )
 
 func TestHashTokenCLI(t *testing.T) {
@@ -208,8 +211,58 @@ func TestHashTokenDeterministic(t *testing.T) {
 	}
 
 	// Verify it matches the Go function
-	expectedHash := hashToken(token)
+	expectedHash := auth.HashToken(token)
 	if outputs[0] != expectedHash {
 		t.Errorf("CLI hash = %s, Go hash = %s", outputs[0], expectedHash)
+	}
+}
+
+// TestResolveDaemonConfigPathPriority verifies the DAEMON_CONFIG > CMD2HOST_CONFIG_DIR
+// > home fallback priority enforced in main.go's runDaemon.
+//
+// Priority axes:
+//   - DAEMON_CONFIG (specific file override) beats CMD2HOST_CONFIG_DIR
+//   - CMD2HOST_CONFIG_DIR (dir override) beats $HOME/.cmd2host
+//   - Both unset → $HOME/.cmd2host/daemon.json
+func TestResolveDaemonConfigPathPriority(t *testing.T) {
+	tmpHome := t.TempDir()
+
+	tests := []struct {
+		name         string
+		daemonConfig string
+		configDir    string
+		want         func() string
+	}{
+		{
+			name:         "DAEMON_CONFIG specific override wins over CMD2HOST_CONFIG_DIR",
+			daemonConfig: "/explicit/daemon.json",
+			configDir:    "/from/env",
+			want:         func() string { return "/explicit/daemon.json" },
+		},
+		{
+			name:         "CMD2HOST_CONFIG_DIR routes daemon.json when DAEMON_CONFIG empty",
+			daemonConfig: "",
+			configDir:    "/from/env",
+			want:         func() string { return filepath.Join("/from/env", "daemon.json") },
+		},
+		{
+			name:         "both env empty falls back to home default",
+			daemonConfig: "",
+			configDir:    "",
+			want:         func() string { return filepath.Join(tmpHome, ".cmd2host", "daemon.json") },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", tmpHome)
+			t.Setenv("DAEMON_CONFIG", tt.daemonConfig)
+			t.Setenv("CMD2HOST_CONFIG_DIR", tt.configDir)
+
+			got := resolveDaemonConfigPath()
+			if got != tt.want() {
+				t.Errorf("resolveDaemonConfigPath() = %q, want %q", got, tt.want())
+			}
+		})
 	}
 }

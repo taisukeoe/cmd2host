@@ -1,6 +1,7 @@
-// operations.go provides operation template definitions and parameter handling.
-// Operations define predefined command patterns with typed parameters.
-package main
+// Package operations provides operation template definitions, typed
+// request/response types, and parameter handling. Operations define
+// predefined command patterns with typed parameters.
+package operations
 
 import (
 	"fmt"
@@ -44,8 +45,8 @@ type ParamSchema struct {
 // ParamValue represents a parameter value that can be string, int, or []string
 type ParamValue interface{}
 
-// OperationRequest represents a request to execute an operation
-type OperationRequest struct {
+// Request represents a request to execute an operation
+type Request struct {
 	RequestID string                `json:"request_id,omitempty"`
 	Operation string                `json:"operation"`
 	Params    map[string]ParamValue `json:"params"`
@@ -53,8 +54,8 @@ type OperationRequest struct {
 	Token     string                `json:"token"`
 }
 
-// OperationResponse represents the response from an operation
-type OperationResponse struct {
+// Response represents the response from an operation
+type Response struct {
 	RequestID    string  `json:"request_id,omitempty"`
 	ExitCode     int     `json:"exit_code"`
 	Stdout       string  `json:"stdout"`
@@ -85,6 +86,15 @@ type DescribeOperationRequest struct {
 type DescribeOperationResponse struct {
 	Operation *OperationInfo `json:"operation,omitempty"`
 	Error     string         `json:"error,omitempty"`
+}
+
+// OperationInfo provides information about an operation for API responses
+type OperationInfo struct {
+	ID           string                 `json:"id"`
+	Command      string                 `json:"command"`
+	Description  string                 `json:"description"`
+	Params       map[string]ParamSchema `json:"params,omitempty"`
+	AllowedFlags []string               `json:"allowed_flags,omitempty"`
 }
 
 // CompilePatterns compiles regex patterns in parameter schemas

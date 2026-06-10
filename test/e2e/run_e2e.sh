@@ -230,7 +230,7 @@ if ! $SKIP_BUILD; then
         log_info "Existing installation found, rebuilding binary..."
 
         # Build new binary
-        if (cd "$PROJECT_ROOT/host" && go build -o "$BINARY_PATH" .); then
+        if (cd "$PROJECT_ROOT" && go build -o "$BINARY_PATH" ./cmd/cmd2host); then
             log_info "Binary rebuilt"
         else
             log_fail "Binary build failed"
@@ -264,7 +264,7 @@ if ! $SKIP_BUILD; then
             mkdir -p "$INSTALL_DIR/tokens"
 
             # Build binary
-            if (cd "$PROJECT_ROOT/host" && go build -o "$BINARY_PATH" .); then
+            if (cd "$PROJECT_ROOT" && go build -o "$BINARY_PATH" ./cmd/cmd2host); then
                 log_info "Binary built"
             else
                 log_fail "Binary build failed"

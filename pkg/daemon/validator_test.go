@@ -1,22 +1,25 @@
-package main
+package daemon
 
 import (
 	"testing"
+
+	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
-// makeGitAddProject returns a ProjectConfig containing a "git_add" op.
+// makeGitAddProject returns a config.ProjectConfig containing a "git_add" op.
 // Used to exercise the path_deny broad-flag guard.
-func makeGitAddProject(t *testing.T, repoDir string) *ProjectConfig {
+func makeGitAddProject(t *testing.T, repoDir string) *config.ProjectConfig {
 	t.Helper()
-	p := &ProjectConfig{
+	p := &config.ProjectConfig{
 		Repo:              "owner/repo",
 		RepoPath:          repoDir,
 		AllowedOperations: []string{"git_add"},
-		Operations: map[string]*Operation{
+		Operations: map[string]*operations.Operation{
 			"git_add": {
 				Command:      "git",
 				ArgsTemplate: []string{"add", "{paths}"},
-				Params:       map[string]ParamSchema{"paths": {Type: "array", Optional: true, Items: &ItemsSchema{Type: "string"}}},
+				Params:       map[string]operations.ParamSchema{"paths": {Type: "array", Optional: true, Items: &operations.ItemsSchema{Type: "string"}}},
 				AllowedFlags: []string{"-u", "--update", "-A", "--all"},
 				Description:  "Stage changes",
 			},
@@ -57,7 +60,7 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: tc.flags}
+			req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: tc.flags}
 			_, result := v.ValidateOperation(req, p)
 			if result.OK {
 				t.Errorf("expected reject for git_add %v without paths under path_deny", tc.flags)
@@ -66,9 +69,9 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 	}
 
 	// With explicit paths, broad flag is accepted (each path will go through ValidatePaths).
-	req := OperationRequest{
+	req := operations.Request{
 		Operation: "git_add",
-		Params:    map[string]ParamValue{"paths": []string{"src/main.go"}},
+		Params:    map[string]operations.ParamValue{"paths": []string{"src/main.go"}},
 		Flags:     []string{"-u"},
 	}
 	_, result := v.ValidateOperation(req, p)
@@ -84,7 +87,7 @@ func TestValidator_GitAdd_BroadFlags_NoPathDeny_Allowed(t *testing.T) {
 	// path_deny intentionally empty -> broad flag without paths is allowed.
 
 	v := NewValidator()
-	req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: []string{"-A"}}
+	req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: []string{"-A"}}
 	_, result := v.ValidateOperation(req, p)
 	if !result.OK {
 		t.Errorf("git_add -A without paths should be allowed when path_deny is empty: %s", result.Message)
@@ -104,7 +107,7 @@ func TestValidator_GitAdd_BroadFlagsGuard_AbsolutePath(t *testing.T) {
 	p.Operations["git_add"].Command = "/usr/bin/git"
 
 	v := NewValidator()
-	req := OperationRequest{Operation: "git_add", Params: map[string]ParamValue{}, Flags: []string{"-A"}}
+	req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: []string{"-A"}}
 	_, result := v.ValidateOperation(req, p)
 	if result.OK {
 		t.Errorf("broad-flag guard must still trigger when op.Command is an absolute path")

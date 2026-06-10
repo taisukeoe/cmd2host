@@ -1,8 +1,8 @@
-// auth.go provides session token authentication for cmd2host.
+// Package auth provides session token authentication for cmd2host.
 // Tokens are BLAKE3 hashed and stored as JSON files under the cmd2host
-// base dir's tokens/ subdirectory (see cmd2hostConfigDir in config.go).
+// base dir's tokens/ subdirectory (see internal/configdir).
 // Token validity is determined by file mtime (24-hour TTL).
-package main
+package auth
 
 import (
 	"encoding/hex"
@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/taisukeoe/cmd2host/internal/configdir"
 	"github.com/zeebo/blake3"
 )
 
@@ -23,7 +24,7 @@ type TokenData struct {
 	// Empty string means repo could not be detected at token creation time;
 	// in this case, commands that explicitly specify a repository will be denied,
 	// while repo-agnostic commands (e.g., gh --version) are still allowed.
-	// See validator.go:validateRepository for the enforcement logic.
+	// See the daemon's project resolution for the enforcement logic.
 	Repo string `json:"repo"`
 
 	// Profile is deprecated and unused. Project-based config is now used instead.
@@ -34,8 +35,8 @@ type TokenData struct {
 const (
 	tokenTTL      = 24 * time.Hour
 	cleanupBuffer = 5 * time.Minute // Extra time before cleanup to prevent race conditions
-	// tokenDirName is the tokens subdirectory name relative to cmd2hostConfigDir.
-	// Joined onto the resolved base dir at runtime.
+	// tokenDirName is the tokens subdirectory name relative to the base dir
+	// resolved by configdir.Dir. Joined onto the resolved base dir at runtime.
 	tokenDirName = "tokens"
 )
 
@@ -45,20 +46,25 @@ type TokenStore struct {
 }
 
 // NewTokenStore creates a new TokenStore.
-// Honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir, while preserving the
+// Honors CMD2HOST_CONFIG_DIR via configdir.Dir, while preserving the
 // pre-existing diagnostic when the underlying home-dir lookup fails.
 func NewTokenStore() (*TokenStore, error) {
-	base, err := cmd2hostConfigDir()
+	base, err := configdir.Dir()
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine cmd2host config directory: %w", err)
 	}
-	return &TokenStore{
-		dir: filepath.Join(base, tokenDirName),
-	}, nil
+	return NewTokenStoreAt(filepath.Join(base, tokenDirName)), nil
 }
 
-// hashToken computes the BLAKE3 hash of a token
-func hashToken(token string) string {
+// NewTokenStoreAt creates a TokenStore backed by the given token directory,
+// bypassing the default base-dir resolution. Callers that manage per-session
+// state can point it at an explicit directory.
+func NewTokenStoreAt(dir string) *TokenStore {
+	return &TokenStore{dir: dir}
+}
+
+// HashToken computes the BLAKE3 hash of a token
+func HashToken(token string) string {
 	hash := blake3.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
 }
@@ -89,7 +95,7 @@ func (ts *TokenStore) GetTokenData(token string) (TokenData, bool) {
 		return TokenData{}, false
 	}
 
-	hashStr := hashToken(token)
+	hashStr := HashToken(token)
 	path := filepath.Join(ts.dir, hashStr)
 
 	info, err := os.Stat(path)
