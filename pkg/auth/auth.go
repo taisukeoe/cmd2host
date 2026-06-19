@@ -32,8 +32,9 @@ type TokenData struct {
 	// For legacy tokens without ProjectID, Repo is the sole project resolver:
 	// the project ID is computed via NormalizeProjectID(Repo).
 	// Empty string means repo could not be detected at token creation time;
-	// in that case, commands that target a specific repo are denied while
-	// repo-agnostic commands stay allowed. See pkg/daemon resolveProject.
+	// in that case, the daemon rejects the request entirely with
+	// "token does not carry a project_id or repo binding" — no operation
+	// runs without an anchor. See pkg/daemon resolveProject.
 	Repo string `json:"repo"`
 
 	// Profile is deprecated and unused. Project-based config is now used instead.

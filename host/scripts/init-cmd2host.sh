@@ -116,7 +116,7 @@ if [[ -n "$PRIMARY_REPO" ]]; then
                     path="$WORKSPACE_ROOT/$path"
                 fi
                 INIT_ARGS+=("--repo=$repo" "--repo-path=$path")
-            done < <(jq -r '.[] | [.repo, .repo_path] | @tsv' "$REPOS_FILE")
+            done < <(jq -r '.[] | select(.repo != null and .repo_path != null) | [.repo, .repo_path] | @tsv' "$REPOS_FILE")
         fi
 
         if "$CMD2HOST_BIN" config init "${INIT_ARGS[@]}" 2>/dev/null; then

@@ -160,6 +160,10 @@ func (p *ProjectConfig) Validate() error {
 			return fmt.Errorf("repo_paths[%d] %q resolves to the same path as repo_paths[%d]", i, rp, j)
 		}
 		pathSet[clean] = i
+		// Store the cleaned absolute path so downstream consumers (cmd.Dir,
+		// path_deny enforcement, git -C, path-repo consistency check) do not
+		// resolve a relative repo_path against the daemon CWD.
+		p.RepoPaths[i] = clean
 	}
 
 	return nil
