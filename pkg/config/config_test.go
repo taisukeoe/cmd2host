@@ -1,10 +1,12 @@
-package main
+package config
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/taisukeoe/cmd2host/internal/configdir"
 )
 
 func TestLoadDaemonConfig(t *testing.T) {
@@ -197,12 +199,12 @@ func TestCmd2hostConfigDirWithEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("CMD2HOST_CONFIG_DIR", tmpDir)
 
-	got, err := cmd2hostConfigDir()
+	got, err := configdir.Dir()
 	if err != nil {
-		t.Fatalf("cmd2hostConfigDir() returned unexpected error: %v", err)
+		t.Fatalf("configdir.Dir() returned unexpected error: %v", err)
 	}
 	if got != tmpDir {
-		t.Errorf("cmd2hostConfigDir() = %q, want %q", got, tmpDir)
+		t.Errorf("configdir.Dir() = %q, want %q", got, tmpDir)
 	}
 }
 
@@ -214,12 +216,12 @@ func TestCmd2hostConfigDirWithoutEnv(t *testing.T) {
 	t.Setenv("CMD2HOST_CONFIG_DIR", "")
 
 	want := filepath.Join(tmpHome, ".cmd2host")
-	got, err := cmd2hostConfigDir()
+	got, err := configdir.Dir()
 	if err != nil {
-		t.Fatalf("cmd2hostConfigDir() returned unexpected error: %v", err)
+		t.Fatalf("configdir.Dir() returned unexpected error: %v", err)
 	}
 	if got != want {
-		t.Errorf("cmd2hostConfigDir() = %q, want %q", got, want)
+		t.Errorf("configdir.Dir() = %q, want %q", got, want)
 	}
 }
 
@@ -398,55 +400,5 @@ func TestLoadDaemonConfigListenAddressUnixModeSkip(t *testing.T) {
 	}
 	if len(config.Warnings) != 0 {
 		t.Errorf("Warnings = %v, want none in unix mode", config.Warnings)
-	}
-}
-
-// TestResolveDaemonConfigPathPriority verifies the DAEMON_CONFIG > CMD2HOST_CONFIG_DIR
-// > home fallback priority enforced in main.go's runDaemon.
-//
-// Priority axes:
-//   - DAEMON_CONFIG (specific file override) beats CMD2HOST_CONFIG_DIR
-//   - CMD2HOST_CONFIG_DIR (dir override) beats $HOME/.cmd2host
-//   - Both unset → $HOME/.cmd2host/daemon.json
-func TestResolveDaemonConfigPathPriority(t *testing.T) {
-	tmpHome := t.TempDir()
-
-	tests := []struct {
-		name         string
-		daemonConfig string
-		configDir    string
-		want         func() string
-	}{
-		{
-			name:         "DAEMON_CONFIG specific override wins over CMD2HOST_CONFIG_DIR",
-			daemonConfig: "/explicit/daemon.json",
-			configDir:    "/from/env",
-			want:         func() string { return "/explicit/daemon.json" },
-		},
-		{
-			name:         "CMD2HOST_CONFIG_DIR routes daemon.json when DAEMON_CONFIG empty",
-			daemonConfig: "",
-			configDir:    "/from/env",
-			want:         func() string { return filepath.Join("/from/env", "daemon.json") },
-		},
-		{
-			name:         "both env empty falls back to home default",
-			daemonConfig: "",
-			configDir:    "",
-			want:         func() string { return filepath.Join(tmpHome, ".cmd2host", "daemon.json") },
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", tmpHome)
-			t.Setenv("DAEMON_CONFIG", tt.daemonConfig)
-			t.Setenv("CMD2HOST_CONFIG_DIR", tt.configDir)
-
-			got := resolveDaemonConfigPath()
-			if got != tt.want() {
-				t.Errorf("resolveDaemonConfigPath() = %q, want %q", got, tt.want())
-			}
-		})
 	}
 }

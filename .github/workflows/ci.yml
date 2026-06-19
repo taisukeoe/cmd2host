@@ -24,6 +24,11 @@ jobs:
         with:
           filters: |
             host:
+              - 'cmd/**'
+              - 'pkg/**'
+              - 'internal/**'
+              - 'go.mod'
+              - 'go.sum'
               - 'host/**'
               - 'mcp-server/**'
               - 'justfile'
@@ -34,6 +39,11 @@ jobs:
               - 'test/cmd2host/**'
               - '.github/workflows/ci.yml'
             e2e:
+              - 'cmd/**'
+              - 'pkg/**'
+              - 'internal/**'
+              - 'go.mod'
+              - 'go.sum'
               - 'host/**'
               - 'mcp-server/**'
               - 'src/**'
@@ -54,7 +64,7 @@ jobs:
           go-version: '1.25.10'
           cache: true
           cache-dependency-path: |
-            host/go.sum
+            go.sum
             mcp-server/go.sum
 
       - name: Install just
@@ -114,7 +124,7 @@ jobs:
           go-version: '1.25.10'
           cache: true
           cache-dependency-path: |
-            host/go.sum
+            go.sum
             mcp-server/go.sum
 
       - name: Install just

@@ -176,7 +176,7 @@ if ! $SKIP_BUILD; then
     log_step "Step 1: Building daemon..."
     mkdir -p "$INSTALL_DIR/tokens"
 
-    if (cd "$PROJECT_ROOT/host" && go build -o "$BINARY_PATH" .); then
+    if (cd "$PROJECT_ROOT" && go build -o "$BINARY_PATH" ./cmd/cmd2host); then
         log_pass "Binary built"
     else
         log_fail "Binary build failed"

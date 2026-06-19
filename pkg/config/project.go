@@ -1,6 +1,7 @@
 // project.go provides ProjectConfig type and project-based configuration loading.
 // Projects are identified by repository (owner/repo) and stored in separate directories.
-package main
+
+package config
 
 import (
 	"crypto/sha256"
@@ -12,17 +13,20 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/taisukeoe/cmd2host/internal/configdir"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // ProjectConfig defines project-specific configuration
 type ProjectConfig struct {
-	Repo              string                `json:"repo"`                 // Repository (owner/repo)
-	RepoPath          string                `json:"repo_path"`            // Local repository path
-	AllowedOperations []string              `json:"allowed_operations"`   // Allowed operation IDs
-	Constraints       Constraints           `json:"constraints"`          // Policy constraints
-	Operations        map[string]*Operation `json:"operations"`           // Operation definitions
-	Env               map[string]string     `json:"env,omitempty"`        // Environment variables
-	GitConfig         map[string]string     `json:"git_config,omitempty"` // Git config overrides
+	Repo              string                           `json:"repo"`                 // Repository (owner/repo)
+	RepoPath          string                           `json:"repo_path"`            // Local repository path
+	AllowedOperations []string                         `json:"allowed_operations"`   // Allowed operation IDs
+	Constraints       Constraints                      `json:"constraints"`          // Policy constraints
+	Operations        map[string]*operations.Operation `json:"operations"`           // Operation definitions
+	Env               map[string]string                `json:"env,omitempty"`        // Environment variables
+	GitConfig         map[string]string                `json:"git_config,omitempty"` // Git config overrides
 
 	// Compiled patterns (not serialized)
 	compiledPathPatterns []string
@@ -41,13 +45,13 @@ func NormalizeProjectID(repo string) string {
 }
 
 // ProjectsDir returns the path to the projects directory.
-// Honors CMD2HOST_CONFIG_DIR via cmd2hostConfigDir.
+// Honors CMD2HOST_CONFIG_DIR via configdir.Dir.
 //
 // Preserves the pre-existing contract: returns "" when the base dir cannot
 // be resolved, so callers continue to handle the missing-dir case via
 // downstream os.Stat / os.ReadDir.
 func ProjectsDir() string {
-	base, err := cmd2hostConfigDir()
+	base, err := configdir.Dir()
 	if err != nil {
 		return ""
 	}
@@ -140,7 +144,7 @@ func (p *ProjectConfig) HasOperation(operationID string) bool {
 }
 
 // GetOperation returns an operation by ID
-func (p *ProjectConfig) GetOperation(id string) (*Operation, bool) {
+func (p *ProjectConfig) GetOperation(id string) (*operations.Operation, bool) {
 	op, exists := p.Operations[id]
 	return op, exists
 }

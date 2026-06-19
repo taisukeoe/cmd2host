@@ -218,9 +218,9 @@ if [[ "$BUILD_FROM_SOURCE" == "true" ]]; then
         exit 1
     fi
 
-    # Go files are in parent directory (host/), not scripts/
-    cd "$SCRIPT_DIR/.."
-    go build -o "$BINARY_PATH" .
+    # Go sources live at the repository root (cmd/cmd2host), not scripts/
+    cd "$SCRIPT_DIR/../.."
+    go build -o "$BINARY_PATH" ./cmd/cmd2host
     echo "Built: $BINARY_PATH"
 
 elif [[ -f "$SCRIPT_DIR/cmd2host" ]]; then
@@ -232,8 +232,8 @@ elif download_binary "$BINARY_PATH"; then
     # Downloaded from GitHub Releases
     :
 
-elif [[ -f "$SCRIPT_DIR/../go.mod" ]]; then
-    # Fall back to building from source (Go files are in parent directory)
+elif [[ -f "$SCRIPT_DIR/../../go.mod" ]]; then
+    # Fall back to building from source (Go sources live at the repository root)
     echo "Building cmd2host from source..."
 
     if ! command -v go &> /dev/null; then
@@ -244,8 +244,8 @@ elif [[ -f "$SCRIPT_DIR/../go.mod" ]]; then
         exit 1
     fi
 
-    cd "$SCRIPT_DIR/.."
-    go build -o "$BINARY_PATH" .
+    cd "$SCRIPT_DIR/../.."
+    go build -o "$BINARY_PATH" ./cmd/cmd2host
     echo "Built: $BINARY_PATH"
 
 else

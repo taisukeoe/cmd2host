@@ -1,9 +1,12 @@
-package main
+package daemon
 
 import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // Validator validates operations against project configuration
@@ -21,7 +24,7 @@ type ValidationResult struct {
 }
 
 // ValidateOperation validates an operation request against project constraints
-func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConfig) (*Operation, ValidationResult) {
+func (v *Validator) ValidateOperation(req operations.Request, project *config.ProjectConfig) (*operations.Operation, ValidationResult) {
 	// Check if operation exists in project
 	op, exists := project.GetOperation(req.Operation)
 	if !exists {
@@ -101,12 +104,12 @@ func (v *Validator) ValidateOperation(req OperationRequest, project *ProjectConf
 // PolicyValidationRequest contains data needed for policy validation
 type PolicyValidationRequest struct {
 	OperationID string
-	Params      map[string]ParamValue
+	Params      map[string]operations.ParamValue
 	Paths       []string // For git add, etc.
 }
 
 // extractPolicyParams extracts policy-relevant parameters from the request
-func extractPolicyParams(req OperationRequest) PolicyValidationRequest {
+func extractPolicyParams(req operations.Request) PolicyValidationRequest {
 	policyReq := PolicyValidationRequest{
 		OperationID: req.Operation,
 		Params:      req.Params,

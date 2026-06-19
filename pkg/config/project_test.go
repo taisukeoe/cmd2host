@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 func TestProjectConfig_HasOperation(t *testing.T) {
@@ -444,7 +446,7 @@ func TestLoadProjectConfig(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
 
 	// Create project directory
 	projectID := "owner_repo"
@@ -512,7 +514,7 @@ func TestConfigAllow(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
 
 	// Create project directory
 	projectID := "owner_repo"
@@ -604,7 +606,7 @@ func TestCreateProjectConfig(t *testing.T) {
 	origHome := os.Getenv("HOME")
 	os.Setenv("HOME", tmpDir)
 	defer os.Setenv("HOME", origHome)
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in cmd2hostConfigDir.
+	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
 
 	t.Run("successful creation with default template", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
@@ -824,7 +826,7 @@ func TestCreateProjectConfig(t *testing.T) {
 
 func TestResolveOperationCommands(t *testing.T) {
 	config := &ProjectConfig{
-		Operations: map[string]*Operation{
+		Operations: map[string]*operations.Operation{
 			"git_fetch":  {Command: "git"},
 			"gh_pr_view": {Command: "gh"},
 			"custom":     {Command: "/already/absolute/tool"},

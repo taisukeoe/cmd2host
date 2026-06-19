@@ -1,5 +1,6 @@
 // templates.go provides embedded template files for project configuration.
-package main
+
+package config
 
 import (
 	"embed"

@@ -1,7 +1,6 @@
-package main
+package operations
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -571,7 +570,7 @@ func TestOperation_BuildArgs_PairedDrop(t *testing.T) {
 }
 
 func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
-	// Mirrors the body-param handling in host/templates/*.json. gh_pr_create
+	// Mirrors the body-param handling in pkg/config/templates/*.json. gh_pr_create
 	// and gh_issue_create now require a non-empty body (rejection of a missing
 	// body is covered by TestTemplate_RequiresNonEmptyBody), so only their
 	// body-present cases are modelled here; gh_pr_edit keeps an optional body
@@ -655,97 +654,6 @@ func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
 				if arg != tt.expectedArg[i] {
 					t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, tt.expectedArg[i])
 				}
-			}
-		})
-	}
-}
-
-// TestTemplates_BodyOpsMigration asserts the on-disk templates carry the
-// Pattern A migration for gh_pr_create / gh_pr_edit / gh_issue_create.
-// This is the regression gate: if anyone reintroduces "--body" into
-// allowed_flags or drops the body schema, this test fails before the
-// in-memory BuildArgs tests do.
-func TestTemplates_BodyOpsMigration(t *testing.T) {
-	type opCheck struct {
-		template     string // template file basename (no .json)
-		operation    string
-		expectSuffix []string // expected trailing args_template elements
-		bodyRequired bool     // create ops require a non-empty body (non-interactive contract)
-	}
-
-	checks := []opCheck{
-		{template: "github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}, bodyRequired: true},
-		{template: "github_write", operation: "gh_issue_create", expectSuffix: []string{"--body", "{body}"}, bodyRequired: true},
-		{template: "git_github_write", operation: "gh_pr_create", expectSuffix: []string{"--body", "{body}"}, bodyRequired: true},
-		{template: "git_github_write", operation: "gh_pr_edit", expectSuffix: []string{"--body", "{body}"}},
-	}
-
-	for _, c := range checks {
-		t.Run(c.template+"/"+c.operation, func(t *testing.T) {
-			data, err := GetTemplate(c.template)
-			if err != nil {
-				t.Fatalf("GetTemplate(%q): %v", c.template, err)
-			}
-			var project ProjectConfig
-			if err := json.Unmarshal(data, &project); err != nil {
-				t.Fatalf("Unmarshal template %q: %v", c.template, err)
-			}
-			op, ok := project.Operations[c.operation]
-			if !ok {
-				t.Fatalf("operation %q not in template %q", c.operation, c.template)
-			}
-
-			// args_template ends with the expected suffix
-			if len(op.ArgsTemplate) < len(c.expectSuffix) {
-				t.Fatalf("args_template too short: %v", op.ArgsTemplate)
-			}
-			actualSuffix := op.ArgsTemplate[len(op.ArgsTemplate)-len(c.expectSuffix):]
-			for i, want := range c.expectSuffix {
-				if actualSuffix[i] != want {
-					t.Errorf("args_template[-%d:] = %v, want suffix %v", len(c.expectSuffix), actualSuffix, c.expectSuffix)
-					break
-				}
-			}
-
-			// params.body declared with the expected schema
-			bodySchema, ok := op.Params["body"]
-			if !ok {
-				t.Fatalf("params.body not declared in %q", c.operation)
-			}
-			if bodySchema.Type != "string" {
-				t.Errorf("params.body.type = %q, want \"string\"", bodySchema.Type)
-			}
-			if c.bodyRequired {
-				// gh pr create is non-interactive (no --fill allowed), so a
-				// missing or blank body would silently create an empty-body PR.
-				// Body must therefore be required (not optional) and non-blank
-				// (minLength + non-whitespace pattern).
-				if bodySchema.Optional {
-					t.Errorf("params.body.optional = true, want false (body required)")
-				}
-				if bodySchema.MinLength != 1 {
-					t.Errorf("params.body.minLength = %d, want 1", bodySchema.MinLength)
-				}
-				if bodySchema.Pattern == "" {
-					t.Errorf("params.body.pattern is empty, want a non-whitespace pattern")
-				}
-			} else if !bodySchema.Optional {
-				t.Errorf("params.body.optional = false, want true")
-			}
-			if bodySchema.MaxLength != 65535 {
-				t.Errorf("params.body.maxLength = %d, want 65535", bodySchema.MaxLength)
-			}
-
-			// allowed_flags must not include --body (Option β: immediate break)
-			for _, f := range op.AllowedFlags {
-				if f == "--body" {
-					t.Errorf("allowed_flags still contains --body for %q", c.operation)
-				}
-			}
-
-			// ValidateFlags must reject --body=<value> form
-			if err := op.ValidateFlags([]string{"--body=hello"}); err == nil {
-				t.Errorf("ValidateFlags([\"--body=hello\"]) returned nil, want \"flag not allowed\" error")
 			}
 		})
 	}

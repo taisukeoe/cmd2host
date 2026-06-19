@@ -6,15 +6,15 @@ default:
 
 # Build for current platform
 build:
-    cd host && go build -o ../dist/cmd2host .
+    go build -o dist/cmd2host ./cmd/cmd2host
 
 # Build for macOS Intel
 build-darwin-amd64:
-    cd host && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-darwin-amd64 .
+    GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-darwin-amd64 ./cmd/cmd2host
 
 # Build for macOS Apple Silicon
 build-darwin-arm64:
-    cd host && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/cmd2host-darwin-arm64 .
+    GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-darwin-arm64 ./cmd/cmd2host
 
 # Build all release binaries
 build-all: build-darwin-amd64 build-darwin-arm64 build-mcp-darwin-amd64 build-mcp-darwin-arm64
@@ -35,9 +35,9 @@ build-mcp-darwin-arm64:
 build-mcp-linux-amd64:
     cd mcp-server && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-linux-amd64 .
 
-# Run unit tests for host daemon
+# Run unit tests for host daemon (root module: pkg/, cmd/, internal/)
 test:
-    cd host && go test -v ./...
+    go test -v ./...
 
 # Run unit tests for MCP server
 test-mcp:

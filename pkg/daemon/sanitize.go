@@ -1,12 +1,15 @@
 // sanitize.go provides execution environment sanitization.
 // Ensures commands run in a controlled environment with minimal attack surface.
-package main
+
+package daemon
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/taisukeoe/cmd2host/pkg/config"
 )
 
 // SanitizedEnv builds a sanitized environment for command execution
@@ -113,11 +116,11 @@ func (s *SanitizedEnv) buildGitConfigEnv() string {
 
 // CommandSanitizer prepares commands for safe execution
 type CommandSanitizer struct {
-	project *ProjectConfig
+	project *config.ProjectConfig
 }
 
 // NewCommandSanitizer creates a new CommandSanitizer
-func NewCommandSanitizer(project *ProjectConfig) *CommandSanitizer {
+func NewCommandSanitizer(project *config.ProjectConfig) *CommandSanitizer {
 	return &CommandSanitizer{project: project}
 }
 

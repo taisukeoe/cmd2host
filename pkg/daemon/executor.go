@@ -1,4 +1,4 @@
-package main
+package daemon
 
 // ExecuteResult represents the result of command execution
 type ExecuteResult struct {
