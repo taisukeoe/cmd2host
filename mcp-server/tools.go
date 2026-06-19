@@ -24,6 +24,7 @@ type RunOperationInput struct {
 	OperationID string                 `json:"operation_id" mcp:"The ID of the operation to run"`
 	Params      map[string]interface{} `json:"params,omitempty" mcp:"Parameters for the operation"`
 	Flags       []string               `json:"flags,omitempty" mcp:"Optional flags for the operation"`
+	TargetRepo  string                 `json:"target_repo,omitempty" mcp:"Target repository (owner/repo) when the project allows multiple repos. Required for monorepo + submodule projects; optional and defaults to the primary repo for single-repo projects."`
 }
 
 // ToolHandler manages MCP tool registration and execution
@@ -160,7 +161,7 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 		}, nil, nil
 	}
 
-	resp, err := h.client.RunOperation(input.OperationID, input.Params, input.Flags)
+	resp, err := h.client.RunOperation(input.OperationID, input.Params, input.Flags, input.TargetRepo)
 	if err != nil {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{

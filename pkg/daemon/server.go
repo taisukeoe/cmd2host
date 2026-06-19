@@ -113,26 +113,38 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 }
 
-// resolveProject resolves project config from token data
+// resolveProject resolves project config from token data.
+//
+// Token binding precedence:
+//  1. New token with ProjectID set: ProjectID is the canonical resolver.
+//     If Repo is also non-empty, it must equal project.Repos[0] as a
+//     defense-in-depth check (catches token tampering after issue).
+//  2. Legacy token with only Repo: NormalizeProjectID(Repo) yields the
+//     project ID; Repo must equal project.Repos[0] (primary repo).
+//     Legacy tokens are bound to the primary repo only; non-primary repos
+//     in 1:N projects remain accessible because the target_repo is
+//     authorized against project.Repos at execution time.
 func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig, string, error) {
-	if tokenData.Repo == "" {
-		return nil, "", fmt.Errorf("token does not have a repository bound")
+	var projectID string
+	switch {
+	case tokenData.ProjectID != "":
+		projectID = tokenData.ProjectID
+	case tokenData.Repo != "":
+		projectID = config.NormalizeProjectID(tokenData.Repo)
+	default:
+		return nil, "", fmt.Errorf("token does not carry a project_id or repo binding")
 	}
 
-	projectID := config.NormalizeProjectID(tokenData.Repo)
-
-	// Load project config
 	projectConfig, err := config.LoadProjectConfig(projectID)
 	if err != nil {
 		return nil, projectID, err
 	}
 
-	// Verify projectConfig.Repo matches tokenData.Repo to prevent config tampering
-	if projectConfig.Repo != tokenData.Repo {
-		return nil, projectID, fmt.Errorf("config repo mismatch: token bound to %q but config specifies %q", tokenData.Repo, projectConfig.Repo)
+	primaryRepo := projectConfig.PrimaryRepo()
+	if tokenData.Repo != "" && tokenData.Repo != primaryRepo {
+		return nil, projectID, fmt.Errorf("token-project mismatch: token bound to repo %q but project primary repo is %q", tokenData.Repo, primaryRepo)
 	}
 
-	// Verify config is allowed
 	allowed, currentHash, err := config.IsConfigAllowed(projectID)
 	if err != nil {
 		return nil, projectID, fmt.Errorf("failed to check config allowance: %w", err)
@@ -183,10 +195,24 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	}
 
 	// Log operation request (params omitted to avoid logging sensitive data like PR body)
-	fmt.Printf("[OP:%s] project=%s request_id=%s\n", req.Operation, projectID, req.RequestID)
+	fmt.Printf("[OP:%s] project=%s target_repo=%q request_id=%s\n", req.Operation, projectID, req.TargetRepo, req.RequestID)
 
-	// Validate operation
-	op, result := s.validator.ValidateOperation(req, projectConfig)
+	// Resolve the execution target: target_repo against project allow list +
+	// expected git URL derivation. Empty target_repo defaults to the primary
+	// repo (single-repo project ergonomics).
+	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
+	if err != nil {
+		fmt.Printf("  -> DENIED (target): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+
+	// Validate operation against per-target context
+	op, result := s.validator.ValidateOperation(req, projectConfig, target)
 	if !result.OK {
 		fmt.Printf("  -> DENIED: %s\n", result.Message)
 		s.sendOperationResponse(conn, operations.Response{
@@ -197,12 +223,26 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Build arguments from template
-	projectEnv := projectConfig.GetEnvForOperation()
-	// Inject token's repo into template expansion
-	if tokenData.Repo != "" {
-		projectEnv["repo"] = tokenData.Repo
+	// Misconfiguration detector: verify the target repo_path's origin remote
+	// matches the resolved target_repo. This is not the primary security
+	// boundary (explicit URL fixation is) but catches obvious config drift.
+	if err := VerifyPathRepoConsistency(target.RepoPath, target.Repo); err != nil {
+		fmt.Printf("  -> DENIED (consistency): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
 	}
+
+	// Build arguments from template.
+	// Template placeholders that depend on per-request target context are
+	// injected here so a single template can serve any repo in the allow list.
+	projectEnv := projectConfig.GetEnvForOperation()
+	projectEnv["repo"] = target.Repo
+	projectEnv["repo_path"] = target.RepoPath
+	projectEnv["expected_git_url"] = target.ExpectedGitURL
 	args, err := op.BuildArgs(req.Params, req.Flags, projectEnv)
 	if err != nil {
 		fmt.Printf("  -> ARG BUILD FAILED: %v\n", err)
@@ -214,8 +254,8 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Execute with sanitized environment
-	resp := s.executeWithSanitization(op.Command, args, projectConfig)
+	// Execute with sanitized environment + per-target working directory.
+	resp := s.executeWithSanitization(op.Command, args, projectConfig, target)
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
 
 	s.sendOperationResponse(conn, operations.Response{
@@ -227,7 +267,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 }
 
 // executeWithSanitization executes a command with sanitized environment
-func (s *Server) executeWithSanitization(cmdName string, args []string, project *config.ProjectConfig) ExecuteResult {
+func (s *Server) executeWithSanitization(cmdName string, args []string, project *config.ProjectConfig, target *ExecutionTarget) ExecuteResult {
 	// Validate command path
 	if err := ValidateCommandPath(cmdName); err != nil {
 		return ExecuteResult{
@@ -236,8 +276,8 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 		}
 	}
 
-	// Create sanitizer with project and prepare command once
-	sanitizer := NewCommandSanitizer(project)
+	// Create sanitizer with project + target and prepare command once
+	sanitizer := NewCommandSanitizer(project, target)
 	preparedCmd := sanitizer.PrepareCommand(cmdName, args)
 
 	timeout := time.Duration(s.daemonConfig.DefaultTimeout) * time.Second

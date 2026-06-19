@@ -105,23 +105,26 @@ func (s *SanitizedEnv) buildGitConfigEnv() string {
 	var parts []string
 	for k, v := range s.gitConfig {
 		// Escape single quotes in key and value to prevent injection
-		// Replace ' with '\'' (end quote, escaped quote, start quote)
 		escapedKey := strings.ReplaceAll(k, "'", `'\''`)
 		escapedVal := strings.ReplaceAll(v, "'", `'\''`)
-		// Git expects format: 'section.key=value'
 		parts = append(parts, fmt.Sprintf("'%s=%s'", escapedKey, escapedVal))
 	}
 	return "GIT_CONFIG_PARAMETERS=" + strings.Join(parts, " ")
 }
 
-// CommandSanitizer prepares commands for safe execution
+// CommandSanitizer prepares commands for safe execution.
+// project carries project-level policy (env, git_config). target carries the
+// resolved per-request execution context (target_repo, repo_path, expected
+// git URL). Both are required for multi-repo projects; target may be nil
+// only for daemon-internal probes that do not run a command.
 type CommandSanitizer struct {
 	project *config.ProjectConfig
+	target  *ExecutionTarget
 }
 
 // NewCommandSanitizer creates a new CommandSanitizer
-func NewCommandSanitizer(project *config.ProjectConfig) *CommandSanitizer {
-	return &CommandSanitizer{project: project}
+func NewCommandSanitizer(project *config.ProjectConfig, target *ExecutionTarget) *CommandSanitizer {
+	return &CommandSanitizer{project: project, target: target}
 }
 
 // SanitizeForGH applies gh-specific sanitization
@@ -132,9 +135,9 @@ func (cs *CommandSanitizer) SanitizeForGH(env *SanitizedEnv) {
 	// Set NO_COLOR for consistent output
 	env.Set("NO_COLOR", "1")
 
-	// Bind to specific repo if project specifies
-	if cs.project != nil && cs.project.Repo != "" {
-		env.Set("GH_REPO", cs.project.Repo)
+	// Bind to target repo
+	if cs.target != nil && cs.target.Repo != "" {
+		env.Set("GH_REPO", cs.target.Repo)
 	}
 }
 
@@ -155,8 +158,12 @@ func (cs *CommandSanitizer) SanitizeForGit(env *SanitizedEnv) {
 	}
 }
 
-// SanitizeForGitPushStrict applies strict sanitization for git push
-// This prevents credential hijacking and ensures non-interactive execution
+// SanitizeForGitPushStrict applies strict sanitization for git push.
+// Explicit URL fixation (the push target URL is passed as an explicit
+// argument by the operation template) is the primary defense; the env
+// hardening below removes secondary channels (system / global git config,
+// credential helpers, pre-push hooks, SSH command override, recursive
+// submodule push) that could redirect or hijack the push.
 func (cs *CommandSanitizer) SanitizeForGitPushStrict(env *SanitizedEnv) {
 	// Apply base git sanitization first
 	cs.SanitizeForGit(env)
@@ -170,12 +177,16 @@ func (cs *CommandSanitizer) SanitizeForGitPushStrict(env *SanitizedEnv) {
 	// Strict: Ignore system git config
 	env.Set("GIT_CONFIG_NOSYSTEM", "1")
 
-	// Strict: Override git config to prevent credential hijacking
-	// These take precedence over repo-local .git/config
-	env.SetGitConfig("credential.helper", "")
-	env.SetGitConfig("submodule.recurse", "false")
+	// Strict: Ignore global git config ($HOME/.gitconfig and $XDG_CONFIG_HOME/git/config).
+	// /dev/null is the documented form to skip global config entirely.
+	env.Set("GIT_CONFIG_GLOBAL", "/dev/null")
 
-	// Note: --no-verify is added by the operation template, not here
+	// Strict: Override git config at runtime so repo-local .git/config cannot
+	// redirect credentials, hook execution, ssh command, or submodule recursion.
+	env.SetGitConfig("credential.helper", "")
+	env.SetGitConfig("core.hooksPath", "/dev/null")
+	env.SetGitConfig("core.sshCommand", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+	env.SetGitConfig("submodule.recurse", "false")
 }
 
 // PrepareCommand creates an exec.Cmd with sanitized environment
@@ -207,9 +218,9 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.
 
 	cmd.Env = env.BuildEnv()
 
-	// Set working directory if project specifies
-	if cs.project != nil && cs.project.RepoPath != "" {
-		cmd.Dir = cs.project.RepoPath
+	// Set working directory to the target's repo path
+	if cs.target != nil && cs.target.RepoPath != "" {
+		cmd.Dir = cs.target.RepoPath
 	}
 
 	return cmd

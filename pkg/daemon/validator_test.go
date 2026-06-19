@@ -12,8 +12,8 @@ import (
 func makeGitAddProject(t *testing.T, repoDir string) *config.ProjectConfig {
 	t.Helper()
 	p := &config.ProjectConfig{
-		Repo:              "owner/repo",
-		RepoPath:          repoDir,
+		Repos:             []string{"owner/repo"},
+		RepoPaths:         []string{repoDir},
 		AllowedOperations: []string{"git_add"},
 		Operations: map[string]*operations.Operation{
 			"git_add": {
@@ -61,7 +61,8 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: tc.flags}
-			_, result := v.ValidateOperation(req, p)
+			target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+			_, result := v.ValidateOperation(req, p, target)
 			if result.OK {
 				t.Errorf("expected reject for git_add %v without paths under path_deny", tc.flags)
 			}
@@ -74,7 +75,8 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 		Params:    map[string]operations.ParamValue{"paths": []string{"src/main.go"}},
 		Flags:     []string{"-u"},
 	}
-	_, result := v.ValidateOperation(req, p)
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+	_, result := v.ValidateOperation(req, p, target)
 	if !result.OK {
 		t.Errorf("git_add -u with explicit paths should be accepted: %s", result.Message)
 	}
@@ -88,7 +90,8 @@ func TestValidator_GitAdd_BroadFlags_NoPathDeny_Allowed(t *testing.T) {
 
 	v := NewValidator()
 	req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: []string{"-A"}}
-	_, result := v.ValidateOperation(req, p)
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+	_, result := v.ValidateOperation(req, p, target)
 	if !result.OK {
 		t.Errorf("git_add -A without paths should be allowed when path_deny is empty: %s", result.Message)
 	}
@@ -108,7 +111,8 @@ func TestValidator_GitAdd_BroadFlagsGuard_AbsolutePath(t *testing.T) {
 
 	v := NewValidator()
 	req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: []string{"-A"}}
-	_, result := v.ValidateOperation(req, p)
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+	_, result := v.ValidateOperation(req, p, target)
 	if result.OK {
 		t.Errorf("broad-flag guard must still trigger when op.Command is an absolute path")
 	}

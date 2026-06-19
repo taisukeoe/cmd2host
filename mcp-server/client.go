@@ -140,13 +140,16 @@ func (c *Client) DescribeOperation(operationID string) (*DescribeOperationRespon
 	return &resp, nil
 }
 
-// RunOperation executes an operation with the given parameters
-func (c *Client) RunOperation(operationID string, params map[string]interface{}, flags []string) (*OperationResponse, error) {
+// RunOperation executes an operation with the given parameters. targetRepo
+// selects which repo (from the project's allow list) the operation acts on;
+// pass "" to default to the project's primary repo (single-repo projects).
+func (c *Client) RunOperation(operationID string, params map[string]interface{}, flags []string, targetRepo string) (*OperationResponse, error) {
 	req := OperationRequest{
-		Operation: operationID,
-		Params:    params,
-		Flags:     flags,
-		Token:     c.token,
+		Operation:  operationID,
+		Params:     params,
+		Flags:      flags,
+		Token:      c.token,
+		TargetRepo: targetRepo,
 	}
 
 	var resp OperationResponse

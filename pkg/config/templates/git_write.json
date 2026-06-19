@@ -1,6 +1,6 @@
 {
-  "repo": "OWNER/REPO",
-  "repo_path": "/path/to/repo",
+  "repos": ["OWNER/REPO"],
+  "repo_paths": ["/path/to/repo"],
   "allowed_operations": [
     "git_fetch",
     "git_push",
@@ -22,11 +22,11 @@
     },
     "git_push": {
       "command": "git",
-      "args_template": ["push", "--no-verify", "origin", "{branch}"],
+      "args_template": ["push", "--no-verify", "{expected_git_url}", "{branch}:refs/heads/{branch}"],
       "params": {
         "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/-]+$", "minLength": 1, "maxLength": 255}
       },
-      "description": "Push branch to origin (strict sanitization applied)"
+      "description": "Push branch to the daemon-resolved expected URL of target_repo (strict sanitization + explicit URL fixation)"
     },
     "gh_pr_view": {
       "command": "gh",

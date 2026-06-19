@@ -64,15 +64,35 @@ Create a project config using a template:
 # List available templates
 cmd2host templates
 
-# Create config from template
+# Create config from template (single repo)
 cmd2host config init --repo=owner/repo --template=readonly --repo-path=/path/to/repo
 
 # Or create and allow in one step
-cmd2host config init --repo=owner/repo --template=github_write --allow
+cmd2host config init --repo=owner/repo --repo-path=/path/to/repo --template=github_write --allow
 
 # Or create a combined git + GitHub write config
-cmd2host config init --repo=owner/repo --template=git_github_write --allow
+cmd2host config init --repo=owner/repo --repo-path=/path/to/repo --template=git_github_write --allow
+
+# Monorepo + submodules: repeat --repo / --repo-path in declaration order.
+# The first pair is the primary (parent) repo; subsequent pairs are submodules.
+cmd2host config init \
+  --repo=owner/parent --repo-path=/path/to/parent \
+  --repo=owner/sub-a  --repo-path=/path/to/parent/sub-a \
+  --repo=owner/sub-b  --repo-path=/path/to/parent/sub-b \
+  --template=git_github_write --allow
 ```
+
+`--repo` and `--repo-path` are repeatable and must appear the same number of
+times. The project ID is derived from the first `--repo`. To discover
+submodule candidates without auto-allowing them, run:
+
+```bash
+cmd2host suggest-submodules --repo-root=/path/to/parent
+```
+
+This parses `.gitmodules` and prints `--repo / --repo-path` suggestions for
+review. Vendored or third-party submodules are intentionally NOT added to
+the allow list automatically.
 
 Available templates (all default to auth-required operations only — local git work is expected to happen inside the container):
 - `readonly` - Read-only host operations (`git fetch`, `gh pr/issue view/list`, review comments)
@@ -375,8 +395,12 @@ Note: the literal name `"localhost"` is accepted as a host token but not DNS-res
 
 ```json
 {
-  "repo": "owner/repo",
-  "repo_path": "/absolute/path/to/repo",
+  "repos": ["owner/parent", "owner/sub-a", "owner/sub-b"],
+  "repo_paths": [
+    "/absolute/path/to/parent",
+    "/absolute/path/to/parent/sub-a",
+    "/absolute/path/to/parent/sub-b"
+  ],
   "allowed_operations": ["op1", "op2"],
   "constraints": {
     "path_deny": ["glob1", "glob2"],
@@ -401,6 +425,31 @@ Note: the literal name `"localhost"` is accepted as a host token but not DNS-res
     }
   }
 }
+```
+
+`repos` and `repo_paths` are index-corresponding arrays — `repos[i]` is the
+local workspace at `repo_paths[i]`. The first entry is the primary (parent)
+repo and is used as the project ID anchor. Operations select which repo to
+act on via the `target_repo` field in the request payload; when omitted,
+the daemon defaults to the primary repo.
+
+Operation templates can reference the per-request target using these
+placeholders, which the daemon injects from the resolved `target_repo`:
+
+- `{repo}` — `owner/repo` form of the resolved target
+- `{repo_path}` — local workspace path of the resolved target
+- `{expected_git_url}` — canonical SSH URL derived by the daemon (used by
+  `git_push` so the push destination is fixed at daemon side and cannot be
+  redirected via a tampered repo-local `origin` remote)
+
+Legacy 1:1 configs (`"repo"`/`"repo_path"` singular fields) remain readable
+— the loader normalizes them in-memory to a length-1 array. To rewrite the
+file on disk into canonical form (does NOT re-stamp `allowed.sha256`), use:
+
+```bash
+cmd2host config migrate <project-id>           # Dry-run: shows the diff
+cmd2host config migrate <project-id> --apply   # Rewrite the file
+cmd2host config allow <project-id>             # Re-allow after migrating
 ```
 
 ### Templates

@@ -136,9 +136,10 @@ func TestSanitizedEnv_InheritsBaseEnvVars(t *testing.T) {
 
 func TestCommandSanitizer_SanitizeForGH(t *testing.T) {
 	project := &config.ProjectConfig{
-		Repo: "owner/repo",
+		Repos: []string{"owner/repo"},
 	}
-	sanitizer := NewCommandSanitizer(project)
+	target := &ExecutionTarget{Repo: "owner/repo"}
+	sanitizer := NewCommandSanitizer(project, target)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGH(env)
@@ -167,7 +168,7 @@ func TestCommandSanitizer_SanitizeForGH(t *testing.T) {
 }
 
 func TestCommandSanitizer_SanitizeForGH_NoRepo(t *testing.T) {
-	sanitizer := NewCommandSanitizer(nil)
+	sanitizer := NewCommandSanitizer(nil, nil)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGH(env)
@@ -199,7 +200,7 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 			"user.name": "Test",
 		},
 	}
-	sanitizer := NewCommandSanitizer(project)
+	sanitizer := NewCommandSanitizer(project, nil)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGit(env)
@@ -245,7 +246,7 @@ func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
 			"user.name": "Test",
 		},
 	}
-	sanitizer := NewCommandSanitizer(project)
+	sanitizer := NewCommandSanitizer(project, nil)
 	env := NewSanitizedEnv()
 
 	sanitizer.SanitizeForGitPushStrict(env)
@@ -300,13 +301,14 @@ func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
 
 func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 	project := &config.ProjectConfig{
-		Repo:     "owner/repo",
-		RepoPath: "/path/to/repo",
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/path/to/repo"},
 		Env: map[string]string{
 			"CUSTOM_VAR": "value",
 		},
 	}
-	sanitizer := NewCommandSanitizer(project)
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: "/path/to/repo"}
+	sanitizer := NewCommandSanitizer(project, target)
 
 	cmd := sanitizer.PrepareCommand("gh", []string{"pr", "list"})
 
@@ -340,12 +342,14 @@ func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 
 func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
 	project := &config.ProjectConfig{
-		RepoPath: "/path/to/repo",
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/path/to/repo"},
 		GitConfig: map[string]string{
 			"user.name": "Test User",
 		},
 	}
-	sanitizer := NewCommandSanitizer(project)
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: "/path/to/repo"}
+	sanitizer := NewCommandSanitizer(project, target)
 
 	cmd := sanitizer.PrepareCommand("git", []string{"status"})
 
@@ -372,7 +376,7 @@ func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
 }
 
 func TestCommandSanitizer_PrepareCommand_ExtractsBasename(t *testing.T) {
-	sanitizer := NewCommandSanitizer(nil)
+	sanitizer := NewCommandSanitizer(nil, nil)
 
 	// Test with full path
 	cmd := sanitizer.PrepareCommand("/usr/bin/gh", []string{"--version"})

@@ -45,12 +45,26 @@ Note: The wrapper scripts (e.g., `gh`) installed in the container do not execute
 Commands are validated using **operation mode**: predefined operation templates with typed parameters and project-based policies.
 
 **Project-based policies** (per-project config in `~/.cmd2host/projects/<project-id>/`):
-- Repository binding (token → repo → project config)
+- Multi-repo allow list (`repos` + `repo_paths`, index-corresponding arrays). The first entry is the primary (parent) repo; additional entries are submodules or sibling repos hosted under the same workspace
+- Token binding (token → `project_id` → project config). Legacy tokens carrying only `repo` are resolved via `NormalizeProjectID(repo)` and required to match `repos[0]`
+- Per-operation `target_repo` selects which repo (from the allow list) the request acts on; defaults to the primary repo when omitted
 - Default deny (only `allowed_operations` can execute)
 - Path denylist (glob patterns)
 - Git config overrides
 - Environment variables
 - Config hash verification (changes require explicit allowance)
+
+### Push destination fixation
+
+For `git push`, the daemon does NOT trust the repo-local `origin` remote.
+Instead, it derives the canonical SSH URL from `target_repo` (e.g.
+`git@github.com:owner/repo.git`) and hands it to `git` as an explicit
+argument together with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`,
+`credential.helper=`, `core.hooksPath=/dev/null`, `core.sshCommand=...`,
+and `submodule.recurse=false` overrides. A separate path-repo consistency
+check (`git remote get-url origin` vs `target_repo`) runs immediately
+before execution as a misconfiguration detector, not as the primary
+security boundary.
 
 ## Key Files
 
@@ -155,7 +169,9 @@ just build
 ./dist/cmd2host projects                    # List projects
 ./dist/cmd2host templates                   # List available templates
 ./dist/cmd2host templates show <name>       # Show template content
-./dist/cmd2host config init --repo=owner/repo [--template=<name>] [--repo-path=<path>] [--allow] [--force]
+./dist/cmd2host config init --repo=owner/parent --repo-path=/path/to/parent [--repo=owner/sub --repo-path=/path/to/parent/sub ...] [--template=<name>] [--allow] [--force]
+./dist/cmd2host config migrate <project-id> [--apply]   # Normalize a legacy 1:1 config to repos/repo_paths form (dry-run by default)
+./dist/cmd2host suggest-submodules [--repo-root=<path>] # Parse .gitmodules and print --repo / --repo-path suggestions (no auto-allow)
 ./dist/cmd2host config diff <project-id>    # Show config status
 ./dist/cmd2host config allow <project-id>   # Allow config
 ```
@@ -186,6 +202,7 @@ Request:
 {
   "request_id": "unique-id",
   "operation": "gh_pr_view",
+  "target_repo": "owner/repo",
   "params": {"number": 123},
   "flags": ["--json"],
   "token": "session-token"

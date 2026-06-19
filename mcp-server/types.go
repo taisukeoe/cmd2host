@@ -3,11 +3,12 @@ package main
 
 // OperationRequest represents a request to execute an operation via cmd2host daemon
 type OperationRequest struct {
-	RequestID string                 `json:"request_id,omitempty"`
-	Operation string                 `json:"operation"`
-	Params    map[string]interface{} `json:"params"`
-	Flags     []string               `json:"flags,omitempty"`
-	Token     string                 `json:"token"`
+	RequestID  string                 `json:"request_id,omitempty"`
+	Operation  string                 `json:"operation"`
+	Params     map[string]interface{} `json:"params"`
+	Flags      []string               `json:"flags,omitempty"`
+	Token      string                 `json:"token"`
+	TargetRepo string                 `json:"target_repo,omitempty"`
 }
 
 // OperationResponse represents the response from cmd2host daemon

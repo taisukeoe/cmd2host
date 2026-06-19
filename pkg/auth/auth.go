@@ -20,11 +20,20 @@ import (
 // TokenData contains project-specific data stored with the token.
 // This struct is extensible for future use cases beyond repository restriction.
 type TokenData struct {
+	// ProjectID is the canonical project identifier this token is bound to
+	// (NormalizeProjectID(primary_repo)). When present, the daemon resolves
+	// the project config directly from ProjectID and uses Repo (if non-empty)
+	// as a defense-in-depth check against project.Repos[0].
+	ProjectID string `json:"project_id,omitempty"`
+
 	// Repo is the GitHub repository (owner/repo) bound to this token.
+	// For new tokens that carry ProjectID, Repo equals the project's primary
+	// repo (Repos[0]) and acts as a defense-in-depth check.
+	// For legacy tokens without ProjectID, Repo is the sole project resolver:
+	// the project ID is computed via NormalizeProjectID(Repo).
 	// Empty string means repo could not be detected at token creation time;
-	// in this case, commands that explicitly specify a repository will be denied,
-	// while repo-agnostic commands (e.g., gh --version) are still allowed.
-	// See the daemon's project resolution for the enforcement logic.
+	// in that case, commands that target a specific repo are denied while
+	// repo-agnostic commands stay allowed. See pkg/daemon resolveProject.
 	Repo string `json:"repo"`
 
 	// Profile is deprecated and unused. Project-based config is now used instead.

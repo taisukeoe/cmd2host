@@ -52,6 +52,10 @@ type Request struct {
 	Params    map[string]ParamValue `json:"params"`
 	Flags     []string              `json:"flags,omitempty"`
 	Token     string                `json:"token"`
+	// TargetRepo selects which repo (from the project's allow list) this
+	// request acts on. Required when the project has more than one repo;
+	// optional when the project has a single repo (defaults to Repos[0]).
+	TargetRepo string `json:"target_repo,omitempty"`
 }
 
 // Response represents the response from an operation

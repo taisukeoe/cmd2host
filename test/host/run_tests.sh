@@ -66,9 +66,10 @@ EOF
 setup_project_config() {
     mkdir -p "$PROJECT_DIR"
     # Create project config with operations
-    cat > "$PROJECT_DIR/config.json" <<'EOF'
+    cat > "$PROJECT_DIR/config.json" <<EOF
 {
   "repo": "taisukeoe/cmd2host",
+  "repo_path": "$PROJECT_ROOT",
   "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version"],
   "operations": {
     "gh_version": {
