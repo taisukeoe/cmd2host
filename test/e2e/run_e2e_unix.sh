@@ -149,9 +149,12 @@ ensure_project_config() {
     local gh_path
     gh_path=$(which gh 2>/dev/null || echo "gh")
 
+    local repo_path
+    repo_path=$(pwd)
     cat > "$config_file" << EOF
 {
   "repo": "taisukeoe/cmd2host",
+  "repo_path": "$repo_path",
   "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_issue_list", "gh_issue_view", "gh_repo_view", "gh_auth_status"],
   "operations": {
     "gh_pr_view": {"command": "$gh_path", "args_template": ["pr", "view", "{number}", "-R", "{repo}"], "params": {"number": {"type": "integer", "min": 1, "optional": true}}, "allowed_flags": ["--json"], "description": "View a pull request"},
