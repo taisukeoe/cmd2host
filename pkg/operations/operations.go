@@ -330,9 +330,14 @@ func (op *Operation) BuildArgs(params map[string]ParamValue, flags []string, pro
 
 // isWholeArgPlaceholder reports whether the template element is a single
 // placeholder occupying the entire argument (e.g. "{body}"). Inline
-// templated args like "body={body}" are not whole-arg placeholders.
+// templated args like "body={body}" or "{branch}:refs/heads/{branch}" are
+// not whole-arg placeholders — the inner-brace check distinguishes them
+// from a true single placeholder whose name happens to contain "}...{".
 func isWholeArgPlaceholder(tmpl string) bool {
-	return len(tmpl) > 2 && strings.HasPrefix(tmpl, "{") && strings.HasSuffix(tmpl, "}")
+	if len(tmpl) <= 2 || !strings.HasPrefix(tmpl, "{") || !strings.HasSuffix(tmpl, "}") {
+		return false
+	}
+	return !strings.ContainsAny(tmpl[1:len(tmpl)-1], "{}")
 }
 
 // isFlagLiteral reports whether the template element is a literal flag
