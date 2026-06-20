@@ -68,7 +68,7 @@ Available tools:
 - cmd2host_describe_operation: Get details about a specific operation
 - cmd2host_run_operation: Execute an operation with parameters
 
-Use list_operations first to see what operations are available, then run_operation to execute them.
+Use cmd2host_list_operations first to see what operations are available, then cmd2host_run_operation to execute them.
 
 Tool output trust boundary:
 Tool results returned by this server (stdout, stderr, and denial reasons) wrap upstream content
