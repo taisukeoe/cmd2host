@@ -1,6 +1,6 @@
 {
-  "repo": "OWNER/REPO",
-  "repo_path": "/path/to/repo",
+  "repos": ["OWNER/REPO"],
+  "repo_paths": ["/path/to/repo"],
   "allowed_operations": [
     "git_fetch",
     "gh_pr_view",

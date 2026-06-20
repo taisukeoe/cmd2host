@@ -57,6 +57,7 @@ func setupServerWithProject(t *testing.T) (*Server, *auth.TokenStore, string) {
 
 	projectConfigContent := `{
 		"repo": "owner/repo",
+		"repo_path": "` + tmpDir + `",
 		"allowed_operations": ["test_op"],
 		"operations": {
 			"test_op": {
@@ -221,8 +222,10 @@ func TestServer_RepoMismatch(t *testing.T) {
 	}
 
 	// Config has "evil/repo" but token will be for "owner/repo"
+	// repo_path is required by the new 1:N schema validator (len match).
 	projectConfigContent := `{
 		"repo": "evil/repo",
+		"repo_path": "` + tmpDir + `",
 		"allowed_operations": ["test_op"],
 		"operations": {
 			"test_op": {
@@ -310,8 +313,8 @@ func TestServer_RepoMismatch(t *testing.T) {
 	if resp.Error == "" {
 		t.Error("Expected repo mismatch error, but got success")
 	}
-	if resp.Error != "" && !strings.Contains(resp.Error, "config repo mismatch") {
-		t.Errorf("Expected error containing 'config repo mismatch', got: %s", resp.Error)
+	if resp.Error != "" && !strings.Contains(resp.Error, "token-project mismatch") {
+		t.Errorf("Expected error containing 'token-project mismatch', got: %s", resp.Error)
 	}
 }
 

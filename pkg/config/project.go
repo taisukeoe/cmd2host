@@ -18,10 +18,13 @@ import (
 	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
-// ProjectConfig defines project-specific configuration
+// ProjectConfig defines project-specific configuration.
+// Repos and RepoPaths are index-corresponding arrays: Repos[i] is hosted at RepoPaths[i].
+// Repos[0] is treated as the primary (parent) repository — token binding falls back to
+// it when a legacy token without project_id is presented (see pkg/auth).
 type ProjectConfig struct {
-	Repo              string                           `json:"repo"`                 // Repository (owner/repo)
-	RepoPath          string                           `json:"repo_path"`            // Local repository path
+	Repos             []string                         `json:"repos"`                // Repositories (owner/repo). Repos[0] is the primary.
+	RepoPaths         []string                         `json:"repo_paths"`           // Local repository paths, index-corresponding to Repos.
 	AllowedOperations []string                         `json:"allowed_operations"`   // Allowed operation IDs
 	Constraints       Constraints                      `json:"constraints"`          // Policy constraints
 	Operations        map[string]*operations.Operation `json:"operations"`           // Operation definitions
@@ -34,22 +37,164 @@ type ProjectConfig struct {
 
 // Constraints defines policy constraints for a project
 type Constraints struct {
-	RemoteHostsAllow []string `json:"remote_hosts_allow,omitempty"` // TODO: Not yet implemented. For git push URL validation (prevent .git/config remote URL tampering)
+	RemoteHostsAllow []string `json:"remote_hosts_allow,omitempty"` // Allowed hosts for expected git URL construction (e.g., "github.com"). When non-empty, the expected URL host must be in this list. Empty allows any host (no-op).
 	PathDeny         []string `json:"path_deny,omitempty"`          // Glob patterns for denied paths
 }
 
-// NormalizeProjectID converts a repository (owner/repo) to a safe directory name
+var repoFormatRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// UnmarshalJSON normalizes legacy (`repo`/`repo_path` singular) and new
+// (`repos`/`repo_paths` array) forms into the new form. Mixing the two
+// forms is rejected. Semantic validation (length match, owner/repo format,
+// duplicates) is deferred to Validate so template parse paths can construct
+// a ProjectConfig without semantic checks.
+func (p *ProjectConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("invalid project config JSON: %w", err)
+	}
+
+	_, hasLegacyRepo := raw["repo"]
+	_, hasLegacyRepoPath := raw["repo_path"]
+	_, hasNewRepos := raw["repos"]
+	_, hasNewRepoPaths := raw["repo_paths"]
+
+	if (hasLegacyRepo || hasLegacyRepoPath) && (hasNewRepos || hasNewRepoPaths) {
+		return fmt.Errorf("project config has both legacy (repo/repo_path) and new (repos/repo_paths) forms; mixing is not allowed")
+	}
+
+	type aux struct {
+		Repo              string                           `json:"repo"`
+		RepoPath          string                           `json:"repo_path"`
+		Repos             []string                         `json:"repos"`
+		RepoPaths         []string                         `json:"repo_paths"`
+		AllowedOperations []string                         `json:"allowed_operations"`
+		Constraints       Constraints                      `json:"constraints"`
+		Operations        map[string]*operations.Operation `json:"operations"`
+		Env               map[string]string                `json:"env,omitempty"`
+		GitConfig         map[string]string                `json:"git_config,omitempty"`
+	}
+	var a aux
+	if err := json.Unmarshal(data, &a); err != nil {
+		return fmt.Errorf("invalid project config: %w", err)
+	}
+
+	if hasLegacyRepo || hasLegacyRepoPath {
+		if a.Repo != "" {
+			p.Repos = []string{a.Repo}
+		}
+		if a.RepoPath != "" {
+			p.RepoPaths = []string{a.RepoPath}
+		}
+	} else {
+		p.Repos = a.Repos
+		p.RepoPaths = a.RepoPaths
+	}
+	p.AllowedOperations = a.AllowedOperations
+	p.Constraints = a.Constraints
+	p.Operations = a.Operations
+	p.Env = a.Env
+	p.GitConfig = a.GitConfig
+	return nil
+}
+
+// MarshalJSON emits the new array form. Legacy singular keys are never written
+// back so a load → save cycle produces canonical form.
+func (p ProjectConfig) MarshalJSON() ([]byte, error) {
+	type out struct {
+		Repos             []string                         `json:"repos"`
+		RepoPaths         []string                         `json:"repo_paths"`
+		AllowedOperations []string                         `json:"allowed_operations"`
+		Constraints       Constraints                      `json:"constraints"`
+		Operations        map[string]*operations.Operation `json:"operations"`
+		Env               map[string]string                `json:"env,omitempty"`
+		GitConfig         map[string]string                `json:"git_config,omitempty"`
+	}
+	return json.Marshal(out{
+		Repos:             p.Repos,
+		RepoPaths:         p.RepoPaths,
+		AllowedOperations: p.AllowedOperations,
+		Constraints:       p.Constraints,
+		Operations:        p.Operations,
+		Env:               p.Env,
+		GitConfig:         p.GitConfig,
+	})
+}
+
+// Validate runs semantic validation on the project config: non-empty repos,
+// length match between repos and repo_paths, owner/repo format, duplicate
+// repos, and duplicate repo_paths after absolute-path resolution.
+func (p *ProjectConfig) Validate() error {
+	if len(p.Repos) == 0 {
+		return fmt.Errorf("repos must not be empty")
+	}
+	if len(p.Repos) != len(p.RepoPaths) {
+		return fmt.Errorf("repos (%d entries) and repo_paths (%d entries) length mismatch", len(p.Repos), len(p.RepoPaths))
+	}
+
+	repoSet := make(map[string]int, len(p.Repos))
+	for i, r := range p.Repos {
+		if r == "" {
+			return fmt.Errorf("repos[%d] is empty", i)
+		}
+		if !repoFormatRegexp.MatchString(r) {
+			return fmt.Errorf("repos[%d] %q does not match owner/repo format", i, r)
+		}
+		if j, dup := repoSet[r]; dup {
+			return fmt.Errorf("repos[%d] %q duplicates repos[%d]", i, r, j)
+		}
+		repoSet[r] = i
+	}
+
+	pathSet := make(map[string]int, len(p.RepoPaths))
+	for i, rp := range p.RepoPaths {
+		if rp == "" {
+			return fmt.Errorf("repo_paths[%d] is empty", i)
+		}
+		abs, err := filepath.Abs(rp)
+		if err != nil {
+			return fmt.Errorf("repo_paths[%d] %q: cannot resolve to absolute path: %w", i, rp, err)
+		}
+		clean := filepath.Clean(abs)
+		if j, dup := pathSet[clean]; dup {
+			return fmt.Errorf("repo_paths[%d] %q resolves to the same path as repo_paths[%d]", i, rp, j)
+		}
+		pathSet[clean] = i
+		// Store the cleaned absolute path so downstream consumers (cmd.Dir,
+		// path_deny enforcement, git -C, path-repo consistency check) do not
+		// resolve a relative repo_path against the daemon CWD.
+		p.RepoPaths[i] = clean
+	}
+
+	return nil
+}
+
+// PrimaryRepo returns Repos[0]. Callers should call Validate first.
+func (p *ProjectConfig) PrimaryRepo() string {
+	if len(p.Repos) == 0 {
+		return ""
+	}
+	return p.Repos[0]
+}
+
+// IndexOfRepo returns the index of the given target_repo in Repos, or -1 if
+// the repo is not in the allow list.
+func (p *ProjectConfig) IndexOfRepo(repo string) int {
+	for i, r := range p.Repos {
+		if r == repo {
+			return i
+		}
+	}
+	return -1
+}
+
+// NormalizeProjectID converts a repository (owner/repo) to a safe directory name.
 func NormalizeProjectID(repo string) string {
-	// Replace / with _ to create safe directory name
 	return strings.ReplaceAll(repo, "/", "_")
 }
 
 // ProjectsDir returns the path to the projects directory.
 // Honors CMD2HOST_CONFIG_DIR via configdir.Dir.
-//
-// Preserves the pre-existing contract: returns "" when the base dir cannot
-// be resolved, so callers continue to handle the missing-dir case via
-// downstream os.Stat / os.ReadDir.
 func ProjectsDir() string {
 	base, err := configdir.Dir()
 	if err != nil {
@@ -103,19 +248,20 @@ func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
 		return nil, fmt.Errorf("invalid project config: %w", err)
 	}
 
-	// Compile operation patterns
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid project config: %w", err)
+	}
+
 	for name, op := range config.Operations {
 		if err := op.CompilePatterns(); err != nil {
 			return nil, fmt.Errorf("operation %s: %w", name, err)
 		}
 	}
 
-	// Compile constraint patterns
 	if err := config.CompilePatterns(); err != nil {
 		return nil, fmt.Errorf("constraints: %w", err)
 	}
 
-	// Validate that all allowed operations exist
 	for _, opID := range config.AllowedOperations {
 		if _, exists := config.Operations[opID]; !exists {
 			return nil, fmt.Errorf("allowed_operations references unknown operation: %s", opID)
@@ -127,9 +273,7 @@ func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
 
 // CompilePatterns compiles glob patterns in constraints
 func (p *ProjectConfig) CompilePatterns() error {
-	// Store path patterns for glob matching
 	p.compiledPathPatterns = p.Constraints.PathDeny
-
 	return nil
 }
 
@@ -197,24 +341,7 @@ func (p *ProjectConfig) ValidatePaths(repoPath string, paths []string) error {
 // requireEnforceablePathspec returns nil when path is a per-file
 // repo-relative pathspec that path_deny can match literally. Returns a
 // descriptive error otherwise — caller propagates it to the operation
-// request. Rejected forms:
-//   - directory pathspecs (".", "..", "./", "../", trailing "/")
-//   - glob pathspecs (containing *, ?, [, ])
-//   - pathspec magic forms (starting with ":" or the "\:" escape that
-//     git treats as a literal ":" prefix)
-//   - absolute pathspecs (path_deny enforcement expects repo-relative input)
-//   - pathspecs whose normalized form resolves outside repoPath
-//   - bare directory names that exist under repoPath
-//
-// The caller only invokes this when path_deny is non-empty. repoPath
-// must be set in that case; otherwise the function returns an error so
-// the daemon CWD is never used as the resolution base.
-//
-// Lstat errors for nonexistent paths are not policy errors — such
-// pathspecs are delegated to git, which surfaces the proper "did not
-// match" error on its own. Non-ENOENT Lstat errors (EPERM, etc.)
-// return an error so a directory cannot slip past the bare-directory
-// branch when the daemon lacks read permission to detect it.
+// request.
 func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error {
 	switch {
 	case path == "." || path == ".." || path == "./" || path == "../":
@@ -224,10 +351,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	case strings.ContainsAny(path, "*?[]"):
 		return fmt.Errorf("path %q is a glob pathspec; path_deny enforcement requires per-file paths", path)
 	case strings.HasPrefix(path, ":") || strings.HasPrefix(path, `\:`):
-		// Pathspec magic ":(top)foo", ":/foo", ":(glob)pattern", ":!exclude"
-		// is interpreted specially by git. The "\:" escape form is also
-		// rejected: git treats `\:foo` as the literal pathspec `:foo`,
-		// which path_deny cannot enumerate ahead of time.
 		return fmt.Errorf("path %q is a magic pathspec; path_deny enforcement requires per-file paths", path)
 	case filepath.IsAbs(path):
 		return fmt.Errorf("path %q is absolute; path_deny enforcement requires repo-relative paths", path)
@@ -235,9 +358,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	if repoPath == "" {
 		return fmt.Errorf("repo_path required for path_deny enforcement (repo_path is empty)")
 	}
-	// Normalize repoPath so the repo-relative containment check does not
-	// depend on the daemon CWD (a relative repoPath would resolve against
-	// CWD inside filepath.Rel below).
 	repoAbs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return fmt.Errorf("repo_path %q: resolve failed: %w", repoPath, err)
@@ -251,12 +371,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path %q escapes repo_path; path_deny enforcement requires repo-relative paths", path)
 	}
-	// The lexical Rel check above only compares strings. An intermediate
-	// component along joined can be a symlink that escapes repoAbs (for
-	// example repoAbs/dir/x.txt where dir is a symlink to /etc). git
-	// follows intermediate symlinks during worktree operations, so the
-	// containment policy must match those semantics. Resolve symlinks in
-	// both endpoints and re-check repo-relative containment.
 	resolvedRepoAbs, err := filepath.EvalSymlinks(repoAbs)
 	if err != nil {
 		return fmt.Errorf("repo_path %q: resolve symlinks failed: %w", repoPath, err)
@@ -266,12 +380,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("path %q: resolve symlinks failed: %w", path, err)
 		}
-		// Leaf does not yet exist (path will be created by git).
-		// Multiple trailing components may be missing — walk up to the
-		// deepest existing ancestor, resolve symlinks there, then append
-		// the missing suffix. This ensures an intermediate symlink that
-		// redirects outside repoAbs is still rejected even when several
-		// later path components do not exist yet.
 		current := joined
 		for {
 			if _, lerr := os.Lstat(current); lerr == nil {
@@ -281,16 +389,12 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 			}
 			parent := filepath.Dir(current)
 			if parent == current {
-				// Reached filesystem root with no existing ancestor.
 				current = ""
 				break
 			}
 			current = parent
 		}
 		if current == "" {
-			// No existing ancestor — the lexical containment check
-			// above already verified the string-level path. Let git
-			// surface the proper not-found error downstream.
 			resolvedJoined = ""
 		} else {
 			resolvedAncestor, rerr := filepath.EvalSymlinks(current)
@@ -313,9 +417,6 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	info, err := os.Lstat(joined)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Nonexistent literal pathspec: let git report the proper
-			// error instead of treating Lstat failure as a policy
-			// violation.
 			return nil
 		}
 		return fmt.Errorf("path %q: lstat failed during path_deny enforcement: %w", path, err)
@@ -326,61 +427,44 @@ func (p *ProjectConfig) requireEnforceablePathspec(repoPath, path string) error 
 	return nil
 }
 
-// GetEnvForOperation returns environment variables for operation template expansion
+// GetEnvForOperation returns environment variables for operation template expansion.
+// Template-scoped values (repo, repo_path, expected_git_url) are NOT injected here —
+// they depend on the per-request target_repo and are added by the server using the
+// resolved ExecutionTarget.
 func (p *ProjectConfig) GetEnvForOperation() map[string]string {
 	env := make(map[string]string)
-
-	// Copy project env
 	for k, v := range p.Env {
 		env[k] = v
 	}
-
-	// Add repo_path as a special value for template expansion
-	if p.RepoPath != "" {
-		env["repo_path"] = p.RepoPath
-	}
-
 	return env
 }
 
-// matchGlob matches a path against a glob pattern
-// Supports ** for recursive matching and * for single component
+// matchGlob matches a path against a glob pattern.
+// Supports ** for recursive matching and * for single component.
 func matchGlob(pattern, path string) (bool, error) {
-	// Normalize paths
 	pattern = filepath.Clean(pattern)
 	path = filepath.Clean(path)
-
-	// Handle ** patterns specially
 	if strings.Contains(pattern, "**") {
 		return matchDoubleStarGlob(pattern, path)
 	}
-
-	// Standard glob matching
 	return filepath.Match(pattern, path)
 }
 
-// matchDoubleStarGlob handles ** glob patterns
 func matchDoubleStarGlob(pattern, path string) (bool, error) {
 	patternParts := strings.Split(pattern, string(filepath.Separator))
 	pathParts := strings.Split(path, string(filepath.Separator))
-
 	return matchParts(patternParts, pathParts)
 }
 
-// matchParts recursively matches pattern parts against path parts
 func matchParts(patternParts, pathParts []string) (bool, error) {
 	if len(patternParts) == 0 {
 		return len(pathParts) == 0, nil
 	}
 
 	if patternParts[0] == "**" {
-		// ** matches zero or more path components
 		if len(patternParts) == 1 {
-			// ** at end matches everything
 			return true, nil
 		}
-
-		// Try matching remaining pattern with each suffix of path
 		for i := 0; i <= len(pathParts); i++ {
 			matched, err := matchParts(patternParts[1:], pathParts[i:])
 			if err != nil {
@@ -397,7 +481,6 @@ func matchParts(patternParts, pathParts []string) (bool, error) {
 		return false, nil
 	}
 
-	// Regular glob matching for this component
 	matched, err := filepath.Match(patternParts[0], pathParts[0])
 	if err != nil {
 		return false, err
@@ -424,17 +507,15 @@ func IsConfigAllowed(projectID string) (bool, string, error) {
 	configPath := ProjectConfigPath(projectID)
 	allowedPath := AllowedHashPath(projectID)
 
-	// Compute current config hash
 	currentHash, err := ComputeConfigHash(configPath)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to compute config hash: %w", err)
 	}
 
-	// Read allowed hash
 	allowedData, err := os.ReadFile(allowedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, currentHash, nil // No allowed hash yet
+			return false, currentHash, nil
 		}
 		return false, currentHash, err
 	}
@@ -448,7 +529,6 @@ func AllowConfig(projectID string) error {
 	configPath := ProjectConfigPath(projectID)
 	allowedPath := AllowedHashPath(projectID)
 
-	// Compute and write hash
 	hash, err := ComputeConfigHash(configPath)
 	if err != nil {
 		return err
@@ -480,50 +560,66 @@ func ListProjects() ([]string, error) {
 	return projects, nil
 }
 
-// CreateProjectConfigOptions contains options for CreateProjectConfig
+// CreateProjectConfigOptions contains options for CreateProjectConfig.
+// Repos[0] is treated as the primary repo (used for the project ID and as
+// the token's bind anchor when a legacy token is presented). RepoPaths must
+// have the same length as Repos.
 type CreateProjectConfigOptions struct {
-	Repo     string // Repository (owner/repo) - required
-	Template string // Template name (default: "readonly")
-	RepoPath string // Local repository path (optional)
-	Allow    bool   // Allow config after creation
-	Force    bool   // Overwrite existing config
+	Repos     []string // Repositories (owner/repo) - required, len >= 1
+	Template  string   // Template name (default: "readonly")
+	RepoPaths []string // Local repository paths, len must match Repos
+	Allow     bool     // Allow config after creation
+	Force     bool     // Overwrite existing config
 }
 
-// CreateProjectConfig creates a project configuration from a template
+// CreateProjectConfig creates a project configuration from a template.
+// The project ID is derived from Repos[0].
 func CreateProjectConfig(opts CreateProjectConfigOptions) error {
-	if opts.Repo == "" {
-		return fmt.Errorf("repo is required")
+	if len(opts.Repos) == 0 {
+		return fmt.Errorf("repos is required (at least one --repo)")
+	}
+	if len(opts.RepoPaths) > 0 && len(opts.Repos) != len(opts.RepoPaths) {
+		return fmt.Errorf("--repo (%d) and --repo-path (%d) counts must match", len(opts.Repos), len(opts.RepoPaths))
+	}
+	if len(opts.RepoPaths) == 0 && len(opts.Repos) > 1 {
+		return fmt.Errorf("--repo-path is required when multiple --repo are specified")
 	}
 
-	// Validate repo format: must be exactly "owner/repo" with no extra slashes
-	// Aligned with CURRENT_REPO detection in init-cmd2host.sh
-	repoPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-	if !repoPattern.MatchString(opts.Repo) {
-		return fmt.Errorf("repo must be in owner/repo format (e.g., owner/repo)")
+	for i, r := range opts.Repos {
+		if !repoFormatRegexp.MatchString(r) {
+			return fmt.Errorf("--repo[%d] %q must be in owner/repo format", i, r)
+		}
 	}
 
-	// Default template
 	if opts.Template == "" {
 		opts.Template = "readonly"
 	}
 
-	// Load template
 	templateData, err := GetTemplate(opts.Template)
 	if err != nil {
 		return fmt.Errorf("failed to load template: %w", err)
 	}
 
-	// Replace placeholders
-	content := string(templateData)
-	content = strings.ReplaceAll(content, "OWNER/REPO", opts.Repo)
-	if opts.RepoPath != "" {
-		content = strings.ReplaceAll(content, "/path/to/repo", opts.RepoPath)
+	var config ProjectConfig
+	if err := json.Unmarshal(templateData, &config); err != nil {
+		return fmt.Errorf("invalid template after parse: %w", err)
 	}
 
-	// Validate the resulting JSON by parsing it
-	var config ProjectConfig
-	if err := json.Unmarshal([]byte(content), &config); err != nil {
-		return fmt.Errorf("invalid config after template expansion: %w", err)
+	// Override repos and repo_paths with user-supplied values.
+	config.Repos = append([]string(nil), opts.Repos...)
+	if len(opts.RepoPaths) > 0 {
+		config.RepoPaths = append([]string(nil), opts.RepoPaths...)
+	} else {
+		// Single-repo case without --repo-path: keep the template's placeholder
+		// path so user can edit manually. Validate() will accept any non-empty
+		// path (semantic existence is checked at request time).
+		if len(config.RepoPaths) != 1 {
+			config.RepoPaths = []string{"/path/to/repo"}
+		}
+	}
+
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid config after expansion: %w", err)
 	}
 
 	ResolveOperationCommands(&config, exec.LookPath)
@@ -532,29 +628,24 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to re-encode project config: %w", err)
 	}
-	content = string(updatedContent) + "\n"
+	content := string(updatedContent) + "\n"
 
-	// Create project directory
-	projectID := NormalizeProjectID(opts.Repo)
+	projectID := NormalizeProjectID(opts.Repos[0])
 	projectDir := filepath.Join(ProjectsDir(), projectID)
 	configPath := filepath.Join(projectDir, "config.json")
 
-	// Check if config already exists
 	if _, err := os.Stat(configPath); err == nil && !opts.Force {
 		return fmt.Errorf("config already exists: %s (use --force to overwrite)", configPath)
 	}
 
-	// Create directory
 	if err := os.MkdirAll(projectDir, 0700); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 
-	// Write config file
 	if err := os.WriteFile(configPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Allow if requested
 	if opts.Allow {
 		if err := AllowConfig(projectID); err != nil {
 			return fmt.Errorf("config created but allow step failed: %w", err)

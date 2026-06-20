@@ -23,8 +23,11 @@ type ValidationResult struct {
 	Message string
 }
 
-// ValidateOperation validates an operation request against project constraints
-func (v *Validator) ValidateOperation(req operations.Request, project *config.ProjectConfig) (*operations.Operation, ValidationResult) {
+// ValidateOperation validates an operation request against project constraints.
+// target carries the resolved per-request execution context (target_repo,
+// repo_path, expected git URL); validators that need a repo path use
+// target.RepoPath rather than project-level state.
+func (v *Validator) ValidateOperation(req operations.Request, project *config.ProjectConfig, target *ExecutionTarget) (*operations.Operation, ValidationResult) {
 	// Check if operation exists in project
 	op, exists := project.GetOperation(req.Operation)
 	if !exists {
@@ -61,9 +64,13 @@ func (v *Validator) ValidateOperation(req operations.Request, project *config.Pr
 	// Extract and validate policy-specific parameters
 	policyReq := extractPolicyParams(req)
 
-	// Validate path constraints (for git add, etc.)
+	// Validate path constraints (for git add, etc.) against target's repo path
 	if len(policyReq.Paths) > 0 {
-		if err := project.ValidatePaths(project.RepoPath, policyReq.Paths); err != nil {
+		repoPath := ""
+		if target != nil {
+			repoPath = target.RepoPath
+		}
+		if err := project.ValidatePaths(repoPath, policyReq.Paths); err != nil {
 			return nil, ValidationResult{
 				OK:      false,
 				Message: err.Error(),

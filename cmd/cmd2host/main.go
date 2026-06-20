@@ -4,10 +4,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -49,6 +51,12 @@ func main() {
 		return
 	}
 
+	// Handle suggest-submodules subcommand (config-related but takes a path arg)
+	if len(os.Args) >= 2 && os.Args[1] == "suggest-submodules" {
+		handleSuggestSubmodulesCommand()
+		return
+	}
+
 	// Handle projects subcommand
 	if len(os.Args) == 2 && os.Args[1] == "projects" {
 		handleProjectsCommand()
@@ -70,9 +78,10 @@ func handleConfigCommand() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "Usage: cmd2host config <command> [args]")
 		fmt.Fprintln(os.Stderr, "Commands:")
-		fmt.Fprintln(os.Stderr, "  init --repo=<owner/repo> [options]  Create project config from template")
-		fmt.Fprintln(os.Stderr, "  diff <project-id>                   Show config diff and current hash")
-		fmt.Fprintln(os.Stderr, "  allow <project-id>                  Allow current config")
+		fmt.Fprintln(os.Stderr, "  init --repo=<owner/repo> --repo-path=<path> [more --repo/--repo-path pairs] [options]  Create project config from template")
+		fmt.Fprintln(os.Stderr, "  diff <project-id>                                                                      Show config diff and current hash")
+		fmt.Fprintln(os.Stderr, "  allow <project-id>                                                                     Allow current config")
+		fmt.Fprintln(os.Stderr, "  migrate <project-id>                                                                   Migrate a legacy 1:1 config to the new repos/repo_paths form")
 		os.Exit(1)
 	}
 
@@ -98,29 +107,48 @@ func handleConfigCommand() {
 		projectID := os.Args[3]
 		handleConfigAllow(projectID)
 
+	case "migrate":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host config migrate <project-id> [--apply]")
+			os.Exit(1)
+		}
+		projectID := os.Args[3]
+		apply := false
+		for i := 4; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--apply":
+				apply = true
+			default:
+				fmt.Fprintf(os.Stderr, "Unknown flag: %s\n", os.Args[i])
+				os.Exit(1)
+			}
+		}
+		handleConfigMigrate(projectID, apply)
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown config command: %s\n", subCmd)
 		os.Exit(1)
 	}
 }
 
-// handleConfigInit creates a new project config from a template
+// handleConfigInit creates a new project config from a template.
+// --repo and --repo-path are both repeatable; they pair up in declaration
+// order to populate the new repos / repo_paths arrays.
 func handleConfigInit() {
 	var opts config.CreateProjectConfigOptions
 	showHelp := false
 
-	// Parse flags manually (starting from os.Args[3])
 	for i := 3; i < len(os.Args); i++ {
 		arg := os.Args[i]
 		switch {
 		case arg == "--help" || arg == "-h":
 			showHelp = true
 		case strings.HasPrefix(arg, "--repo="):
-			opts.Repo = strings.TrimPrefix(arg, "--repo=")
+			opts.Repos = append(opts.Repos, strings.TrimPrefix(arg, "--repo="))
 		case strings.HasPrefix(arg, "--template="):
 			opts.Template = strings.TrimPrefix(arg, "--template=")
 		case strings.HasPrefix(arg, "--repo-path="):
-			opts.RepoPath = strings.TrimPrefix(arg, "--repo-path=")
+			opts.RepoPaths = append(opts.RepoPaths, strings.TrimPrefix(arg, "--repo-path="))
 		case arg == "--allow":
 			opts.Allow = true
 		case arg == "--force":
@@ -131,15 +159,19 @@ func handleConfigInit() {
 		}
 	}
 
-	if showHelp || opts.Repo == "" {
-		fmt.Fprintln(os.Stderr, "Usage: cmd2host config init --repo=<owner/repo> [options]")
+	if showHelp || len(opts.Repos) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: cmd2host config init --repo=<owner/repo> --repo-path=<path> [more --repo / --repo-path pairs] [options]")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Options:")
-		fmt.Fprintln(os.Stderr, "  --repo=<owner/repo>   Repository name (required)")
+		fmt.Fprintln(os.Stderr, "  --repo=<owner/repo>   Repository name (required, repeatable)")
+		fmt.Fprintln(os.Stderr, "  --repo-path=<path>    Local repository path (repeatable, must match --repo count)")
 		fmt.Fprintln(os.Stderr, "  --template=<name>     Template name (default: readonly)")
-		fmt.Fprintln(os.Stderr, "  --repo-path=<path>    Local repository path")
 		fmt.Fprintln(os.Stderr, "  --allow               Allow config after creation")
 		fmt.Fprintln(os.Stderr, "  --force               Overwrite existing config")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "The first --repo / --repo-path pair is the project's primary (parent) entry;")
+		fmt.Fprintln(os.Stderr, "subsequent pairs are submodules or sibling repos hosted under the parent workspace.")
+		fmt.Fprintln(os.Stderr, "The project ID is derived from the first --repo.")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Available templates:")
 		templates, err := config.ListTemplates()
@@ -150,7 +182,7 @@ func handleConfigInit() {
 				fmt.Fprintf(os.Stderr, "  - %s\n", t)
 			}
 		}
-		if opts.Repo == "" {
+		if len(opts.Repos) == 0 {
 			os.Exit(1)
 		}
 		return
@@ -161,7 +193,7 @@ func handleConfigInit() {
 		os.Exit(1)
 	}
 
-	projectID := config.NormalizeProjectID(opts.Repo)
+	projectID := config.NormalizeProjectID(opts.Repos[0])
 	configPath := config.ProjectConfigPath(projectID)
 	fmt.Printf("Created config: %s\n", configPath)
 	if opts.Allow {
@@ -170,7 +202,6 @@ func handleConfigInit() {
 		fmt.Printf("\nTo allow, run: cmd2host config allow %s\n", projectID)
 	}
 
-	// Print setup hints
 	fmt.Println("\nDevContainer setup:")
 	fmt.Println("  1. Copy host/scripts/init-cmd2host.sh to .devcontainer/")
 	fmt.Println("  2. Add to devcontainer.json:")
@@ -181,6 +212,134 @@ func handleConfigInit() {
 	fmt.Println("  TCP (default): connectionMode: \"tcp\" - uses host.docker.internal:9876")
 	fmt.Println("  Unix socket:   connectionMode: \"unix\" - mount ~/.cmd2host/cmd2host.sock")
 	fmt.Println("                 Required for --network none containers")
+}
+
+// handleConfigMigrate normalizes a legacy 1:1 config (repo / repo_path)
+// to the new 1:N form (repos / repo_paths). Shows a dry-run diff and only
+// writes when --apply is given. Does NOT re-stamp allowed.sha256 — the user
+// must run `cmd2host config allow <project-id>` after a successful migrate.
+func handleConfigMigrate(projectID string, apply bool) {
+	configPath := config.ProjectConfigPath(projectID)
+	original, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.LoadProjectConfig(projectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	canonical, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error re-encoding config: %v\n", err)
+		os.Exit(1)
+	}
+	canonical = append(canonical, '\n')
+
+	if string(original) == string(canonical) {
+		fmt.Println("No migration needed: config already in canonical form.")
+		return
+	}
+
+	fmt.Println("Migration preview (legacy → canonical):")
+	fmt.Println("--- before ---")
+	fmt.Println(strings.TrimRight(string(original), "\n"))
+	fmt.Println("--- after ----")
+	fmt.Println(strings.TrimRight(string(canonical), "\n"))
+	fmt.Println("--- end ------")
+
+	if !apply {
+		fmt.Println("\nDry-run only. Pass --apply to rewrite the config file.")
+		fmt.Println("After applying, run: cmd2host config allow " + projectID)
+		return
+	}
+
+	if err := atomicWriteFile(configPath, canonical, 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Migrated: %s\n", configPath)
+	fmt.Printf("Run: cmd2host config allow %s\n", projectID)
+}
+
+// atomicWriteFile writes data to a temp file in the same directory as path,
+// then renames it onto path. A crash or disk-full mid-write leaves the
+// original file intact rather than truncated.
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("failed to chmod temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		cleanup()
+		return fmt.Errorf("failed to fsync temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return fmt.Errorf("failed to rename temp file onto %s: %w", path, err)
+	}
+	return nil
+}
+
+// handleSuggestSubmodulesCommand parses .gitmodules at the given repo path
+// (default: cwd) and prints suggested --repo / --repo-path pairs that the
+// user can copy into a cmd2host config init invocation. It does NOT modify
+// any project config — auto-allow is intentionally avoided to prevent
+// vendored third-party submodules from leaking into the allow list.
+func handleSuggestSubmodulesCommand() {
+	repoRoot := "."
+	for i := 2; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Fprintln(os.Stderr, "Usage: cmd2host suggest-submodules [--repo-root=<path>]")
+			os.Exit(0)
+		case strings.HasPrefix(arg, "--repo-root="):
+			repoRoot = strings.TrimPrefix(arg, "--repo-root=")
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown flag: %s\n", arg)
+			os.Exit(1)
+		}
+	}
+
+	suggestions, err := config.SuggestSubmodules(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(suggestions) == 0 {
+		fmt.Println("No submodules found (no .gitmodules entries with parseable owner/repo).")
+		return
+	}
+
+	fmt.Println("Submodule suggestions (review before adding to your project config):")
+	for _, s := range suggestions {
+		fmt.Printf("  --repo=%s --repo-path=%s\n", s.Repo, s.RepoPath)
+	}
+	fmt.Println("\nNote: these are suggestions only. Vendored / third-party submodules should not")
+	fmt.Println("be added to the project allow list. Review each entry before copying it into")
+	fmt.Println("cmd2host config init or .devcontainer/cmd2host.repos.")
 }
 
 // handleConfigDiff shows config status and hash

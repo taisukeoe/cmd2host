@@ -395,8 +395,8 @@ func TestProjectConfig_ValidatePaths_PathspecSafety(t *testing.T) {
 
 func TestProjectConfig_GetEnvForOperation(t *testing.T) {
 	project := &ProjectConfig{
-		Repo:     "owner/repo",
-		RepoPath: "/home/user/project",
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/home/user/project"},
 		Env: map[string]string{
 			"GH_PROMPT_DISABLED": "1",
 			"GH_REPO":            "owner/repo",
@@ -413,9 +413,13 @@ func TestProjectConfig_GetEnvForOperation(t *testing.T) {
 		t.Errorf("Expected GH_REPO=owner/repo, got %q", env["GH_REPO"])
 	}
 
-	// Check repo_path is included
-	if env["repo_path"] != "/home/user/project" {
-		t.Errorf("Expected repo_path=/home/user/project, got %q", env["repo_path"])
+	// repo_path / repo / expected_git_url are injected by the server using the
+	// resolved ExecutionTarget, not by GetEnvForOperation. Ensure they are NOT
+	// present here.
+	for _, k := range []string{"repo_path", "repo", "expected_git_url"} {
+		if _, ok := env[k]; ok {
+			t.Errorf("Did not expect %s in project-level env; it must be added by the server from ExecutionTarget", k)
+		}
 	}
 }
 
@@ -487,11 +491,11 @@ func TestLoadProjectConfig(t *testing.T) {
 	}
 
 	// Verify fields
-	if config.Repo != "owner/repo" {
-		t.Errorf("Repo = %q, want %q", config.Repo, "owner/repo")
+	if config.Repos[0] != "owner/repo" {
+		t.Errorf("Repo = %q, want %q", config.Repos[0], "owner/repo")
 	}
-	if config.RepoPath != "/path/to/repo" {
-		t.Errorf("RepoPath = %q, want %q", config.RepoPath, "/path/to/repo")
+	if config.RepoPaths[0] != "/path/to/repo" {
+		t.Errorf("RepoPath = %q, want %q", config.RepoPaths[0], "/path/to/repo")
 	}
 	if len(config.AllowedOperations) != 2 {
 		t.Errorf("AllowedOperations length = %d, want 2", len(config.AllowedOperations))
@@ -610,7 +614,8 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("successful creation with default template", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo: "testowner/testrepo",
+			Repos:     []string{"testowner/testrepo"},
+			RepoPaths: []string{"/tmp/testowner-testrepo"},
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
@@ -627,16 +632,16 @@ func TestCreateProjectConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to load created config: %v", err)
 		}
-		if config.Repo != "testowner/testrepo" {
-			t.Errorf("Config repo = %q, want %q", config.Repo, "testowner/testrepo")
+		if config.Repos[0] != "testowner/testrepo" {
+			t.Errorf("Config repo = %q, want %q", config.Repos[0], "testowner/testrepo")
 		}
 	})
 
 	t.Run("custom template and repo_path substitution", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:     "org/project",
-			Template: "github_write",
-			RepoPath: "/custom/path/to/repo",
+			Repos:     []string{"org/project"},
+			Template:  "github_write",
+			RepoPaths: []string{"/custom/path/to/repo"},
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
@@ -646,11 +651,11 @@ func TestCreateProjectConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to load created config: %v", err)
 		}
-		if config.Repo != "org/project" {
-			t.Errorf("Config repo = %q, want %q", config.Repo, "org/project")
+		if config.Repos[0] != "org/project" {
+			t.Errorf("Config repo = %q, want %q", config.Repos[0], "org/project")
 		}
-		if config.RepoPath != "/custom/path/to/repo" {
-			t.Errorf("Config repo_path = %q, want %q", config.RepoPath, "/custom/path/to/repo")
+		if config.RepoPaths[0] != "/custom/path/to/repo" {
+			t.Errorf("Config repo_path = %q, want %q", config.RepoPaths[0], "/custom/path/to/repo")
 		}
 		// github_write should include gh_pr_create
 		if !config.HasOperation("gh_pr_create") {
@@ -660,8 +665,9 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("git_github_write template includes push and pr create", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:     "ship/repo",
-			Template: "git_github_write",
+			Repos:     []string{"ship/repo"},
+			RepoPaths: []string{"/tmp/ship-repo"},
+			Template:  "git_github_write",
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
@@ -687,8 +693,9 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("git_write template includes push", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:     "push/repo",
-			Template: "git_write",
+			Repos:     []string{"push/repo"},
+			RepoPaths: []string{"/tmp/push-repo"},
+			Template:  "git_write",
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
@@ -708,7 +715,7 @@ func TestCreateProjectConfig(t *testing.T) {
 		for i, tmpl := range []string{"readonly", "github_write", "git_write", "git_github_write"} {
 			projectID := fmt.Sprintf("loadcheck%d_repo", i)
 			repo := fmt.Sprintf("loadcheck%d/repo", i)
-			opts := CreateProjectConfigOptions{Repo: repo, Template: tmpl}
+			opts := CreateProjectConfigOptions{Repos: []string{repo}, RepoPaths: []string{"/tmp/" + projectID}, Template: tmpl}
 			if err := CreateProjectConfig(opts); err != nil {
 				t.Fatalf("CreateProjectConfig(%s) failed: %v", tmpl, err)
 			}
@@ -730,7 +737,8 @@ func TestCreateProjectConfig(t *testing.T) {
 	t.Run("existing config without force", func(t *testing.T) {
 		// First creation
 		opts := CreateProjectConfigOptions{
-			Repo: "existing/repo",
+			Repos:     []string{"existing/repo"},
+			RepoPaths: []string{"/tmp/existing-repo"},
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("First CreateProjectConfig failed: %v", err)
@@ -745,8 +753,9 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("existing config with force", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:  "existing/repo",
-			Force: true,
+			Repos:     []string{"existing/repo"},
+			RepoPaths: []string{"/tmp/existing-repo"},
+			Force:     true,
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig with force failed: %v", err)
@@ -755,8 +764,9 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("with allow flag", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:  "allowed/repo",
-			Allow: true,
+			Repos:     []string{"allowed/repo"},
+			RepoPaths: []string{"/tmp/allowed-repo"},
+			Allow:     true,
 		}
 		if err := CreateProjectConfig(opts); err != nil {
 			t.Fatalf("CreateProjectConfig failed: %v", err)
@@ -774,7 +784,7 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("invalid repo format - no slash", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo: "invalidrepo", // missing owner/
+			Repos: []string{"invalidrepo"}, // missing owner/
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
@@ -784,7 +794,7 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("invalid repo format - extra slashes", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo: "owner/repo/extra",
+			Repos: []string{"owner/repo/extra"},
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
@@ -794,7 +804,7 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("invalid repo format - leading special char", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo: "-owner/repo",
+			Repos: []string{"-owner/repo"},
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
@@ -804,7 +814,7 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("empty repo", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo: "",
+			Repos: nil,
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
@@ -814,8 +824,9 @@ func TestCreateProjectConfig(t *testing.T) {
 
 	t.Run("unknown template", func(t *testing.T) {
 		opts := CreateProjectConfigOptions{
-			Repo:     "unknown/template",
-			Template: "nonexistent_template",
+			Repos:     []string{"unknown/template"},
+			RepoPaths: []string{"/tmp/unknown-template"},
+			Template:  "nonexistent_template",
 		}
 		err := CreateProjectConfig(opts)
 		if err == nil {
