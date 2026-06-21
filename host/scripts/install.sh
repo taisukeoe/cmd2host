@@ -10,8 +10,19 @@ set -euo pipefail
 
 INSTALL_DIR="$HOME/.cmd2host"
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.user.cmd2host.plist"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GITHUB_REPO="taisukeoe/cmd2host"
+
+# Resolve SCRIPT_DIR only when the script is running from a real file (e.g. a
+# local checkout). Under `curl | bash`, `bash < file`, and other pipe/stdin
+# entry points, ${BASH_SOURCE[0]} is not a regular file ("bash", a fifo, etc.)
+# and the local-checkout entry points (pre-built binary fallback, source build)
+# must not infer any directory from $0 / CWD. Branches that consume SCRIPT_DIR
+# therefore gate on `-n "$SCRIPT_DIR"` rather than trusting it unconditionally.
+SCRIPT_PATH="${BASH_SOURCE[0]-}"
+SCRIPT_DIR=""
+if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+fi
 
 # Selected release tag for downloads. Empty = follow 'releases/latest'.
 BINARY_TAG=""
@@ -216,16 +227,22 @@ main() {
             --build) BUILD_FROM_SOURCE=true; shift ;;
             --clean) CLEAN_INSTALL=true; shift ;;
             --tag)
+                # Read the next arg via default-value expansion so the
+                # condition itself does not reference an unset positional
+                # parameter under set -u. Bash's [[ ]] short-circuit also
+                # protects the previous `$1` form, but `${1-}` makes the
+                # contract obvious and avoids relying on that subtlety.
                 shift
+                local tag_arg="${1-}"
                 # Reject empty (would silently fall back to latest) and
                 # option-shaped values (e.g. `--tag --clean` would otherwise
                 # consume `--clean` as the tag string and silently drop the
                 # `--clean` mode).
-                if [[ $# -eq 0 || -z "$1" || "$1" == --* ]]; then
+                if [[ -z "$tag_arg" || "$tag_arg" == --* ]]; then
                     echo "Error: --tag requires a non-empty release tag argument (e.g. --tag binary-v0.3.0-RC1)" >&2
                     exit 1
                 fi
-                BINARY_TAG="$1"
+                BINARY_TAG="$tag_arg"
                 shift
                 ;;
             -h|--help) usage ;;
@@ -277,6 +294,11 @@ main() {
         # Explicitly build from source
         echo "Building cmd2host from source..."
 
+        if [[ -z "$SCRIPT_DIR" ]]; then
+            echo "Error: --build needs a local checkout (run host/scripts/install.sh from the cloned repository, not via curl | bash)." >&2
+            exit 1
+        fi
+
         if ! command -v go &> /dev/null; then
             echo "Error: Go is not installed. Please install Go first."
             echo "  brew install go"
@@ -288,10 +310,12 @@ main() {
         go build -o "$BINARY_PATH" ./cmd/cmd2host
         echo "Built: $BINARY_PATH"
 
-    elif [[ -z "$BINARY_TAG" && -f "$SCRIPT_DIR/cmd2host" ]]; then
+    elif [[ -z "$BINARY_TAG" && -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/cmd2host" ]]; then
         # Use pre-built binary from script directory.
         # Skipped when --tag is set so the user's explicit release request
         # is not silently shadowed by a local checkout artifact.
+        # Gated on a real SCRIPT_DIR so the pipe / stdin entry points (where
+        # SCRIPT_DIR is empty) cannot route through a path derived from $0.
         echo "Using local binary..."
         cp "$SCRIPT_DIR/cmd2host" "$BINARY_PATH"
 
@@ -299,8 +323,9 @@ main() {
         # Downloaded from GitHub Releases
         :
 
-    elif [[ -f "$SCRIPT_DIR/../../go.mod" ]]; then
-        # Fall back to building from source (Go sources live at the repository root)
+    elif [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../../go.mod" ]]; then
+        # Fall back to building from source (Go sources live at the repository root).
+        # Gated on a real SCRIPT_DIR for the same reason as the binary fallback above.
         echo "Building cmd2host from source..."
 
         if ! command -v go &> /dev/null; then
