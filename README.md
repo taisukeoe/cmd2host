@@ -186,6 +186,21 @@ will be deleted), pass `--clean`:
 curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh | bash -s -- --clean
 ```
 
+### Install a specific release tag
+
+The default install path follows `releases/latest`, which intentionally skips
+pre-releases. To install a specific tag — typically a release candidate — pass
+`--tag <release-tag>`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
+  | bash -s -- --tag binary-v0.3.0-RC1
+```
+
+Use the tag name shown on the [Releases page](https://github.com/taisukeoe/cmd2host/releases)
+(`binary-vX.Y.Z` for stable, `binary-vX.Y.Z-RCN` for release candidates). `--tag`
+combines with `--clean` if needed.
+
 ### Verify
 
 ```bash
