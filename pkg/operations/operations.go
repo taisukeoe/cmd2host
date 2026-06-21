@@ -62,16 +62,18 @@ type Request struct {
 //
 // Truncation indicator fields (additive, optional):
 //   - StdoutTruncated / StderrTruncated: true when the corresponding stream
-//     exceeded the configured cap and the Stdout / Stderr string is a prefix
-//     of the original output. The legacy `\n... (truncated)` suffix is still
-//     appended to the stream string for backward compatibility with clients
-//     that ignore the typed flag.
+//     exceeded the configured cap. When the flag is true, the Stdout / Stderr
+//     string contains a prefix of the original output followed by the legacy
+//     `\n... (truncated)` suffix that the daemon still appends for backward
+//     compatibility with clients that ignore the typed flag.
 //   - StdoutOriginalBytes / StderrOriginalBytes: the byte length of the
-//     original (pre-truncation) output. Always populated when the stream is
-//     non-empty, including when the cap is disabled. Zero only when the
-//     stream itself is empty. The `Original` prefix distinguishes these
-//     fields from the daemon-side `MaxStdoutBytes` / `MaxStderrBytes` caps
-//     defined in pkg/config.
+//     original (pre-truncation) output. Populated for streams that carry
+//     actual command output (success exit and exec exit-code paths). Error
+//     paths that substitute a synthetic stderr message (timeout,
+//     command-not-found, generic runtime error) leave these fields at zero
+//     even when the corresponding stream string is non-empty. The `Original`
+//     prefix distinguishes these fields from the daemon-side
+//     `MaxStdoutBytes` / `MaxStderrBytes` caps defined in pkg/config.
 type Response struct {
 	RequestID           string  `json:"request_id,omitempty"`
 	ExitCode            int     `json:"exit_code"`

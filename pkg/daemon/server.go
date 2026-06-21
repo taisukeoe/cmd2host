@@ -299,8 +299,12 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 
 	err := cmd.Run()
 
-	// Cap stream output and capture per-stream truncation indicators that
-	// flow unchanged through the response chain.
+	// Cap stream output and capture per-stream truncation indicators. These
+	// values flow through the response chain on paths that surface the actual
+	// command output (success exit and *exec.ExitError). Error paths that
+	// substitute a synthetic stderr message (timeout, command-not-found, generic
+	// runtime error) do not surface them, so consumers must treat truncation
+	// metadata as meaningful only when the response carries real command output.
 	stdoutStr, stdoutBytes, stdoutTrunc := truncateOutput(stdout.String(), s.daemonConfig.MaxStdoutBytes)
 	stderrStr, stderrBytes, stderrTrunc := truncateOutput(stderr.String(), s.daemonConfig.MaxStderrBytes)
 
