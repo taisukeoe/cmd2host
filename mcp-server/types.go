@@ -11,13 +11,22 @@ type OperationRequest struct {
 	TargetRepo string                 `json:"target_repo,omitempty"`
 }
 
-// OperationResponse represents the response from cmd2host daemon
+// OperationResponse represents the response from cmd2host daemon.
+//
+// Truncation indicator fields (additive, optional) mirror
+// operations.Response on the daemon side. Older daemons that do not emit
+// these fields decode as the zero value (false / 0), which the client
+// treats as "no truncation reported".
 type OperationResponse struct {
-	RequestID    string  `json:"request_id,omitempty"`
-	ExitCode     int     `json:"exit_code"`
-	Stdout       string  `json:"stdout"`
-	Stderr       string  `json:"stderr"`
-	DeniedReason *string `json:"denied_reason"`
+	RequestID           string  `json:"request_id,omitempty"`
+	ExitCode            int     `json:"exit_code"`
+	Stdout              string  `json:"stdout"`
+	Stderr              string  `json:"stderr"`
+	DeniedReason        *string `json:"denied_reason"`
+	StdoutTruncated     bool    `json:"stdout_truncated,omitempty"`
+	StderrTruncated     bool    `json:"stderr_truncated,omitempty"`
+	StdoutOriginalBytes int64   `json:"stdout_original_bytes,omitempty"`
+	StderrOriginalBytes int64   `json:"stderr_original_bytes,omitempty"`
 }
 
 // ListOperationsRequest requests the list of available operations

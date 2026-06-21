@@ -181,27 +181,51 @@ func (h *ToolHandler) handleRunOperation(ctx context.Context, req *mcp.CallToolR
 		}, nil, nil
 	}
 
-	// Format output
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Exit code: %d\n\n", resp.ExitCode))
-
-	if resp.Stdout != "" {
-		sb.WriteString("**stdout:**\n")
-		sb.WriteString(wrapAsFencedBlock(resp.Stdout))
-		sb.WriteString("\n")
-	}
-
-	if resp.Stderr != "" {
-		sb.WriteString("**stderr:**\n")
-		sb.WriteString(wrapAsFencedBlock(resp.Stderr))
-	}
-
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: sb.String()},
+			&mcp.TextContent{Text: formatRunOutput(resp)},
 		},
 		IsError: resp.ExitCode != 0,
 	}, nil, nil
+}
+
+// truncatedSuffix mirrors the legacy suffix appended by the daemon when a
+// stream exceeds its cap. The daemon keeps emitting this suffix for backward
+// compatibility with older MCP clients; this client strips it before re-fencing
+// when the daemon also signals truncation via the typed flag, so a newer
+// consumer sees a single machine-backed indicator outside the fenced block.
+const truncatedSuffix = "\n... (truncated)"
+
+// formatRunOutput builds the tool output string for a successful (non-denied)
+// operation response.
+func formatRunOutput(resp *OperationResponse) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Exit code: %d\n\n", resp.ExitCode)
+	if resp.Stdout != "" {
+		emitStream(&sb, "stdout", resp.Stdout, resp.StdoutTruncated, resp.StdoutOriginalBytes)
+		sb.WriteString("\n")
+	}
+	if resp.Stderr != "" {
+		emitStream(&sb, "stderr", resp.Stderr, resp.StderrTruncated, resp.StderrOriginalBytes)
+	}
+	return sb.String()
+}
+
+// emitStream writes "**<name>:**", the fenced content, and an optional
+// machine-backed truncation indicator outside the fenced block. When the
+// daemon-signaled flag is set, the legacy synthetic suffix is stripped from
+// the fenced body so the indicator outside the fence is the only truncation
+// signal a newer consumer sees.
+func emitStream(sb *strings.Builder, name, content string, truncated bool, originalBytes int64) {
+	fmt.Fprintf(sb, "**%s:**\n", name)
+	body := content
+	if truncated {
+		body = strings.TrimSuffix(body, truncatedSuffix)
+	}
+	sb.WriteString(wrapAsFencedBlock(body))
+	if truncated {
+		fmt.Fprintf(sb, "*%s truncated: shown %d of %d bytes*\n", name, len(body), originalBytes)
+	}
 }
 
 // wrapAsFencedBlock wraps content in a markdown code fence whose backtick run
