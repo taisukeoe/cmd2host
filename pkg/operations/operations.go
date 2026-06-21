@@ -58,13 +58,32 @@ type Request struct {
 	TargetRepo string `json:"target_repo,omitempty"`
 }
 
-// Response represents the response from an operation
+// Response represents the response from an operation.
+//
+// Truncation indicator fields (additive, optional):
+//   - StdoutTruncated / StderrTruncated: true when the corresponding stream
+//     exceeded the configured cap. When the flag is true, the Stdout / Stderr
+//     string contains a prefix of the original output followed by the legacy
+//     `\n... (truncated)` suffix that the daemon still appends for backward
+//     compatibility with clients that ignore the typed flag.
+//   - StdoutOriginalBytes / StderrOriginalBytes: the byte length of the
+//     original (pre-truncation) output. Populated for streams that carry
+//     actual command output (success exit and exec exit-code paths). Error
+//     paths that substitute a synthetic stderr message (timeout,
+//     command-not-found, generic runtime error) leave these fields at zero
+//     even when the corresponding stream string is non-empty. The `Original`
+//     prefix distinguishes these fields from the daemon-side
+//     `MaxStdoutBytes` / `MaxStderrBytes` caps defined in pkg/config.
 type Response struct {
-	RequestID    string  `json:"request_id,omitempty"`
-	ExitCode     int     `json:"exit_code"`
-	Stdout       string  `json:"stdout"`
-	Stderr       string  `json:"stderr"`
-	DeniedReason *string `json:"denied_reason"`
+	RequestID           string  `json:"request_id,omitempty"`
+	ExitCode            int     `json:"exit_code"`
+	Stdout              string  `json:"stdout"`
+	Stderr              string  `json:"stderr"`
+	DeniedReason        *string `json:"denied_reason"`
+	StdoutTruncated     bool    `json:"stdout_truncated,omitempty"`
+	StderrTruncated     bool    `json:"stderr_truncated,omitempty"`
+	StdoutOriginalBytes int64   `json:"stdout_original_bytes,omitempty"`
+	StderrOriginalBytes int64   `json:"stderr_original_bytes,omitempty"`
 }
 
 // ListOperationsRequest requests the list of available operations

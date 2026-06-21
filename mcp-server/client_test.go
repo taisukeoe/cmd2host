@@ -434,3 +434,50 @@ func TestUnixClient_RunOperation(t *testing.T) {
 		t.Errorf("Expected stdout 'unix socket works\\n', got '%s'", resp.Stdout)
 	}
 }
+
+func TestOperationResponse_LegacySchemaDecode(t *testing.T) {
+	// Older daemons emit a response without the truncation indicator fields.
+	// The client MUST decode such payloads cleanly and leave the new fields
+	// at their zero values so a newer client running against an older daemon
+	// keeps working.
+	legacy := `{"request_id":"abc","exit_code":0,"stdout":"hello","stderr":"","denied_reason":null}`
+	var resp OperationResponse
+	if err := json.Unmarshal([]byte(legacy), &resp); err != nil {
+		t.Fatalf("decode legacy schema: %v", err)
+	}
+	if resp.RequestID != "abc" || resp.Stdout != "hello" {
+		t.Errorf("legacy fields decoded incorrectly: %+v", resp)
+	}
+	if resp.StdoutTruncated || resp.StderrTruncated {
+		t.Errorf("new flags should default to false when missing, got Stdout=%v Stderr=%v",
+			resp.StdoutTruncated, resp.StderrTruncated)
+	}
+	if resp.StdoutOriginalBytes != 0 || resp.StderrOriginalBytes != 0 {
+		t.Errorf("new byte fields should default to 0 when missing, got Stdout=%d Stderr=%d",
+			resp.StdoutOriginalBytes, resp.StderrOriginalBytes)
+	}
+}
+
+func TestOperationResponse_NewSchemaRoundTrip(t *testing.T) {
+	orig := OperationResponse{
+		RequestID:           "req1",
+		ExitCode:            0,
+		Stdout:              "hello\n... (truncated)",
+		StdoutTruncated:     true,
+		StdoutOriginalBytes: 1500000,
+	}
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var decoded OperationResponse
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !decoded.StdoutTruncated {
+		t.Errorf("StdoutTruncated lost in round-trip: %v", decoded.StdoutTruncated)
+	}
+	if decoded.StdoutOriginalBytes != 1500000 {
+		t.Errorf("StdoutOriginalBytes lost in round-trip: %d", decoded.StdoutOriginalBytes)
+	}
+}

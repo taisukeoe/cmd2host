@@ -259,10 +259,14 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
 
 	s.sendOperationResponse(conn, operations.Response{
-		RequestID: req.RequestID,
-		ExitCode:  resp.ExitCode,
-		Stdout:    resp.Stdout,
-		Stderr:    resp.Stderr,
+		RequestID:           req.RequestID,
+		ExitCode:            resp.ExitCode,
+		Stdout:              resp.Stdout,
+		Stderr:              resp.Stderr,
+		StdoutTruncated:     resp.StdoutTruncated,
+		StderrTruncated:     resp.StderrTruncated,
+		StdoutOriginalBytes: resp.StdoutOriginalBytes,
+		StderrOriginalBytes: resp.StderrOriginalBytes,
 	})
 }
 
@@ -295,9 +299,14 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 
 	err := cmd.Run()
 
-	// Truncate output if needed
-	stdoutStr := truncateOutput(stdout.String(), s.daemonConfig.MaxStdoutBytes)
-	stderrStr := truncateOutput(stderr.String(), s.daemonConfig.MaxStderrBytes)
+	// Cap stream output and capture per-stream truncation indicators. These
+	// values flow through the response chain on paths that surface the actual
+	// command output (success exit and *exec.ExitError). Error paths that
+	// substitute a synthetic stderr message (timeout, command-not-found, generic
+	// runtime error) do not surface them, so consumers must treat truncation
+	// metadata as meaningful only when the response carries real command output.
+	stdoutStr, stdoutBytes, stdoutTrunc := truncateOutput(stdout.String(), s.daemonConfig.MaxStdoutBytes)
+	stderrStr, stderrBytes, stderrTrunc := truncateOutput(stderr.String(), s.daemonConfig.MaxStderrBytes)
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -309,9 +318,13 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return ExecuteResult{
-				ExitCode: exitErr.ExitCode(),
-				Stdout:   stdoutStr,
-				Stderr:   stderrStr,
+				ExitCode:            exitErr.ExitCode(),
+				Stdout:              stdoutStr,
+				Stderr:              stderrStr,
+				StdoutTruncated:     stdoutTrunc,
+				StderrTruncated:     stderrTrunc,
+				StdoutOriginalBytes: stdoutBytes,
+				StderrOriginalBytes: stderrBytes,
 			}
 		}
 
@@ -335,18 +348,55 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 	}
 
 	return ExecuteResult{
-		ExitCode: 0,
-		Stdout:   stdoutStr,
-		Stderr:   stderrStr,
+		ExitCode:            0,
+		Stdout:              stdoutStr,
+		Stderr:              stderrStr,
+		StdoutTruncated:     stdoutTrunc,
+		StderrTruncated:     stderrTrunc,
+		StdoutOriginalBytes: stdoutBytes,
+		StderrOriginalBytes: stderrBytes,
 	}
 }
 
-// truncateOutput truncates output to maxBytes
-func truncateOutput(s string, maxBytes int) string {
+// truncatedSuffix is appended to a stream string when the daemon caps the
+// stream at maxBytes. It is kept for backward compatibility with clients that
+// only inspect the string. Newer consumers should rely on the typed
+// (StdoutTruncated / StderrTruncated, StdoutOriginalBytes / StderrOriginalBytes)
+// fields on the response instead.
+const truncatedSuffix = "\n... (truncated)"
+
+// truncateOutput caps s at maxBytes. When truncation happens, the returned
+// string carries truncatedSuffix and wasTruncated is true. originalBytes is
+// always the byte length of the input regardless of truncation, so consumers
+// can report how much of the original stream was actually surfaced even when
+// truncation is disabled (maxBytes <= 0).
+//
+// When the cap falls inside a multi-byte UTF-8 sequence, the cut point is
+// pulled back to the previous rune boundary so the daemon never marshals an
+// invalid UTF-8 string. Without this, encoding/json would silently replace
+// the trailing partial rune with U+FFFD, making the indicator's "shown N of
+// M bytes" count drift from what the consumer actually sees.
+func truncateOutput(s string, maxBytes int) (out string, originalBytes int64, wasTruncated bool) {
+	originalBytes = int64(len(s))
 	if maxBytes <= 0 || len(s) <= maxBytes {
-		return s
+		return s, originalBytes, false
 	}
-	return s[:maxBytes] + "\n... (truncated)"
+	cut := runeBoundaryBefore(s, maxBytes)
+	return s[:cut] + truncatedSuffix, originalBytes, true
+}
+
+// runeBoundaryBefore returns the largest index i in [0, max] such that
+// s[:i] ends on a UTF-8 rune boundary. ASCII-only inputs always return max.
+func runeBoundaryBefore(s string, max int) int {
+	for i := max; i > 0; i-- {
+		// A byte is a continuation byte iff (b & 0xC0) == 0x80. The cut
+		// point is valid when the byte AT i is either past the end (i == len)
+		// or starts a new rune (top two bits != 0b10).
+		if i == len(s) || (s[i]&0xC0) != 0x80 {
+			return i
+		}
+	}
+	return 0
 }
 
 // handleListOperationsRequest handles requests to list available operations
