@@ -370,6 +370,37 @@ func TestOperation_BuildArgs_WithInlinePlaceholders(t *testing.T) {
 	}
 }
 
+func TestOperation_BuildArgs_WithRepeatedInlinePlaceholder(t *testing.T) {
+	// An arg of the form "{x}...{x}" must be treated as inline interpolation,
+	// not as a single whole-arg placeholder named "x}...{x". This shape comes
+	// up in git_push's refspec "{branch}:refs/heads/{branch}".
+	op := &Operation{
+		ArgsTemplate: []string{"push", "{branch}:refs/heads/{branch}"},
+		Params: map[string]ParamSchema{
+			"branch": {Type: "string"},
+		},
+	}
+
+	args, err := op.BuildArgs(
+		map[string]ParamValue{"branch": "fix/whole-arg"},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("BuildArgs failed: %v", err)
+	}
+
+	expected := []string{"push", "fix/whole-arg:refs/heads/fix/whole-arg"}
+	if len(args) != len(expected) {
+		t.Fatalf("BuildArgs returned %d args, want %d: got %v", len(args), len(expected), args)
+	}
+	for i, arg := range args {
+		if arg != expected[i] {
+			t.Errorf("BuildArgs()[%d] = %q, want %q", i, arg, expected[i])
+		}
+	}
+}
+
 func TestOperation_BuildArgs_WithInlinePlaceholders_RejectsNonIntegralFloat(t *testing.T) {
 	op := &Operation{
 		ArgsTemplate: []string{"api", "repos/{repo}/pulls/{number}/comments"},
