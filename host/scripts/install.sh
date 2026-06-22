@@ -369,7 +369,9 @@ main() {
     # shellcheck disable=SC2016
     # The single-quoted lines are emitted verbatim into uninstall.sh; the $VARS
     # they contain are runtime literals of that emitted script, not install.sh
-    # substitutions.
+    # substitutions. ShellCheck's disable directive applies only to the next
+    # command (the `{ ... } > "$UNINSTALL_SCRIPT"` group below); SC2016
+    # detection is restored automatically for everything after it.
     {
         echo '#!/bin/bash'
         echo 'set -euo pipefail'
