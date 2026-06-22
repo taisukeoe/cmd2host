@@ -351,42 +351,55 @@ main() {
 
     chmod +x "$BINARY_PATH"
 
-    # Emit uninstall.sh as a self-contained heredoc. Embedding keeps install.sh
-    # self-sufficient (no second network fetch at install time) and makes the
-    # uninstall body deterministic for a given install.sh revision. The repository
-    # still ships `host/scripts/uninstall.sh` for users who fetch it directly per
-    # README; keep the two copies in sync when touching either.
+    # Emit uninstall.sh as a self-contained group of builtin `echo` writes
+    # instead of a `cat` heredoc. Heredoc redirection forks a helper that
+    # streams the body via an internal pipe; in some Bash builds (observed
+    # with Homebrew bash 5.3.9 on Apple Silicon) that helper can wedge with
+    # the parent stuck in `wait4` while the child blocks in `heredoc_write`,
+    # which manifests as the installer hanging immediately after the binary
+    # download. Using `{ echo ...; } > "$file"` keeps everything inside a
+    # single bash process — `echo` is a builtin and the group command does
+    # not fork — so the redirect path that triggers the hang is never taken.
+    # Embedding keeps install.sh self-sufficient (no second network fetch at
+    # install time) and makes the uninstall body deterministic for a given
+    # install.sh revision. The repository still ships
+    # `host/scripts/uninstall.sh` for users who fetch it directly per README;
+    # keep the two copies in sync when touching either.
     local UNINSTALL_SCRIPT="$INSTALL_DIR/uninstall.sh"
-    cat > "$UNINSTALL_SCRIPT" << 'EOF'
-#!/bin/bash
-set -euo pipefail
-
-INSTALL_DIR="$HOME/.cmd2host"
-LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.user.cmd2host.plist"
-
-echo "Uninstalling cmd2host..."
-
-# Stop daemon (use direct check to avoid SIGPIPE with pipefail)
-if launchctl list com.user.cmd2host >/dev/null 2>&1; then
-    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
-    echo "Daemon stopped"
-fi
-
-# Remove launchd plist
-if [[ -f "$LAUNCHD_PLIST" ]]; then
-    rm "$LAUNCHD_PLIST"
-    echo "Removed $LAUNCHD_PLIST"
-fi
-
-# Remove install directory
-if [[ -d "$INSTALL_DIR" ]]; then
-    rm -rf "$INSTALL_DIR"
-    echo "Removed $INSTALL_DIR"
-fi
-
-echo ""
-echo "cmd2host uninstalled successfully"
-EOF
+    # shellcheck disable=SC2016
+    # The single-quoted lines are emitted verbatim into uninstall.sh; the $VARS
+    # they contain are runtime literals of that emitted script, not install.sh
+    # substitutions.
+    {
+        echo '#!/bin/bash'
+        echo 'set -euo pipefail'
+        echo ''
+        echo 'INSTALL_DIR="$HOME/.cmd2host"'
+        echo 'LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.user.cmd2host.plist"'
+        echo ''
+        echo 'echo "Uninstalling cmd2host..."'
+        echo ''
+        echo '# Stop daemon (use direct check to avoid SIGPIPE with pipefail)'
+        echo 'if launchctl list com.user.cmd2host >/dev/null 2>&1; then'
+        echo '    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true'
+        echo '    echo "Daemon stopped"'
+        echo 'fi'
+        echo ''
+        echo '# Remove launchd plist'
+        echo 'if [[ -f "$LAUNCHD_PLIST" ]]; then'
+        echo '    rm "$LAUNCHD_PLIST"'
+        echo '    echo "Removed $LAUNCHD_PLIST"'
+        echo 'fi'
+        echo ''
+        echo '# Remove install directory'
+        echo 'if [[ -d "$INSTALL_DIR" ]]; then'
+        echo '    rm -rf "$INSTALL_DIR"'
+        echo '    echo "Removed $INSTALL_DIR"'
+        echo 'fi'
+        echo ''
+        echo 'echo ""'
+        echo 'echo "cmd2host uninstalled successfully"'
+    } > "$UNINSTALL_SCRIPT"
     chmod +x "$UNINSTALL_SCRIPT"
 
     # Note: Daemon config (daemon.json) is optional - defaults are used if not present.
@@ -396,29 +409,34 @@ EOF
     # Create LaunchAgents directory if needed
     mkdir -p "$HOME/Library/LaunchAgents"
 
-    # Generate and install launchd plist
-    cat > "$LAUNCHD_PLIST" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.user.cmd2host</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$BINARY_PATH</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>$INSTALL_DIR/cmd2host.log</string>
-    <key>StandardErrorPath</key>
-    <string>$INSTALL_DIR/cmd2host.log</string>
-</dict>
-</plist>
-EOF
+    # Generate and install launchd plist.
+    # Same `{ echo ...; } > "$file"` shape as the uninstall.sh emission above —
+    # avoids the heredoc redirect that wedged on Homebrew bash 5.3.9. Lines
+    # without parameter expansion use single quotes; the three lines that
+    # reference $BINARY_PATH / $INSTALL_DIR use double quotes so the shell
+    # still substitutes them at install time.
+    {
+        echo '<?xml version="1.0" encoding="UTF-8"?>'
+        echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+        echo '<plist version="1.0">'
+        echo '<dict>'
+        echo '    <key>Label</key>'
+        echo '    <string>com.user.cmd2host</string>'
+        echo '    <key>ProgramArguments</key>'
+        echo '    <array>'
+        echo "        <string>$BINARY_PATH</string>"
+        echo '    </array>'
+        echo '    <key>RunAtLoad</key>'
+        echo '    <true/>'
+        echo '    <key>KeepAlive</key>'
+        echo '    <true/>'
+        echo '    <key>StandardOutPath</key>'
+        echo "    <string>$INSTALL_DIR/cmd2host.log</string>"
+        echo '    <key>StandardErrorPath</key>'
+        echo "    <string>$INSTALL_DIR/cmd2host.log</string>"
+        echo '</dict>'
+        echo '</plist>'
+    } > "$LAUNCHD_PLIST"
 
     # Stop any existing daemon before loading the new plist (idempotent).
     # The fresh plist's Label is constant (com.user.cmd2host), so this is effectively
