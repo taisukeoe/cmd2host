@@ -3,11 +3,19 @@ Copyright 2025 OE Taisuke <oe@softgraphy.jp>
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-This product includes software developed by third parties listed below. Each
-third-party component is distributed under its own license, copies of which
-are referenced inline. The Go module versions resolved at the time of writing
-this notice are listed for reference; the canonical license text travels with
-each module under your local Go module cache.
+This product includes software developed by third parties. The list below
+covers the non-test, non-build-tool Go modules whose source contributes
+compiled code to the released binaries; it is not exhaustive. Test-only
+dependencies, generators, and other tooling reachable only from go.sum but
+not linked into the binaries are intentionally omitted to keep the
+attribution focused on redistributed code. For the complete dependency set
+at any given commit, consult `go.mod` and `go.sum`.
+
+Each third-party component listed below is distributed under its own
+license, copies of which are referenced inline. The Go module versions
+resolved at the time of writing this notice are listed for reference; the
+canonical license text travels with each module under your local Go module
+cache.
 
 ----------------------------------------------------------------------
 
