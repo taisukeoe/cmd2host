@@ -1,10 +1,11 @@
-package main
+package mcpserver
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -54,7 +55,7 @@ func (c *Client) connect() (net.Conn, error) {
 	}
 
 	// TCP connection
-	addr := fmt.Sprintf("%s:%d", c.host, c.port)
+	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to cmd2host daemon at %s: %w", addr, err)

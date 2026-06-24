@@ -21,19 +21,19 @@ build-all: build-darwin-amd64 build-darwin-arm64 build-mcp-darwin-amd64 build-mc
 
 # Build MCP server for current platform
 build-mcp:
-    cd mcp-server && go build -o ../dist/cmd2host-mcp .
+    go build -o dist/cmd2host-mcp ./cmd/cmd2host-mcp
 
 # Build MCP server for macOS Intel
 build-mcp-darwin-amd64:
-    cd mcp-server && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-darwin-amd64 .
+    GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-mcp-darwin-amd64 ./cmd/cmd2host-mcp
 
 # Build MCP server for macOS Apple Silicon
 build-mcp-darwin-arm64:
-    cd mcp-server && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-darwin-arm64 .
+    GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-mcp-darwin-arm64 ./cmd/cmd2host-mcp
 
 # Build MCP server for Linux amd64 (for containers)
 build-mcp-linux-amd64:
-    cd mcp-server && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/cmd2host-mcp-linux-amd64 .
+    GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-mcp-linux-amd64 ./cmd/cmd2host-mcp
 
 # Run unit tests for host daemon (root module: pkg/, cmd/, internal/)
 test:
@@ -41,7 +41,7 @@ test:
 
 # Run unit tests for MCP server
 test-mcp:
-    cd mcp-server && go test -v ./...
+    go test -v ./pkg/mcpserver/...
 
 # Run host scenario tests (integration)
 test-host: build

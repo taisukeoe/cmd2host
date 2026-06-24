@@ -1,5 +1,9 @@
-// Package main provides the MCP server for cmd2host
-package main
+// Package mcpserver provides the MCP server library for cmd2host.
+//
+// The library exposes a single Run entry point that callers (the
+// cmd2host-mcp binary or external Go consumers) can use to start the
+// MCP server over stdio against a cmd2host daemon.
+package mcpserver
 
 // OperationRequest represents a request to execute an operation via cmd2host daemon
 type OperationRequest struct {

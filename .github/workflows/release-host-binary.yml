@@ -88,21 +88,20 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # ratchet:actions/setup-go@v6
         with:
           go-version: '1.25.11'
-          cache-dependency-path: mcp-server/go.sum
+          cache-dependency-path: go.sum
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          cd mcp-server
-          go build -ldflags="-s -w -X main.version=${VERSION}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} .
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/cmd2host-mcp
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7
         with:
           name: cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: mcp-server/cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
 
   release:
     needs: [build-host, build-mcp]
