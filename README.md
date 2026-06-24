@@ -194,11 +194,11 @@ pre-releases. To install a specific tag — typically a release candidate — pa
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/taisukeoe/cmd2host/main/host/scripts/install.sh \
-  | bash -s -- --tag binary-v0.3.0-RC1
+  | bash -s -- --tag v0.3.0-RC2
 ```
 
 Use the tag name shown on the [Releases page](https://github.com/taisukeoe/cmd2host/releases)
-(`binary-vX.Y.Z` for stable, `binary-vX.Y.Z-RCN` for release candidates). `--tag`
+(`vX.Y.Z` for stable, `vX.Y.Z-RCN` for release candidates). `--tag`
 combines with `--clean` if needed.
 
 ### Verify
@@ -653,14 +653,16 @@ Version lines are intentionally separate:
 Use separate tags when releasing:
 
 ```bash
-# Binary + MCP release
-git tag binary-v0.1.3
-git push origin binary-v0.1.3
+# Binary + MCP release (bare semver tag — also the canonical Go module version)
+git tag v0.3.0
+git push origin v0.3.0
 
 # DevContainer feature publish
 git tag devcontainer-feature-v1.2.2
 git push origin devcontainer-feature-v1.2.2
 ```
+
+Binary tags use bare `vX.Y.Z` so `go get github.com/taisukeoe/cmd2host` resolves to the latest release. The `v*` workflow trigger matches only tags starting with `v`, so it does not fire on `devcontainer-feature-v*`.
 
 ## License
 

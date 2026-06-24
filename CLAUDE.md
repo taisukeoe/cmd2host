@@ -267,14 +267,16 @@ Version lines are intentionally separate:
 
 Use separate tags to trigger releases:
 ```bash
-# Binary + MCP release
-git tag binary-v0.1.3
-git push origin binary-v0.1.3
+# Binary + MCP release (bare semver tag — also the canonical Go module version)
+git tag v0.3.0
+git push origin v0.3.0
 
 # DevContainer feature publish
 git tag devcontainer-feature-v1.2.2
 git push origin devcontainer-feature-v1.2.2
 ```
+
+Binary tags use bare `vX.Y.Z` so `go get github.com/taisukeoe/cmd2host` resolves to the latest release. The `v*` workflow trigger only matches tags starting with `v`, so it does not fire on `devcontainer-feature-v*`.
 
 The binary release builds:
 - darwin-amd64 (Intel Mac)

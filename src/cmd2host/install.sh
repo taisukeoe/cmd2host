@@ -14,12 +14,13 @@ GITHUB_REPO="taisukeoe/cmd2host"
 # Tag-pinned MCP server binary version. Each devcontainer feature release ships
 # with a specific, fixed binary tag for reproducibility — the feature and the
 # binary it installs move together. Bump in lockstep when publishing a new
-# binary-v* tag.
+# binary release tag.
 #
-# Value MUST equal the GitHub Release tag name verbatim (tags match `binary-v*`
-# per .github/workflows/release-host-binary.yml), because it is concatenated
-# into release-download URLs as `releases/download/${BINARY_VERSION}/...` —
-# a bare semver would resolve to a non-existent path.
+# Value MUST equal the GitHub Release tag name verbatim, because it is
+# concatenated into release-download URLs as
+# `releases/download/${BINARY_VERSION}/...`. Current binary releases use bare
+# `v*` tags (e.g. `v0.3.0`) per .github/workflows/release-host-binary.yml;
+# legacy releases use `binary-v*` tags and remain valid pin values.
 BINARY_VERSION="binary-v0.2.0"
 
 # Install netcat if needed

@@ -34,7 +34,7 @@ usage() {
     echo "  --build           Build from source (requires Go installed)"
     echo "  --clean           Wipe existing install (daemon.json / projects / tokens) before reinstalling."
     echo "                    Without this flag, existing installs are upgraded in-place (user data preserved)."
-    echo "  --tag <tag>       Install a specific release tag (e.g. --tag binary-v0.3.0-RC1)."
+    echo "  --tag <tag>       Install a specific release tag (e.g. --tag v0.3.0-RC2)."
     echo "                    Required to install pre-release (RC) builds — the default 'releases/latest'"
     echo "                    download path skips pre-releases."
     echo "  -h, --help        Show this help message"
@@ -239,7 +239,7 @@ main() {
                 # consume `--clean` as the tag string and silently drop the
                 # `--clean` mode).
                 if [[ -z "$tag_arg" || "$tag_arg" == --* ]]; then
-                    echo "Error: --tag requires a non-empty release tag argument (e.g. --tag binary-v0.3.0-RC1)" >&2
+                    echo "Error: --tag requires a non-empty release tag argument (e.g. --tag v0.3.0-RC2)" >&2
                     exit 1
                 fi
                 BINARY_TAG="$tag_arg"
