@@ -24,7 +24,7 @@ cmd2host assumes the container already has `git` installed and the project's `.g
 Three-part system:
 1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs MCP server and wrapper scripts
 2. **Host side** (`cmd/cmd2host/` + `pkg/`): Go daemon that receives and executes commands. Business logic lives in importable packages under `pkg/`; the CLI binary is a thin wrapper
-3. **MCP server** (`mcp-server/`): Model Context Protocol server for AI agent integration
+3. **MCP server** (`pkg/mcpserver/` library + `cmd/cmd2host-mcp/` binary): Model Context Protocol server for AI agent integration. `pkg/mcpserver` is importable for in-process embedding; `cmd/cmd2host-mcp` is the thin wrapper that ships as the `cmd2host-mcp` binary
 
 Communication flow:
 ```
@@ -93,10 +93,11 @@ security boundary.
 - `pkg/config/templates.go` - Template embedding and listing functions
 
 ### MCP server
-- `mcp-server/main.go` - MCP server entry point
-- `mcp-server/client.go` - Client for communicating with cmd2host daemon
-- `mcp-server/tools.go` - MCP tool implementations (list_operations, describe_operation, run_operation)
-- `mcp-server/types.go` - Shared type definitions
+- `cmd/cmd2host-mcp/main.go` - Thin wrapper binary entry point (flag parsing + pkg/mcpserver dispatch)
+- `pkg/mcpserver/server.go` - Library entry point (`Options`, `Run`, `ErrTokenRequired`)
+- `pkg/mcpserver/client.go` - Client for communicating with cmd2host daemon
+- `pkg/mcpserver/tools.go` - MCP tool implementations (list_operations, describe_operation, run_operation)
+- `pkg/mcpserver/types.go` - Shared type definitions
 
 ### Testing
 - `justfile` - Build and test commands

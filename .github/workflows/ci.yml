@@ -30,7 +30,6 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - 'host/**'
-              - 'mcp-server/**'
               - 'justfile'
               - 'test/host/**'
               - '.github/workflows/ci.yml'
@@ -45,7 +44,6 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - 'host/**'
-              - 'mcp-server/**'
               - 'src/**'
               - 'test/e2e/**'
               - '.devcontainer/**'
@@ -63,9 +61,7 @@ jobs:
         with:
           go-version: '1.25.11'
           cache: true
-          cache-dependency-path: |
-            go.sum
-            mcp-server/go.sum
+          cache-dependency-path: go.sum
 
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
@@ -123,9 +119,7 @@ jobs:
         with:
           go-version: '1.25.11'
           cache: true
-          cache-dependency-path: |
-            go.sum
-            mcp-server/go.sum
+          cache-dependency-path: go.sum
 
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # ratchet:extractions/setup-just@v2
