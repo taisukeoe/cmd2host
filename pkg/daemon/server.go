@@ -599,8 +599,10 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	// List configured projects
-	projects, _ := config.ListProjects()
+	// List configured projects from this Server's base dir so the startup
+	// banner reflects the same dir as resolveProject (NewServerAt callers
+	// need the per-instance view, not the env-resolved one).
+	projects, _ := config.ListProjectsAt(s.baseDir)
 	if len(projects) > 0 {
 		fmt.Printf("Projects: %v\n", projects)
 	}

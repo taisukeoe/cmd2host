@@ -625,7 +625,8 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 }
 
 // seedAllowedProjectAt writes a minimal allowed project config under baseDir
-// and a token bound to its primary repo. Returns the bound token string.
+// and stores a token file bound to its primary repo. tokenStr is the caller-
+// supplied raw token to bind (the helper does not generate one).
 func seedAllowedProjectAt(t *testing.T, baseDir, repo, tokenStr string) {
 	t.Helper()
 	projectID := config.NormalizeProjectID(repo)
