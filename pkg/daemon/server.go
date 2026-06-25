@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/taisukeoe/cmd2host/internal/configdir"
 	"github.com/taisukeoe/cmd2host/pkg/auth"
 	"github.com/taisukeoe/cmd2host/pkg/config"
 	"github.com/taisukeoe/cmd2host/pkg/operations"
@@ -27,25 +28,49 @@ const (
 	maxReadSize = 65536
 )
 
-// Server handles TCP and Unix socket connections and command proxying
+// Server handles TCP and Unix socket connections and command proxying.
+// baseDir anchors per-instance directory lookups for project configs and the
+// token store; all internal config / auth path resolution flows through it.
 type Server struct {
 	daemonConfig *config.DaemonConfig
 	validator    *Validator
 	tokenStore   *auth.TokenStore
 	tcpListener  net.Listener
 	unixListener net.Listener
+	baseDir      string
 }
 
-// NewServer creates a new Server
+// NewServer creates a new Server using the default cmd2host base directory
+// resolved via configdir.Dir (honors CMD2HOST_CONFIG_DIR). Fails fast when
+// the base directory cannot be determined so callers see the same diagnostic
+// as the prior auth.NewTokenStore path. Callers that need explicit
+// per-instance isolation should use NewServerAt instead.
 func NewServer(daemonConfig *config.DaemonConfig) (*Server, error) {
-	tokenStore, err := auth.NewTokenStore()
+	base, err := configdir.Dir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize token store: %w", err)
+		return nil, fmt.Errorf("failed to initialize token store: cannot determine cmd2host config directory: %w", err)
 	}
+	return NewServerAt(base, daemonConfig)
+}
+
+// NewServerAt creates a new Server rooted at the given base directory.
+// Project configs are loaded from <dir>/projects and tokens from
+// <dir>/tokens. Multiple Servers may be constructed concurrently with
+// distinct dirs without touching process-global environment state.
+//
+// dir must be a non-empty path (typically absolute, with the same semantics
+// as the value returned by configdir.Dir). Empty dir is rejected at construct
+// time so projects/ and tokens/ never resolve against the daemon CWD.
+func NewServerAt(dir string, daemonConfig *config.DaemonConfig) (*Server, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("NewServerAt: dir must be non-empty")
+	}
+	tokenStore := auth.NewTokenStoreAt(filepath.Join(dir, "tokens"))
 	return &Server{
 		daemonConfig: daemonConfig,
 		validator:    NewValidator(),
 		tokenStore:   tokenStore,
+		baseDir:      dir,
 	}, nil
 }
 
@@ -135,7 +160,7 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 		return nil, "", fmt.Errorf("token does not carry a project_id or repo binding")
 	}
 
-	projectConfig, err := config.LoadProjectConfig(projectID)
+	projectConfig, err := config.LoadProjectConfigAt(s.baseDir, projectID)
 	if err != nil {
 		return nil, projectID, err
 	}
@@ -145,7 +170,7 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 		return nil, projectID, fmt.Errorf("token-project mismatch: token bound to repo %q but project primary repo is %q", tokenData.Repo, primaryRepo)
 	}
 
-	allowed, currentHash, err := config.IsConfigAllowed(projectID)
+	allowed, currentHash, err := config.IsConfigAllowedAt(s.baseDir, projectID)
 	if err != nil {
 		return nil, projectID, fmt.Errorf("failed to check config allowance: %w", err)
 	}

@@ -37,28 +37,26 @@ func writeAndCloseWrite(t *testing.T, conn net.Conn, data []byte) {
 	}
 }
 
-// setupServerWithProject creates a test server with project-based configuration
+// setupServerWithProject builds a Server rooted at fresh temp dirs without
+// touching process-global env state. Returned dir is the repo path used by
+// the seeded project config (callers pass it to initRepoWithOrigin when a
+// real git tree is needed). The Server's baseDir is a separate temp dir so
+// projects/ and tokens/ live alongside each other under one cmd2host root.
 func setupServerWithProject(t *testing.T) (*Server, *auth.TokenStore, string) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
+	baseDir := t.TempDir()
+	repoPath := t.TempDir()
 
-	// Override HOME for project config loading
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
-
-	// Create project directory and config
 	projectID := "owner_repo"
-	projectDir := filepath.Join(tmpDir, ".cmd2host", "projects", projectID)
+	projectDir := filepath.Join(config.ProjectsDirAt(baseDir), projectID)
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
 		t.Fatalf("Failed to create project dir: %v", err)
 	}
 
 	projectConfigContent := `{
 		"repo": "owner/repo",
-		"repo_path": "` + tmpDir + `",
+		"repo_path": "` + repoPath + `",
 		"allowed_operations": ["test_op"],
 		"operations": {
 			"test_op": {
@@ -83,35 +81,26 @@ func setupServerWithProject(t *testing.T) (*Server, *auth.TokenStore, string) {
 		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	// Allow the config
-	if err := config.AllowConfig(projectID); err != nil {
+	if err := config.AllowConfigAt(baseDir, projectID); err != nil {
 		t.Fatalf("Failed to allow config: %v", err)
 	}
 
-	// Create token store in temp directory
-	tokenDir := filepath.Join(tmpDir, ".cmd2host", "tokens")
+	tokenDir := filepath.Join(baseDir, "tokens")
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("Failed to create token dir: %v", err)
 	}
-	tokenStore := auth.NewTokenStoreAt(tokenDir)
-
-	// Create a test token with repo assigned
 	hash := auth.HashToken(testToken)
-	tokenPath := filepath.Join(tokenDir, hash)
-	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(tokenDir, hash), []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
-	// Create daemon config
 	daemonConfig := config.DefaultDaemonConfig()
-
-	server, err := NewServer(daemonConfig)
+	server, err := NewServerAt(baseDir, daemonConfig)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
-	server.tokenStore = tokenStore
 
-	return server, tokenStore, tmpDir
+	return server, server.tokenStore, repoPath
 }
 
 func TestServer_ListOperations(t *testing.T) {
@@ -207,17 +196,12 @@ func TestServer_ListOperations(t *testing.T) {
 }
 
 func TestServer_RepoMismatch(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Override HOME for project config loading
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	t.Setenv("CMD2HOST_CONFIG_DIR", "") // Exercise the legacy HOME-based fallback in configdir.Dir.
+	baseDir := t.TempDir()
+	repoPath := t.TempDir()
 
 	// Create project directory with MISMATCHED repo in config
 	projectID := "owner_repo"
-	projectDir := filepath.Join(tmpDir, ".cmd2host", "projects", projectID)
+	projectDir := filepath.Join(config.ProjectsDirAt(baseDir), projectID)
 	if err := os.MkdirAll(projectDir, 0755); err != nil {
 		t.Fatalf("Failed to create project dir: %v", err)
 	}
@@ -226,7 +210,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 	// repo_path is required by the new 1:N schema validator (len match).
 	projectConfigContent := `{
 		"repo": "evil/repo",
-		"repo_path": "` + tmpDir + `",
+		"repo_path": "` + repoPath + `",
 		"allowed_operations": ["test_op"],
 		"operations": {
 			"test_op": {
@@ -242,30 +226,25 @@ func TestServer_RepoMismatch(t *testing.T) {
 		t.Fatalf("Failed to write project config: %v", err)
 	}
 
-	if err := config.AllowConfig(projectID); err != nil {
+	if err := config.AllowConfigAt(baseDir, projectID); err != nil {
 		t.Fatalf("Failed to allow config: %v", err)
 	}
 
-	// Create token store with token bound to "owner/repo"
-	tokenDir := filepath.Join(tmpDir, ".cmd2host", "tokens")
+	tokenDir := filepath.Join(baseDir, "tokens")
 	if err := os.MkdirAll(tokenDir, 0700); err != nil {
 		t.Fatalf("Failed to create token dir: %v", err)
 	}
-	tokenStore := auth.NewTokenStoreAt(tokenDir)
-
 	hash := auth.HashToken(testToken)
-	tokenPath := filepath.Join(tokenDir, hash)
 	// Token is bound to "owner/repo" but config specifies "evil/repo"
-	if err := os.WriteFile(tokenPath, []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(tokenDir, hash), []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
 	daemonConfig := config.DefaultDaemonConfig()
-	server, err := NewServer(daemonConfig)
+	server, err := NewServerAt(baseDir, daemonConfig)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
-	server.tokenStore = tokenStore
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -642,5 +621,109 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 	// echo "hi" produces 3 bytes (2 + newline).
 	if resp.StdoutOriginalBytes != 3 {
 		t.Errorf("expected StdoutOriginalBytes=3, got %d", resp.StdoutOriginalBytes)
+	}
+}
+
+// seedAllowedProjectAt writes a minimal allowed project config under baseDir
+// and a token bound to its primary repo. Returns the bound token string.
+func seedAllowedProjectAt(t *testing.T, baseDir, repo, tokenStr string) {
+	t.Helper()
+	projectID := config.NormalizeProjectID(repo)
+	projectDir := filepath.Join(config.ProjectsDirAt(baseDir), projectID)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project dir: %v", err)
+	}
+	cfg := `{
+		"repo": "` + repo + `",
+		"repo_path": "` + projectDir + `",
+		"allowed_operations": [],
+		"operations": {}
+	}`
+	if err := os.WriteFile(filepath.Join(projectDir, "config.json"), []byte(cfg), 0644); err != nil {
+		t.Fatalf("Failed to write project config: %v", err)
+	}
+	if err := config.AllowConfigAt(baseDir, projectID); err != nil {
+		t.Fatalf("Failed to allow config: %v", err)
+	}
+	tokenDir := filepath.Join(baseDir, "tokens")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("Failed to create token dir: %v", err)
+	}
+	hash := auth.HashToken(tokenStr)
+	body := []byte(`{"repo":"` + repo + `"}`)
+	if err := os.WriteFile(filepath.Join(tokenDir, hash), body, 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+}
+
+// TestNewServerAt_ConcurrentInstances verifies that two Servers constructed
+// via NewServerAt with distinct base dirs hold independent token stores and
+// resolve project configs from their own dirs, without any env mutation.
+// This is the load-bearing case for callers that need to run multiple
+// cmd2host instances in the same process.
+func TestNewServerAt_ConcurrentInstances(t *testing.T) {
+	baseA := t.TempDir()
+	baseB := t.TempDir()
+	tokenA := strings.Repeat("a", 64)
+	tokenB := strings.Repeat("b", 64)
+
+	seedAllowedProjectAt(t, baseA, "owner/alpha", tokenA)
+	seedAllowedProjectAt(t, baseB, "owner/beta", tokenB)
+
+	daemonConfig := config.DefaultDaemonConfig()
+	serverA, err := NewServerAt(baseA, daemonConfig)
+	if err != nil {
+		t.Fatalf("NewServerAt(baseA) failed: %v", err)
+	}
+	serverB, err := NewServerAt(baseB, daemonConfig)
+	if err != nil {
+		t.Fatalf("NewServerAt(baseB) failed: %v", err)
+	}
+
+	// Each Server's token store sees only its own token.
+	if _, ok := serverA.tokenStore.GetTokenData(tokenA); !ok {
+		t.Error("serverA must accept tokenA")
+	}
+	if _, ok := serverA.tokenStore.GetTokenData(tokenB); ok {
+		t.Error("serverA must NOT accept tokenB (cross-instance bleed)")
+	}
+	if _, ok := serverB.tokenStore.GetTokenData(tokenB); !ok {
+		t.Error("serverB must accept tokenB")
+	}
+	if _, ok := serverB.tokenStore.GetTokenData(tokenA); ok {
+		t.Error("serverB must NOT accept tokenA (cross-instance bleed)")
+	}
+
+	// Each Server resolves project configs from its own baseDir.
+	cfgA, _, err := serverA.resolveProject(auth.TokenData{Repo: "owner/alpha"})
+	if err != nil {
+		t.Fatalf("serverA.resolveProject(owner/alpha) failed: %v", err)
+	}
+	if cfgA.PrimaryRepo() != "owner/alpha" {
+		t.Errorf("serverA primary repo = %q, want owner/alpha", cfgA.PrimaryRepo())
+	}
+	if _, _, err := serverA.resolveProject(auth.TokenData{Repo: "owner/beta"}); err == nil {
+		t.Error("serverA must NOT resolve owner/beta (lives only under baseB)")
+	}
+	cfgB, _, err := serverB.resolveProject(auth.TokenData{Repo: "owner/beta"})
+	if err != nil {
+		t.Fatalf("serverB.resolveProject(owner/beta) failed: %v", err)
+	}
+	if cfgB.PrimaryRepo() != "owner/beta" {
+		t.Errorf("serverB primary repo = %q, want owner/beta", cfgB.PrimaryRepo())
+	}
+
+	if serverA.baseDir != baseA || serverB.baseDir != baseB {
+		t.Errorf("baseDir not preserved: A=%q (want %q) B=%q (want %q)",
+			serverA.baseDir, baseA, serverB.baseDir, baseB)
+	}
+}
+
+// TestNewServerAt_RejectsEmptyDir verifies the empty-dir guard so callers
+// never construct a Server whose projects/ and tokens/ resolve against the
+// daemon CWD.
+func TestNewServerAt_RejectsEmptyDir(t *testing.T) {
+	if _, err := NewServerAt("", config.DefaultDaemonConfig()); err == nil {
+		t.Fatal("NewServerAt(\"\") must return error")
 	}
 }

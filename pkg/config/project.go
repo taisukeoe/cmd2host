@@ -203,14 +203,35 @@ func ProjectsDir() string {
 	return filepath.Join(base, "projects")
 }
 
+// ProjectsDirAt returns the projects directory under an explicit base dir.
+// dir has the same semantics as the value returned by configdir.Dir (the
+// cmd2host root config dir). Passing dir == "" yields a relative path and is
+// considered undefined; callers managing per-instance dirs should always
+// supply a non-empty absolute path.
+func ProjectsDirAt(dir string) string {
+	return filepath.Join(dir, "projects")
+}
+
 // ProjectConfigPath returns the path to a project's config.json
 func ProjectConfigPath(projectID string) string {
 	return filepath.Join(ProjectsDir(), projectID, "config.json")
 }
 
+// ProjectConfigPathAt returns the project config.json path under an explicit
+// base dir. See ProjectsDirAt for dir semantics.
+func ProjectConfigPathAt(dir, projectID string) string {
+	return filepath.Join(ProjectsDirAt(dir), projectID, "config.json")
+}
+
 // AllowedHashPath returns the path to a project's allowed.sha256
 func AllowedHashPath(projectID string) string {
 	return filepath.Join(ProjectsDir(), projectID, "allowed.sha256")
+}
+
+// AllowedHashPathAt returns the project allowed.sha256 path under an explicit
+// base dir. See ProjectsDirAt for dir semantics.
+func AllowedHashPathAt(dir, projectID string) string {
+	return filepath.Join(ProjectsDirAt(dir), projectID, "allowed.sha256")
 }
 
 // ResolveOperationCommands rewrites operation commands to absolute paths when
@@ -234,7 +255,16 @@ func ResolveOperationCommands(config *ProjectConfig, lookupPath func(string) (st
 
 // LoadProjectConfig loads and validates a project configuration
 func LoadProjectConfig(projectID string) (*ProjectConfig, error) {
-	configPath := ProjectConfigPath(projectID)
+	return loadProjectConfigFromPath(ProjectConfigPath(projectID), projectID)
+}
+
+// LoadProjectConfigAt loads and validates a project configuration from an
+// explicit base dir. See ProjectsDirAt for dir semantics.
+func LoadProjectConfigAt(dir, projectID string) (*ProjectConfig, error) {
+	return loadProjectConfigFromPath(ProjectConfigPathAt(dir, projectID), projectID)
+}
+
+func loadProjectConfigFromPath(configPath, projectID string) (*ProjectConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -504,9 +534,16 @@ func ComputeConfigHash(path string) (string, error) {
 
 // IsConfigAllowed checks if the project config hash matches the allowed hash
 func IsConfigAllowed(projectID string) (bool, string, error) {
-	configPath := ProjectConfigPath(projectID)
-	allowedPath := AllowedHashPath(projectID)
+	return isConfigAllowedAtPaths(ProjectConfigPath(projectID), AllowedHashPath(projectID))
+}
 
+// IsConfigAllowedAt checks the project config hash under an explicit base
+// dir. See ProjectsDirAt for dir semantics.
+func IsConfigAllowedAt(dir, projectID string) (bool, string, error) {
+	return isConfigAllowedAtPaths(ProjectConfigPathAt(dir, projectID), AllowedHashPathAt(dir, projectID))
+}
+
+func isConfigAllowedAtPaths(configPath, allowedPath string) (bool, string, error) {
 	currentHash, err := ComputeConfigHash(configPath)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to compute config hash: %w", err)
@@ -526,9 +563,16 @@ func IsConfigAllowed(projectID string) (bool, string, error) {
 
 // AllowConfig writes the current config hash as allowed
 func AllowConfig(projectID string) error {
-	configPath := ProjectConfigPath(projectID)
-	allowedPath := AllowedHashPath(projectID)
+	return allowConfigAtPaths(ProjectConfigPath(projectID), AllowedHashPath(projectID))
+}
 
+// AllowConfigAt writes the current config hash as allowed under an explicit
+// base dir. See ProjectsDirAt for dir semantics.
+func AllowConfigAt(dir, projectID string) error {
+	return allowConfigAtPaths(ProjectConfigPathAt(dir, projectID), AllowedHashPathAt(dir, projectID))
+}
+
+func allowConfigAtPaths(configPath, allowedPath string) error {
 	hash, err := ComputeConfigHash(configPath)
 	if err != nil {
 		return err
@@ -539,7 +583,16 @@ func AllowConfig(projectID string) error {
 
 // ListProjects returns a list of all configured project IDs
 func ListProjects() ([]string, error) {
-	projectsDir := ProjectsDir()
+	return listProjectsInDir(ProjectsDir())
+}
+
+// ListProjectsAt returns configured project IDs under an explicit base dir.
+// See ProjectsDirAt for dir semantics.
+func ListProjectsAt(dir string) ([]string, error) {
+	return listProjectsInDir(ProjectsDirAt(dir))
+}
+
+func listProjectsInDir(projectsDir string) ([]string, error) {
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -575,6 +628,18 @@ type CreateProjectConfigOptions struct {
 // CreateProjectConfig creates a project configuration from a template.
 // The project ID is derived from Repos[0].
 func CreateProjectConfig(opts CreateProjectConfigOptions) error {
+	return createProjectConfigInDir(ProjectsDir(), opts, AllowConfig)
+}
+
+// CreateProjectConfigAt creates a project configuration under an explicit
+// base dir. See ProjectsDirAt for dir semantics.
+func CreateProjectConfigAt(dir string, opts CreateProjectConfigOptions) error {
+	return createProjectConfigInDir(ProjectsDirAt(dir), opts, func(projectID string) error {
+		return AllowConfigAt(dir, projectID)
+	})
+}
+
+func createProjectConfigInDir(projectsDir string, opts CreateProjectConfigOptions, allow func(string) error) error {
 	if len(opts.Repos) == 0 {
 		return fmt.Errorf("repos is required (at least one --repo)")
 	}
@@ -631,7 +696,7 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 	content := string(updatedContent) + "\n"
 
 	projectID := NormalizeProjectID(opts.Repos[0])
-	projectDir := filepath.Join(ProjectsDir(), projectID)
+	projectDir := filepath.Join(projectsDir, projectID)
 	configPath := filepath.Join(projectDir, "config.json")
 
 	if _, err := os.Stat(configPath); err == nil && !opts.Force {
@@ -647,7 +712,7 @@ func CreateProjectConfig(opts CreateProjectConfigOptions) error {
 	}
 
 	if opts.Allow {
-		if err := AllowConfig(projectID); err != nil {
+		if err := allow(projectID); err != nil {
 			return fmt.Errorf("config created but allow step failed: %w", err)
 		}
 	}
