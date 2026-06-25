@@ -896,3 +896,238 @@ func TestProjectsDirWithoutEnv(t *testing.T) {
 		t.Errorf("ProjectsDir() = %q, want %q", got, want)
 	}
 }
+
+// seedProjectConfigAt writes a minimal project config under base/projects/<id>
+// and returns the project ID for the dir-explicit-API tests.
+func seedProjectConfigAt(t *testing.T, base, repo, content string) string {
+	t.Helper()
+	projectID := NormalizeProjectID(repo)
+	projectDir := filepath.Join(ProjectsDirAt(base), projectID)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "config.json"), []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write project config: %v", err)
+	}
+	return projectID
+}
+
+// TestLoadProjectConfigAt_DirIsolation verifies the dir-explicit API loads
+// and lists projects from independent base directories without touching
+// process-global env state.
+func TestLoadProjectConfigAt_DirIsolation(t *testing.T) {
+	baseA := t.TempDir()
+	baseB := t.TempDir()
+
+	const cfgA = `{"repo": "owner/alpha", "repo_path": "/path/to/alpha", "allowed_operations": [], "operations": {}}`
+	const cfgB = `{"repo": "owner/beta",  "repo_path": "/path/to/beta",  "allowed_operations": [], "operations": {}}`
+
+	idA := seedProjectConfigAt(t, baseA, "owner/alpha", cfgA)
+	idB := seedProjectConfigAt(t, baseB, "owner/beta", cfgB)
+
+	cfg, err := LoadProjectConfigAt(baseA, idA)
+	if err != nil {
+		t.Fatalf("LoadProjectConfigAt(baseA, %q) failed: %v", idA, err)
+	}
+	if cfg.Repos[0] != "owner/alpha" {
+		t.Errorf("baseA primary repo = %q, want owner/alpha", cfg.Repos[0])
+	}
+
+	if _, err := LoadProjectConfigAt(baseA, idB); err == nil {
+		t.Errorf("LoadProjectConfigAt(baseA, %q) succeeded; want missing-config error (cross-dir bleed)", idB)
+	}
+
+	cfgBLoaded, err := LoadProjectConfigAt(baseB, idB)
+	if err != nil {
+		t.Fatalf("LoadProjectConfigAt(baseB, %q) failed: %v", idB, err)
+	}
+	if cfgBLoaded.Repos[0] != "owner/beta" {
+		t.Errorf("baseB primary repo = %q, want owner/beta", cfgBLoaded.Repos[0])
+	}
+
+	listA, err := ListProjectsAt(baseA)
+	if err != nil {
+		t.Fatalf("ListProjectsAt(baseA) failed: %v", err)
+	}
+	if len(listA) != 1 || listA[0] != idA {
+		t.Errorf("ListProjectsAt(baseA) = %v, want [%s]", listA, idA)
+	}
+	listB, err := ListProjectsAt(baseB)
+	if err != nil {
+		t.Fatalf("ListProjectsAt(baseB) failed: %v", err)
+	}
+	if len(listB) != 1 || listB[0] != idB {
+		t.Errorf("ListProjectsAt(baseB) = %v, want [%s]", listB, idB)
+	}
+}
+
+// TestAllowConfigAt_DirIsolation verifies that allowing the config under one
+// base dir leaves the other dir's project unallowed.
+func TestAllowConfigAt_DirIsolation(t *testing.T) {
+	baseA := t.TempDir()
+	baseB := t.TempDir()
+	const cfg = `{"repo": "owner/repo", "repo_path": "/path/to/repo", "allowed_operations": [], "operations": {}}`
+	id := seedProjectConfigAt(t, baseA, "owner/repo", cfg)
+	seedProjectConfigAt(t, baseB, "owner/repo", cfg)
+
+	allowedA, _, err := IsConfigAllowedAt(baseA, id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowedAt(baseA) failed: %v", err)
+	}
+	if allowedA {
+		t.Error("baseA should not be allowed initially")
+	}
+
+	if err := AllowConfigAt(baseA, id); err != nil {
+		t.Fatalf("AllowConfigAt(baseA) failed: %v", err)
+	}
+
+	allowedA, _, err = IsConfigAllowedAt(baseA, id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowedAt(baseA) after allow failed: %v", err)
+	}
+	if !allowedA {
+		t.Error("baseA should be allowed after AllowConfigAt")
+	}
+
+	allowedB, _, err := IsConfigAllowedAt(baseB, id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowedAt(baseB) failed: %v", err)
+	}
+	if allowedB {
+		t.Error("baseB must remain unallowed (cross-dir bleed)")
+	}
+}
+
+// TestCreateProjectConfigAt_DirIsolation verifies CreateProjectConfigAt
+// writes under the supplied base dir without touching env.
+func TestCreateProjectConfigAt_DirIsolation(t *testing.T) {
+	base := t.TempDir()
+
+	opts := CreateProjectConfigOptions{
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{filepath.Join(base, "repo")},
+		Template:  "readonly",
+		Allow:     true,
+	}
+	if err := CreateProjectConfigAt(base, opts); err != nil {
+		t.Fatalf("CreateProjectConfigAt failed: %v", err)
+	}
+
+	id := NormalizeProjectID("owner/repo")
+	if _, err := os.Stat(ProjectConfigPathAt(base, id)); err != nil {
+		t.Fatalf("config.json missing under base: %v", err)
+	}
+	if _, err := os.Stat(AllowedHashPathAt(base, id)); err != nil {
+		t.Fatalf("allowed.sha256 missing under base (Allow=true): %v", err)
+	}
+}
+
+// TestLoadProjectConfig_WrapperTransparency verifies the env-resolved
+// LoadProjectConfig wrapper and the dir-explicit LoadProjectConfigAt return
+// equivalent results when pointed at the same base dir via env.
+func TestLoadProjectConfig_WrapperTransparency(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", base)
+
+	const cfg = `{"repo": "owner/repo", "repo_path": "/path/to/repo", "allowed_operations": [], "operations": {}}`
+	id := seedProjectConfigAt(t, base, "owner/repo", cfg)
+
+	envCfg, err := LoadProjectConfig(id)
+	if err != nil {
+		t.Fatalf("LoadProjectConfig (env wrapper) failed: %v", err)
+	}
+	dirCfg, err := LoadProjectConfigAt(base, id)
+	if err != nil {
+		t.Fatalf("LoadProjectConfigAt failed: %v", err)
+	}
+
+	if envCfg.Repos[0] != dirCfg.Repos[0] {
+		t.Errorf("repos[0] mismatch: env=%q dir=%q", envCfg.Repos[0], dirCfg.Repos[0])
+	}
+	if ProjectConfigPath(id) != ProjectConfigPathAt(base, id) {
+		t.Errorf("path mismatch: env=%q dir=%q", ProjectConfigPath(id), ProjectConfigPathAt(base, id))
+	}
+}
+
+// TestIsConfigAllowed_WrapperTransparency verifies the env-resolved
+// IsConfigAllowed wrapper returns the same allowance verdict and current
+// hash as IsConfigAllowedAt for the same base dir.
+func TestIsConfigAllowed_WrapperTransparency(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", base)
+
+	const cfg = `{"repo": "owner/repo", "repo_path": "/path/to/repo", "allowed_operations": [], "operations": {}}`
+	id := seedProjectConfigAt(t, base, "owner/repo", cfg)
+
+	envAllowed, envHash, err := IsConfigAllowed(id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowed failed: %v", err)
+	}
+	dirAllowed, dirHash, err := IsConfigAllowedAt(base, id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowedAt failed: %v", err)
+	}
+	if envAllowed != dirAllowed || envHash != dirHash {
+		t.Errorf("verdict mismatch (pre-allow): env=(%v,%q) dir=(%v,%q)", envAllowed, envHash, dirAllowed, dirHash)
+	}
+}
+
+// TestAllowConfig_WrapperTransparency verifies the env-resolved AllowConfig
+// wrapper writes the same hash file as AllowConfigAt for the same base dir.
+func TestAllowConfig_WrapperTransparency(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", base)
+
+	const cfg = `{"repo": "owner/repo", "repo_path": "/path/to/repo", "allowed_operations": [], "operations": {}}`
+	id := seedProjectConfigAt(t, base, "owner/repo", cfg)
+
+	if err := AllowConfig(id); err != nil {
+		t.Fatalf("AllowConfig (env wrapper) failed: %v", err)
+	}
+	dirAllowed, _, err := IsConfigAllowedAt(base, id)
+	if err != nil {
+		t.Fatalf("IsConfigAllowedAt after env-wrapper allow failed: %v", err)
+	}
+	if !dirAllowed {
+		t.Error("dir-explicit verdict must see allow performed via env wrapper (paths share base)")
+	}
+	if AllowedHashPath(id) != AllowedHashPathAt(base, id) {
+		t.Errorf("allowed hash path mismatch: env=%q dir=%q", AllowedHashPath(id), AllowedHashPathAt(base, id))
+	}
+}
+
+// TestCreateProjectConfig_WrapperTransparency verifies the env-resolved
+// CreateProjectConfig wrapper produces project layout under the same base dir
+// as the dir-explicit CreateProjectConfigAt would, and that the inner Allow
+// callback is honored via the matching surface.
+func TestCreateProjectConfig_WrapperTransparency(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("CMD2HOST_CONFIG_DIR", base)
+
+	opts := CreateProjectConfigOptions{
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{filepath.Join(base, "repo")},
+		Template:  "readonly",
+		Allow:     true,
+	}
+	if err := CreateProjectConfig(opts); err != nil {
+		t.Fatalf("CreateProjectConfig (env wrapper) failed: %v", err)
+	}
+	id := NormalizeProjectID("owner/repo")
+
+	if _, err := os.Stat(ProjectConfigPathAt(base, id)); err != nil {
+		t.Errorf("config.json must exist under base after env-wrapper Create: %v", err)
+	}
+	if _, err := os.Stat(AllowedHashPathAt(base, id)); err != nil {
+		t.Errorf("allowed.sha256 must exist under base after env-wrapper Create + Allow: %v", err)
+	}
+
+	projects, err := ListProjectsAt(base)
+	if err != nil {
+		t.Fatalf("ListProjectsAt failed: %v", err)
+	}
+	if len(projects) != 1 || projects[0] != id {
+		t.Errorf("ListProjectsAt = %v, want [%s]", projects, id)
+	}
+}
