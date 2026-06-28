@@ -245,9 +245,15 @@ Response:
   "request_id": "unique-id",
   "exit_code": 0,
   "stdout": "...",
-  "stderr": "..."
+  "stderr": "...",
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_original_bytes": 0,
+  "stderr_original_bytes": 0
 }
 ```
+
+`stdout` and `stderr` are clean prefixes of the host command's output cut at a UTF-8 rune boundary; the daemon does not concatenate any synthetic marker into the bodies. When a stream exceeds the configured cap, `stdout_truncated` / `stderr_truncated` is `true` and `stdout_original_bytes` / `stderr_original_bytes` reports the byte length of the original (pre-truncation) output. Clients that render only the stream string (`echo '{...}' | nc host.docker.internal 9876` and similar home-grown setups) need to read the typed flags to surface the truncation signal — the MCP server (`pkg/mcpserver`) and the `cmd2host-proxy` wrapper both do this and emit a `*<stream> truncated: shown N of M bytes*` / `cmd2host: <stream> truncated by host daemon (shown N of M bytes)` indicator outside their normal output channel.
 
 ### Raw-Argv Operation Request (transparent proxy entry)
 

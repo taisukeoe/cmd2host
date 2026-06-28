@@ -496,6 +496,13 @@ This is the same trust boundary the MCP server declares via its `serverInstructi
 | `max_stdout_bytes` | int | `1048576` (1 MiB) | Maximum captured stdout per operation. |
 | `max_stderr_bytes` | int | `65536` (64 KiB) | Maximum captured stderr per operation. |
 | `default_timeout` | int | `60` | Per-operation execution timeout in seconds. |
+| `max_in_flight` | int | `64` | Maximum number of client connections handled concurrently. Excess connections are closed immediately without reading a request so the daemon does not allocate a goroutine per overflow. Set to a negative value to disable the cap; doing so on a non-loopback listener is not recommended. |
+
+#### Truncation indicator on the response
+
+When a stream exceeds `max_stdout_bytes` / `max_stderr_bytes`, the daemon returns a clean rune-bounded prefix of the host command's output and signals truncation through typed flags on the response (`stdout_truncated` / `stderr_truncated`) plus the byte length of the original output (`stdout_original_bytes` / `stderr_original_bytes`). The bodies do not carry any synthetic suffix so consumers piping the stream into a streaming JSON / NDJSON parser see only the host command's bytes.
+
+Both the MCP server (`pkg/mcpserver`) and the `cmd2host-proxy` wrapper read those flags and emit an out-of-band indicator (`*<stream> truncated: shown N of M bytes*` outside the MCP fenced block; `cmd2host: <stream> truncated by host daemon (shown N of M bytes)` on the wrapper's stderr). Home-grown clients that talk to the daemon directly (`echo '{...}' | nc host.docker.internal 9876` and similar setups) need to inspect the typed flags themselves to surface the same signal.
 
 #### Loopback-only default
 
