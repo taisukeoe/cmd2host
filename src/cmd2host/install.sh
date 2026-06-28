@@ -21,7 +21,7 @@ GITHUB_REPO="taisukeoe/cmd2host"
 # `releases/download/${BINARY_VERSION}/...`. Current binary releases use bare
 # `v*` tags (e.g. `v0.3.0`) per .github/workflows/release-host-binary.yml;
 # legacy releases use `binary-v*` tags and remain valid pin values.
-BINARY_VERSION="binary-v0.2.0"
+BINARY_VERSION="v0.3.0"
 
 # Verify a binary's sha256 against a checksums.txt entry. Kept structurally
 # parallel with host/scripts/install.sh's helper, but `sha256sum` is the
