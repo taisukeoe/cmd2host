@@ -40,6 +40,14 @@ type DaemonConfig struct {
 	// Execution limits
 	DefaultTimeout int `json:"default_timeout,omitempty"` // Default: 60 seconds
 
+	// MaxInFlight caps the number of client connections handled
+	// concurrently. Additional connections accepted while at capacity are
+	// closed immediately without reading a request, so a burst of
+	// authentication failures cannot keep stacking the daemon's per-failure
+	// delay indefinitely. Default: 64. Set to a negative value to disable
+	// the cap; doing so on a non-loopback listener is not recommended.
+	MaxInFlight int `json:"max_in_flight,omitempty"` // Default: 64
+
 	// Warnings collects non-fatal advisories produced during LoadDaemonConfig.
 	// Callers (typically runDaemon) print these to stderr after a successful
 	// load. Excluded from JSON marshalling so it cannot be set via daemon.json.
@@ -175,5 +183,8 @@ func applyDaemonDefaults(config *DaemonConfig) {
 	}
 	if config.DefaultTimeout == 0 {
 		config.DefaultTimeout = 60
+	}
+	if config.MaxInFlight == 0 {
+		config.MaxInFlight = 64
 	}
 }

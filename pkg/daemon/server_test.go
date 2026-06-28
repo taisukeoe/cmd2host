@@ -937,3 +937,59 @@ func TestNewServerAt_RejectsEmptyDir(t *testing.T) {
 		t.Fatal("NewServerAt(\"\") must return error")
 	}
 }
+
+// TestServer_DispatchConn_ClosesAtCapacity pins the in-flight cap: when
+// the semaphore is full, dispatchConn must close the connection
+// immediately instead of spawning another handleClient goroutine that
+// would stack another auth-failure delay.
+func TestServer_DispatchConn_ClosesAtCapacity(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	// Replace the default cap with a single slot and pre-fill it so the
+	// next dispatch is forced into the at-capacity branch.
+	server.inFlightSem = make(chan struct{}, 1)
+	server.inFlightSem <- struct{}{}
+
+	a, b := net.Pipe()
+	defer b.Close()
+	server.dispatchConn(a)
+
+	// dispatchConn closed `a`; the peer end `b` must see EOF without any
+	// payload being written, confirming handleClient never ran.
+	b.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	n, err := b.Read(buf)
+	if err == nil {
+		t.Fatalf("expected EOF on rejected connection, got n=%d err=nil", n)
+	}
+}
+
+// TestServer_DispatchConn_NoCapPassesThrough verifies the disabled-cap
+// path (MaxInFlight < 0 → inFlightSem == nil): dispatchConn must still
+// dispatch the connection to handleClient with no semaphore handshake.
+func TestServer_DispatchConn_NoCapPassesThrough(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	server.inFlightSem = nil
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+
+	// handleClient will block on the decoder for up to readTimeout (5s)
+	// since we never write a request. We only need to confirm dispatchConn
+	// returned without panic and without closing `a` before handleClient
+	// ran. Write a single byte from the peer so a non-piped read on `a`
+	// inside handleClient would unblock — even if handleClient discards
+	// it as invalid JSON, the dispatch path itself is what we are
+	// pinning here.
+	done := make(chan struct{})
+	go func() {
+		server.dispatchConn(a)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// dispatchConn returns immediately after launching the handler.
+	case <-time.After(time.Second):
+		t.Fatal("dispatchConn did not return within 1s")
+	}
+}

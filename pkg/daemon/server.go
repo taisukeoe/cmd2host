@@ -31,6 +31,13 @@ const (
 // Server handles TCP and Unix socket connections and command proxying.
 // baseDir anchors per-instance directory lookups for project configs and the
 // token store; all internal config / auth path resolution flows through it.
+//
+// inFlightSem caps concurrent handleClient goroutines. The channel's
+// capacity comes from DaemonConfig.MaxInFlight; a nil channel means the
+// cap is disabled (DaemonConfig.MaxInFlight < 0). acceptLoop acquires a
+// slot before spawning the handler and the handler returns the slot when
+// it exits, so the cap is enforced uniformly across the TCP and Unix
+// transports.
 type Server struct {
 	daemonConfig *config.DaemonConfig
 	validator    *Validator
@@ -38,6 +45,7 @@ type Server struct {
 	tcpListener  net.Listener
 	unixListener net.Listener
 	baseDir      string
+	inFlightSem  chan struct{}
 }
 
 // NewServer creates a new Server using the default cmd2host base directory
@@ -66,11 +74,16 @@ func NewServerAt(dir string, daemonConfig *config.DaemonConfig) (*Server, error)
 		return nil, fmt.Errorf("NewServerAt: dir must be non-empty")
 	}
 	tokenStore := auth.NewTokenStoreAt(filepath.Join(dir, "tokens"))
+	var sem chan struct{}
+	if daemonConfig.MaxInFlight > 0 {
+		sem = make(chan struct{}, daemonConfig.MaxInFlight)
+	}
 	return &Server{
 		daemonConfig: daemonConfig,
 		validator:    NewValidator(),
 		tokenStore:   tokenStore,
 		baseDir:      dir,
+		inFlightSem:  sem,
 	}, nil
 }
 
@@ -811,7 +824,13 @@ func (s *Server) createUnixListener() (net.Listener, error) {
 	return listener, nil
 }
 
-// acceptLoop handles incoming connections on a listener
+// acceptLoop handles incoming connections on a listener.
+//
+// When the in-flight cap is set (inFlightSem != nil) the loop tries to
+// acquire a slot before spawning a handler. If the cap is reached the
+// connection is closed immediately without reading a request; this keeps
+// the daemon's authentication-failure delay from amplifying a burst of
+// connections into a long backlog of stacked sleeps.
 func (s *Server) acceptLoop(listener net.Listener) error {
 	for {
 		conn, err := listener.Accept()
@@ -823,7 +842,27 @@ func (s *Server) acceptLoop(listener net.Listener) error {
 			fmt.Println("Accept error:", err)
 			continue
 		}
+		s.dispatchConn(conn)
+	}
+}
+
+// dispatchConn launches handleClient under the in-flight cap. When the cap
+// channel is non-nil and at capacity the connection is dropped immediately
+// (no response read, no response written) so the caller sees a clean EOF.
+func (s *Server) dispatchConn(conn net.Conn) {
+	if s.inFlightSem == nil {
 		go s.handleClient(conn)
+		return
+	}
+	select {
+	case s.inFlightSem <- struct{}{}:
+		go func() {
+			defer func() { <-s.inFlightSem }()
+			s.handleClient(conn)
+		}()
+	default:
+		fmt.Printf("  -> connection dropped: max_in_flight=%d reached\n", cap(s.inFlightSem))
+		conn.Close()
 	}
 }
 
