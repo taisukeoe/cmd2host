@@ -25,7 +25,7 @@ func main() {
 		daemonHost  = flag.String("host", "host.docker.internal", "cmd2host daemon host (TCP mode)")
 		daemonPort  = flag.Int("port", 9876, "cmd2host daemon port (TCP mode)")
 		socketPath  = flag.String("socket", "", "cmd2host daemon socket path (Unix mode, overrides host/port)")
-		token       = flag.String("token", "", "Authentication token (deprecated: passes the token in argv where any reader of /proc/<pid>/cmdline can see it; prefer -token-file or the CMD2HOST_TOKEN environment variable)")
+		token       = flag.String("token", "", "Authentication token (deprecated; use -token-file or the CMD2HOST_TOKEN environment variable)")
 		tokenFile   = flag.String("token-file", "", "Path to file containing authentication token")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 	)
@@ -37,9 +37,10 @@ func main() {
 	}
 
 	if *token != "" {
-		// The token reaches the kernel's argv table and is visible in
-		// /proc/<pid>/cmdline on Linux and the equivalent on macOS. The flag
-		// is kept for compatibility but should not be used in new setups.
+		// Kept parseable for compatibility; new setups should not use this
+		// path. The recommended inputs are -token-file and CMD2HOST_TOKEN,
+		// both of which are documented in the README and the DevContainer
+		// mcp.json template.
 		fmt.Fprintln(os.Stderr, "cmd2host-mcp: -token is deprecated and will be removed in a future release; use -token-file or the CMD2HOST_TOKEN environment variable instead.")
 	}
 
