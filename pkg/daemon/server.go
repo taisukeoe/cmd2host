@@ -485,18 +485,18 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 	}
 }
 
-// truncatedSuffix is appended to a stream string when the daemon caps the
-// stream at maxBytes. It is kept for backward compatibility with clients that
-// only inspect the string. Newer consumers should rely on the typed
-// (StdoutTruncated / StderrTruncated, StdoutOriginalBytes / StderrOriginalBytes)
-// fields on the response instead.
-const truncatedSuffix = "\n... (truncated)"
-
 // truncateOutput caps s at maxBytes. When truncation happens, the returned
-// string carries truncatedSuffix and wasTruncated is true. originalBytes is
-// always the byte length of the input regardless of truncation, so consumers
-// can report how much of the original stream was actually surfaced even when
-// truncation is disabled (maxBytes <= 0).
+// string is the byte prefix at the rune boundary at or before maxBytes and
+// wasTruncated is true; the daemon does not mix any synthetic marker into
+// the stream body. Consumers signal truncation to their downstream via the
+// typed StdoutTruncated / StderrTruncated and StdoutOriginalBytes /
+// StderrOriginalBytes fields on the response, which keeps the daemon's
+// stream output a clean prefix of the original command output suitable for
+// streaming JSON parsers.
+//
+// originalBytes is always the byte length of the input regardless of
+// truncation, so consumers can report how much of the original stream was
+// actually surfaced even when truncation is disabled (maxBytes <= 0).
 //
 // When the cap falls inside a multi-byte UTF-8 sequence, the cut point is
 // pulled back to the previous rune boundary so the daemon never marshals an
@@ -509,7 +509,7 @@ func truncateOutput(s string, maxBytes int) (out string, originalBytes int64, wa
 		return s, originalBytes, false
 	}
 	cut := runeBoundaryBefore(s, maxBytes)
-	return s[:cut] + truncatedSuffix, originalBytes, true
+	return s[:cut], originalBytes, true
 }
 
 // runeBoundaryBefore returns the largest index i in [0, max] such that

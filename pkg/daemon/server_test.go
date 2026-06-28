@@ -440,12 +440,12 @@ func TestTruncateOutput(t *testing.T) {
 		{"empty", "", 100, "", 0, false},
 		{"below cap", "hello", 100, "hello", 5, false},
 		{"equal to cap", "hello", 5, "hello", 5, false},
-		{"above cap", "helloworld", 5, "hello\n... (truncated)", 10, true},
+		{"above cap", "helloworld", 5, "hello", 10, true},
 		{"disabled when cap is zero", "hello", 0, "hello", 5, false},
 		{"disabled when cap is negative", "hello", -1, "hello", 5, false},
 		{"non-empty stream reports bytes even when cap disabled", "hello", 0, "hello", 5, false},
-		{"utf8 cut pulled back to rune boundary", "あい", 4, "あ\n... (truncated)", 6, true},
-		{"utf8 cut on rune boundary", "あい", 3, "あ\n... (truncated)", 6, true},
+		{"utf8 cut pulled back to rune boundary", "あい", 4, "あ", 6, true},
+		{"utf8 cut on rune boundary", "あい", 3, "あ", 6, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -556,8 +556,13 @@ func TestServer_RunOperation_TruncatesStdoutWithTypedFlag(t *testing.T) {
 	if resp.StdoutOriginalBytes != 11 {
 		t.Errorf("expected StdoutOriginalBytes=11, got %d", resp.StdoutOriginalBytes)
 	}
-	if !strings.HasSuffix(resp.Stdout, "\n... (truncated)") {
-		t.Errorf("expected legacy truncation suffix preserved in stdout, got %q", resp.Stdout)
+	// The truncation signal is the typed flag; the stream body must be a
+	// clean prefix of the original output with no synthetic suffix mixed in.
+	if strings.Contains(resp.Stdout, "... (truncated)") {
+		t.Errorf("stream body must not contain a synthetic truncation marker, got %q", resp.Stdout)
+	}
+	if resp.Stdout != "hello" {
+		t.Errorf("expected stdout prefix %q, got %q", "hello", resp.Stdout)
 	}
 	if resp.StderrTruncated {
 		t.Errorf("expected StderrTruncated=false, got true")

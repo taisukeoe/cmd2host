@@ -133,6 +133,27 @@ func TestFormatRunOutput_TruncatedStderr(t *testing.T) {
 	}
 }
 
+func TestFormatRunOutput_TruncatedCleanPrefixEmitsIndicator(t *testing.T) {
+	// Current daemon behaviour: stream body is a clean prefix of the
+	// original output with no synthetic suffix; the typed flag is the
+	// truncation signal. The MCP layer must still emit the machine-backed
+	// indicator outside the fenced block.
+	resp := &OperationResponse{
+		ExitCode:            0,
+		Stdout:              "hello world",
+		StdoutTruncated:     true,
+		StdoutOriginalBytes: 1500000,
+	}
+	got := formatRunOutput(resp)
+	wantIndicator := "*stdout truncated: shown 11 of 1500000 bytes*"
+	if !strings.Contains(got, wantIndicator) {
+		t.Errorf("expected indicator %q in output:\n%s", wantIndicator, got)
+	}
+	if strings.Contains(got, "... (truncated)") {
+		t.Errorf("expected no synthetic suffix in output:\n%s", got)
+	}
+}
+
 func TestFormatRunOutput_LegacyDaemonPreservesSuffixWithoutIndicator(t *testing.T) {
 	// An older daemon that does not set the typed flag still produces the
 	// legacy literal suffix inside the stream string. The client MUST preserve

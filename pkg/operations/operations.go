@@ -78,9 +78,10 @@ type Request struct {
 // Truncation indicator fields (additive, optional):
 //   - StdoutTruncated / StderrTruncated: true when the corresponding stream
 //     exceeded the configured cap. When the flag is true, the Stdout / Stderr
-//     string contains a prefix of the original output followed by the legacy
-//     `\n... (truncated)` suffix that the daemon still appends for backward
-//     compatibility with clients that ignore the typed flag.
+//     string holds a clean prefix of the original output cut at a UTF-8 rune
+//     boundary. The daemon does not mix any synthetic marker into the stream
+//     body so that streaming JSON parsers downstream see only the original
+//     command output and do not have to filter trailing daemon-supplied text.
 //   - StdoutOriginalBytes / StderrOriginalBytes: the byte length of the
 //     original (pre-truncation) output. Populated for streams that carry
 //     actual command output (success exit and exec exit-code paths). Error
