@@ -417,6 +417,80 @@ func TestReverseMatch_OptionalPlaceholderOmissionIsRejectedV1(t *testing.T) {
 	}
 }
 
+// TestReverseMatch_TemplateMisconfigFailsLoud guards the sentinel-error
+// path: when a template names a placeholder that is missing from
+// op.Params, or declares a placeholder type reverse-match cannot bind,
+// ReverseMatch must surface a loud error naming the bad operation,
+// instead of silently collapsing to "no allowed operation matches
+// argv ...". User-argv mismatches (integer parse failure) keep the
+// quiet "no match" diagnostic and are pinned by the existing
+// TestReverseMatch_RejectsBadInputs cases.
+func TestReverseMatch_TemplateMisconfigFailsLoud(t *testing.T) {
+	tests := []struct {
+		name        string
+		op          *Operation
+		argv        []string
+		argvCommand string
+		// substring expected inside the surfaced error to confirm the
+		// operator-actionable diagnostic mentions the op ID and reason.
+		wantErrSubstrings []string
+	}{
+		{
+			name: "whole-arg placeholder with no schema",
+			op: &Operation{
+				Command:      "demo",
+				ArgsTemplate: []string{"sub", "{undefined_param}"},
+				Params:       map[string]ParamSchema{}, // intentionally empty
+			},
+			argvCommand:       "demo",
+			argv:              []string{"sub", "value"},
+			wantErrSubstrings: []string{"demo_op", "no schema", "undefined_param"},
+		},
+		{
+			name: "inline placeholder with no schema",
+			op: &Operation{
+				Command:      "demo",
+				ArgsTemplate: []string{"path/{undefined_param}/leaf"},
+				Params:       map[string]ParamSchema{}, // intentionally empty
+			},
+			argvCommand:       "demo",
+			argv:              []string{"path/anything/leaf"},
+			wantErrSubstrings: []string{"demo_op", "no schema", "undefined_param"},
+		},
+		{
+			name: "whole-arg placeholder with unsupported reverse-match type",
+			op: &Operation{
+				Command:      "demo",
+				ArgsTemplate: []string{"sub", "{weird}"},
+				Params: map[string]ParamSchema{
+					"weird": {Type: "array", Items: &ItemsSchema{Type: "string"}},
+				},
+			},
+			argvCommand:       "demo",
+			argv:              []string{"sub", "x"},
+			wantErrSubstrings: []string{"demo_op", "unsupported reverse-match type", "array"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.op.CompilePatterns(); err != nil {
+				t.Fatalf("CompilePatterns: %v", err)
+			}
+			candidates := []CandidateOp{{ID: "demo_op", Operation: tt.op}}
+			_, err := ReverseMatch(tt.argvCommand, tt.argv, candidates, stdInjection)
+			if err == nil {
+				t.Fatalf("expected loud template-misconfig error, got nil")
+			}
+			for _, want := range tt.wantErrSubstrings {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
 func TestReverseMatch_AmbiguousFailsLoud(t *testing.T) {
 	// Two ops with identical effective templates: reverse-match cannot pick.
 	opA := &Operation{

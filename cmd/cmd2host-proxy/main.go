@@ -21,6 +21,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,10 +55,35 @@ func main() {
 
 // run is split out of main so the exit-code path can be unit-tested.
 // argv corresponds to os.Args (full, including argv[0]).
-func run(argv []string, stdout, stderr *os.File) int {
-	// Strip wrapper-owned flags from a copy of argv before extracting
-	// the host command. The remaining args (after FlagSet.Parse) are
-	// what the user wanted to send to gh / aws / ....
+func run(argv []string, stdout, stderr io.Writer) int {
+	if len(argv) == 0 {
+		fmt.Fprintln(stderr, "cmd2host-proxy: empty argv")
+		return proxyclient.ExitInfrastructure
+	}
+
+	// Symlink form (argv[0] basename is gh / aws / ...) skips wrapper
+	// flag parsing entirely so the host command's flags (e.g.
+	// `gh --version`, `gh -R owner/repo`) are not mis-interpreted as
+	// wrapper flags. Direct form (argv[0] basename is "cmd2host-proxy")
+	// parses wrapper-owned flags first and may exit early on
+	// `--version`; only then does it require a host command.
+	base := filepath.Base(argv[0])
+	if base != "cmd2host-proxy" {
+		// Symlink form: env-resolved defaults are used; per-invocation
+		// flag overrides are not available on this path.
+		return dispatch(base, argv[1:],
+			envOr(envHost, defaultHost),
+			envIntOr(envPort, defaultPort),
+			os.Getenv(envSocket),
+			envOr(envTokenFile, defaultTokFile),
+			os.Getenv(envTargetRepo),
+			stdout, stderr,
+		)
+	}
+
+	// Direct form: parse wrapper-owned flags before requiring a host
+	// command. `--version` exits 0 here, ahead of the missing-command
+	// check, so `cmd2host-proxy --version` works as documented.
 	fs := flag.NewFlagSet("cmd2host-proxy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -68,14 +94,7 @@ func run(argv []string, stdout, stderr *os.File) int {
 	targetRepoFlag := fs.String("target-repo", os.Getenv(envTargetRepo), "Target repo override (defaults to the project's primary repo)")
 	showVersion := fs.Bool("version", false, "Show version and exit")
 
-	// Wrapper-owned flags must be split from the host command's flags.
-	// When invoked via symlink (argv[0] is gh / aws / ... / ...), the
-	// wrapper has no flags of its own to parse — everything after
-	// argv[0] belongs to the host command. The direct-invocation form
-	// (`cmd2host-proxy [flags] <command> [args...]`) is the only one
-	// that uses fs.Parse.
-	command, hostArgs, err := splitArgvByInvocation(argv, fs)
-	if err != nil {
+	if err := fs.Parse(argv[1:]); err != nil {
 		// fs.Parse already wrote a usage message to stderr.
 		return proxyclient.ExitInfrastructure
 	}
@@ -85,16 +104,34 @@ func run(argv []string, stdout, stderr *os.File) int {
 		return 0
 	}
 
-	token, terr := readTokenFile(*tokenFileFlag)
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fmt.Fprintln(stderr, "cmd2host-proxy: missing host command")
+		fs.Usage()
+		return proxyclient.ExitInfrastructure
+	}
+
+	return dispatch(rest[0], rest[1:],
+		*hostFlag, *portFlag, *socketFlag, *tokenFileFlag, *targetRepoFlag,
+		stdout, stderr,
+	)
+}
+
+// dispatch loads the token file, constructs a proxyclient.Client, and
+// hands off to proxyclient.Dispatch. Extracted from run() so the symlink
+// and direct invocation branches share one execution path once the
+// command + argv pair is resolved.
+func dispatch(command string, hostArgs []string, host string, port int, socket, tokenFile, targetRepo string, stdout, stderr io.Writer) int {
+	token, terr := readTokenFile(tokenFile)
 	if terr != nil {
 		fmt.Fprintln(stderr, "cmd2host: "+terr.Error()+"; run mcp__cmd2host__cmd2host_list_operations to discover supported operations")
 		return proxyclient.ExitTokenRead
 	}
 
 	client := &proxyclient.Client{
-		Host:       *hostFlag,
-		Port:       *portFlag,
-		SocketPath: *socketFlag,
+		Host:       host,
+		Port:       port,
+		SocketPath: socket,
 		Token:      token,
 	}
 
@@ -102,47 +139,10 @@ func run(argv []string, stdout, stderr *os.File) int {
 		Command:    command,
 		Argv:       hostArgs,
 		Client:     client,
-		TargetRepo: *targetRepoFlag,
+		TargetRepo: targetRepo,
 		Stdout:     stdout,
 		Stderr:     stderr,
 	})
-}
-
-// splitArgvByInvocation distinguishes the symlink invocation form
-// (argv[0] is gh / aws / ... / etc.) from the direct invocation form
-// (argv[0] basename is cmd2host-proxy). Returns the host command name
-// and the host command's argv tail.
-//
-// In direct form, the caller may pass wrapper-owned flags between
-// "cmd2host-proxy" and the host command name, e.g.:
-//
-//	cmd2host-proxy -host=10.0.0.5 -port=9876 gh pr view 42
-//
-// fs.Parse consumes the wrapper flags up to the first non-flag
-// positional, which becomes the host command. Everything after it is
-// the host command's argv. In symlink form, fs.Parse is skipped
-// entirely so the host command's flags (e.g. `-R owner/repo`) are not
-// mis-interpreted as wrapper flags.
-func splitArgvByInvocation(argv []string, fs *flag.FlagSet) (command string, hostArgs []string, err error) {
-	if len(argv) == 0 {
-		return "", nil, fmt.Errorf("no argv")
-	}
-	base := filepath.Base(argv[0])
-	if base != "cmd2host-proxy" {
-		// Symlink form: argv[0] is the host command, the rest is its argv.
-		return base, argv[1:], nil
-	}
-	// Direct form: parse wrapper flags, then peel off the host command.
-	if err := fs.Parse(argv[1:]); err != nil {
-		return "", nil, err
-	}
-	rest := fs.Args()
-	if len(rest) == 0 {
-		fmt.Fprintln(fs.Output(), "cmd2host-proxy: missing host command")
-		fs.Usage()
-		return "", nil, fmt.Errorf("missing host command")
-	}
-	return rest[0], rest[1:], nil
 }
 
 // readTokenFile reads and trims a session token from the given path.

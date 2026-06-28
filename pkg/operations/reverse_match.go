@@ -52,12 +52,33 @@
 package operations
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+// errSchemaMissing and errUnsupportedType are sentinel errors that
+// distinguish template-configuration problems from ordinary user-argv
+// mismatches inside the reverse-match path. Both kinds surface as `error`
+// from bindParam / compileInlineTemplateRegex; the caller (tryMatchCandidate)
+// uses errors.Is to bubble misconfiguration up so reverse-match fails loud
+// with an operator-actionable diagnostic, instead of silently collapsing to
+// "no allowed operation matches argv". User-argv mismatches (integer parse
+// failure, repeated-placeholder values disagreeing) keep returning plain
+// errors so the candidate is treated as a non-match.
+var (
+	errSchemaMissing   = errors.New("reverse-match: placeholder has no schema in op.Params")
+	errUnsupportedType = errors.New("reverse-match: placeholder has unsupported reverse-match type")
+)
+
+// isTemplateMisconfig reports whether err is a sentinel that names an
+// operator-fixable template defect (as opposed to a user-argv mismatch).
+func isTemplateMisconfig(err error) bool {
+	return errors.Is(err, errSchemaMissing) || errors.Is(err, errUnsupportedType)
+}
 
 // InjectionOnlyParams is the set of placeholder names that the daemon
 // injects from per-request execution context (see pkg/daemon/server.go
@@ -233,6 +254,9 @@ func tryMatchCandidate(op *Operation, argv []string, injection map[string]string
 				return nil, nil, false, fmt.Errorf("internal: injection-only placeholder %q reached match step", name)
 			}
 			if err := bindParam(op, name, pos, params); err != nil {
+				if isTemplateMisconfig(err) {
+					return nil, nil, false, err
+				}
 				return nil, nil, false, nil
 			}
 
@@ -250,6 +274,9 @@ func tryMatchCandidate(op *Operation, argv []string, injection map[string]string
 					continue
 				}
 				if err := bindParam(op, name, m[j+1], params); err != nil {
+					if isTemplateMisconfig(err) {
+						return nil, nil, false, err
+					}
 					return nil, nil, false, nil
 				}
 			}
@@ -319,7 +346,7 @@ func effectiveTemplate(tmpl []string) []string {
 func bindParam(op *Operation, name, raw string, params map[string]ParamValue) error {
 	schema, hasSchema := op.Params[name]
 	if !hasSchema {
-		return fmt.Errorf("placeholder %q has no schema", name)
+		return fmt.Errorf("%w: placeholder %q", errSchemaMissing, name)
 	}
 	var newVal ParamValue
 	switch schema.Type {
@@ -332,7 +359,7 @@ func bindParam(op *Operation, name, raw string, params map[string]ParamValue) er
 	case "string", "":
 		newVal = raw
 	default:
-		return fmt.Errorf("placeholder %q has unsupported reverse-match type %q", name, schema.Type)
+		return fmt.Errorf("%w: placeholder %q has type %q", errUnsupportedType, name, schema.Type)
 	}
 	if existing, ok := params[name]; ok {
 		if existing != newVal {
@@ -381,7 +408,17 @@ func compileInlineTemplateRegex(tmpl string, schemas map[string]ParamSchema, inj
 			}
 			b.WriteString(regexp.QuoteMeta(val))
 		} else {
-			pattern := capturePatternForSchema(schemas[name])
+			// Fail loud here when an inline placeholder names a param
+			// that the op did not declare. The fallback ".+?" would
+			// otherwise let the regex match opportunistically, and the
+			// downstream bindParam would convert the misconfig into a
+			// candidate mismatch — hiding the operator-fixable defect
+			// behind a generic "no allowed operation matches argv".
+			schema, hasSchema := schemas[name]
+			if !hasSchema {
+				return nil, nil, fmt.Errorf("%w: placeholder %q in template token %q", errSchemaMissing, name, tmpl)
+			}
+			pattern := capturePatternForSchema(schema)
 			b.WriteString("(")
 			b.WriteString(pattern)
 			b.WriteString(")")
