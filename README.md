@@ -682,7 +682,9 @@ MCP server requests use token authentication. Operations are validated against:
 2. Project config allowance status (hash verification)
 3. Allowed operations list (default deny)
 4. Parameter type checking and validation
-5. Constraint checks (branch patterns, path globs)
+5. Path glob denylist (`path_deny`)
+
+Branch-level access control (which refs may be pushed to which target) is intentionally out of scope. Use GitHub branch protection rules on each target repo to gate who may push to which branch; the daemon authenticates and routes the push, but does not enforce branch policy itself.
 
 ## Per-session wrapper example
 
