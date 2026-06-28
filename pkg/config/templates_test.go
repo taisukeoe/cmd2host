@@ -19,7 +19,7 @@ func TestListTemplates(t *testing.T) {
 	}
 
 	// Check that known templates are present
-	expectedTemplates := []string{"readonly", "github_write", "git_write"}
+	expectedTemplates := []string{"readonly", "github_write", "git_write", "git_github_write", "aws_selected"}
 	for _, expected := range expectedTemplates {
 		found := false
 		for _, tmpl := range templates {
@@ -65,6 +65,12 @@ func TestGetTemplate(t *testing.T) {
 			templateName: "git_write",
 			wantErr:      false,
 			checkContent: "git_push",
+		},
+		{
+			name:         "aws_selected template",
+			templateName: "aws_selected",
+			wantErr:      false,
+			checkContent: "aws_sts_get_caller_identity",
 		},
 		{
 			name:         "unknown template",
