@@ -302,6 +302,102 @@ func TestDispatch_MissingClientReturnsInfra(t *testing.T) {
 	}
 }
 
+// TestDispatch_SurfacesStdoutTruncationOnStderr pins the indicator the
+// proxy now writes to stderr when the daemon flags stdout truncation.
+// The exit code is the host command's actual exit (passthrough). The
+// stdout body is the prefix the daemon returned; the indicator goes to
+// stderr so it does not pollute a pipe consumer of stdout.
+func TestDispatch_SurfacesStdoutTruncationOnStderr(t *testing.T) {
+	fd := newFakeDaemon(t, operations.Response{
+		ExitCode:            0,
+		Stdout:              "hello",
+		StdoutTruncated:     true,
+		StdoutOriginalBytes: 1500000,
+	})
+	defer fd.close()
+	host, port := fd.addr()
+
+	var stdout, stderr bytes.Buffer
+	exit := Dispatch(Options{
+		Command:      "gh",
+		Argv:         []string{"pr", "view", "42"},
+		Client:       &Client{Host: host, Port: port, Token: "tok"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		IsStdinPiped: stdinAbsent,
+	})
+	if exit != 0 {
+		t.Errorf("exit = %d, want 0 (passthrough)", exit)
+	}
+	if stdout.String() != "hello" {
+		t.Errorf("stdout = %q, want prefix only", stdout.String())
+	}
+	want := "cmd2host: stdout truncated by host daemon (shown 5 of 1500000 bytes)"
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+	}
+}
+
+// TestDispatch_SurfacesStderrTruncationOnStderr mirrors the stdout
+// case for the stderr stream. Both indicators land on stderr so a
+// stream-aware caller still distinguishes "host produced stderr" from
+// "host produced more stderr than we surface".
+func TestDispatch_SurfacesStderrTruncationOnStderr(t *testing.T) {
+	fd := newFakeDaemon(t, operations.Response{
+		ExitCode:            1,
+		Stderr:              "errlog",
+		StderrTruncated:     true,
+		StderrOriginalBytes: 70000,
+	})
+	defer fd.close()
+	host, port := fd.addr()
+
+	var stdout, stderr bytes.Buffer
+	exit := Dispatch(Options{
+		Command:      "gh",
+		Argv:         []string{"pr", "view", "42"},
+		Client:       &Client{Host: host, Port: port, Token: "tok"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		IsStdinPiped: stdinAbsent,
+	})
+	if exit != 1 {
+		t.Errorf("exit = %d, want 1 (passthrough)", exit)
+	}
+	want := "cmd2host: stderr truncated by host daemon (shown 6 of 70000 bytes)"
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+	}
+	if !strings.Contains(stderr.String(), "errlog") {
+		t.Errorf("stderr = %q, want it to still carry the host stderr body", stderr.String())
+	}
+}
+
+// TestDispatch_NoTruncationNoIndicator pins the negative case: when
+// the daemon does not flag truncation, the proxy must not synthesize
+// an indicator out of thin air.
+func TestDispatch_NoTruncationNoIndicator(t *testing.T) {
+	fd := newFakeDaemon(t, operations.Response{
+		ExitCode: 0,
+		Stdout:   "ok\n",
+	})
+	defer fd.close()
+	host, port := fd.addr()
+
+	var stdout, stderr bytes.Buffer
+	Dispatch(Options{
+		Command:      "gh",
+		Argv:         []string{"pr", "view", "42"},
+		Client:       &Client{Host: host, Port: port, Token: "tok"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		IsStdinPiped: stdinAbsent,
+	})
+	if strings.Contains(stderr.String(), "truncated") {
+		t.Errorf("stderr = %q, must not contain a truncation indicator", stderr.String())
+	}
+}
+
 func TestCommandFromArg0(t *testing.T) {
 	tests := []struct {
 		in, want string

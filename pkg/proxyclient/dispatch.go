@@ -134,6 +134,18 @@ func Dispatch(opts Options) int {
 	if resp.Stderr != "" {
 		_, _ = io.WriteString(stderr, resp.Stderr)
 	}
+	// Surface daemon-side truncation flags on stderr so a caller piping
+	// stdout into a streaming JSON / NDJSON consumer sees that the body
+	// is incomplete. The daemon's stream bodies are now clean prefixes
+	// (no synthetic suffix), so without this notice the proxy would
+	// silently drop the truncation signal compared to the MCP route,
+	// which emits a similar indicator outside its fenced block.
+	if resp.StdoutTruncated {
+		fmt.Fprintf(stderr, "cmd2host: stdout truncated by host daemon (shown %d of %d bytes)\n", len(resp.Stdout), resp.StdoutOriginalBytes)
+	}
+	if resp.StderrTruncated {
+		fmt.Fprintf(stderr, "cmd2host: stderr truncated by host daemon (shown %d of %d bytes)\n", len(resp.Stderr), resp.StderrOriginalBytes)
+	}
 	return resp.ExitCode
 }
 
