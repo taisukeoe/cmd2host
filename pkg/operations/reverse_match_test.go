@@ -407,6 +407,33 @@ func TestReverseMatch_InlineTemplateLiteralsPreserveUTF8(t *testing.T) {
 
 func ptrInt(v int) *int { return &v }
 
+// TestReverseMatch_InjectedFlagHintSurfacesOnRedundantInput pins the
+// caller-facing hint: when the user redundantly types a flag literal
+// that the daemon paired-drops from a candidate's template (the
+// `--no-verify` in git_push is the canonical case — it sits adjacent
+// to {expected_git_url} so effectiveTemplate strips it), the error
+// message now names the operation and the dropped flag so the user
+// can fix their invocation without inspecting the daemon's
+// implementation.
+func TestReverseMatch_InjectedFlagHintSurfacesOnRedundantInput(t *testing.T) {
+	candidates := gitGithubWriteCandidates(t)
+	_, err := ReverseMatch(
+		"git",
+		[]string{"push", "--no-verify", "main:refs/heads/main"},
+		candidates,
+		stdInjection,
+	)
+	if err == nil {
+		t.Fatalf("expected reject for redundant --no-verify, got nil")
+	}
+	if !strings.Contains(err.Error(), "no allowed operation matches argv") {
+		t.Errorf("expected base reject message, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "git_push injects --no-verify automatically") {
+		t.Errorf("expected hint naming git_push and --no-verify, got %q", err.Error())
+	}
+}
+
 func TestReverseMatch_AcceptsAbsolutePathCommand(t *testing.T) {
 	// Phase B wrappers can be invoked with argv[0] equal to a basename
 	// ("gh") or an absolute path ("/usr/bin/gh") depending on how the

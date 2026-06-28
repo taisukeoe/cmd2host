@@ -156,7 +156,11 @@ func ReverseMatch(command string, argv []string, candidates []CandidateOp, injec
 
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("cmd2host: no allowed operation matches argv %q", strings.Join(append([]string{command}, argv...), " "))
+		base := fmt.Sprintf("cmd2host: no allowed operation matches argv %q", strings.Join(append([]string{command}, argv...), " "))
+		if hint := injectedFlagHint(argv, commandCandidates); hint != "" {
+			return nil, fmt.Errorf("%s; %s", base, hint)
+		}
+		return nil, fmt.Errorf("%s", base)
 	case 1:
 		return &ResolvedRequest{
 			OperationID: matches[0].id,
@@ -314,6 +318,64 @@ func tryMatchCandidate(op *Operation, argv []string, injection map[string]string
 	}
 
 	return params, flags, true, nil
+}
+
+// injectedFlagHint returns a single-line hint when user-typed argv
+// contains flag literals that the daemon paired-drops from any
+// candidate's template (e.g. `git_push`'s `--no-verify` sits adjacent
+// to the injection-only `{expected_git_url}` placeholder, so the
+// effective template strips it). Without this hint, a user who
+// redundantly types `git push --no-verify <refspec>` gets the generic
+// "no allowed operation matches argv" with no clue why.
+//
+// The hint enumerates each match as "<operation_id> injects <flag>
+// automatically; drop it from your invocation". Returns "" when no
+// argv token matches a paired-dropped literal in any candidate.
+func injectedFlagHint(argv []string, candidates []CandidateOp) string {
+	if len(argv) == 0 || len(candidates) == 0 {
+		return ""
+	}
+	argvSet := make(map[string]struct{}, len(argv))
+	for _, tok := range argv {
+		argvSet[tok] = struct{}{}
+	}
+	var notes []string
+	for _, c := range candidates {
+		if c.Operation == nil {
+			continue
+		}
+		for _, tok := range pairedDroppedFlagLiterals(c.Operation.ArgsTemplate) {
+			if _, present := argvSet[tok]; !present {
+				continue
+			}
+			notes = append(notes, fmt.Sprintf("%s injects %s automatically (drop it from your argv)", c.ID, tok))
+		}
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return strings.Join(notes, "; ")
+}
+
+// pairedDroppedFlagLiterals returns the flag-shaped tokens that
+// effectiveTemplate strips from tmpl as part of the
+// injection-only-placeholder pairing. Walks tmpl in step with the same
+// pairing logic effectiveTemplate uses.
+func pairedDroppedFlagLiterals(tmpl []string) []string {
+	var out []string
+	for i, t := range tmpl {
+		if !isWholeArgPlaceholder(t) {
+			continue
+		}
+		name := t[1 : len(t)-1]
+		if !InjectionOnlyParams[name] {
+			continue
+		}
+		if i > 0 && isFlagLiteral(tmpl[i-1]) {
+			out = append(out, tmpl[i-1])
+		}
+	}
+	return out
 }
 
 // effectiveTemplate drops whole-arg injection-only placeholders and any
