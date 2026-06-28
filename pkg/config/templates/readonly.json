@@ -26,6 +26,7 @@
         "number": {"type": "integer", "min": 1}
       },
       "allowed_flags": ["--json", "--comments"],
+      "bool_flags": ["--comments"],
       "description": "View a pull request"
     },
     "gh_pr_list": {
@@ -42,6 +43,7 @@
         "number": {"type": "integer", "min": 1}
       },
       "allowed_flags": ["--paginate", "--jq"],
+      "bool_flags": ["--paginate"],
       "description": "List inline pull request review comments"
     },
     "gh_issue_view": {
@@ -51,6 +53,7 @@
         "number": {"type": "integer", "min": 1}
       },
       "allowed_flags": ["--json", "--comments"],
+      "bool_flags": ["--comments"],
       "description": "View an issue"
     },
     "gh_issue_list": {
