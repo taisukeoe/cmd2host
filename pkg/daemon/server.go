@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/taisukeoe/cmd2host/internal/configdir"
@@ -31,6 +32,13 @@ const (
 // Server handles TCP and Unix socket connections and command proxying.
 // baseDir anchors per-instance directory lookups for project configs and the
 // token store; all internal config / auth path resolution flows through it.
+//
+// inFlightSem caps concurrent handleClient goroutines. The channel's
+// capacity comes from DaemonConfig.MaxInFlight; a nil channel means the
+// cap is disabled (DaemonConfig.MaxInFlight < 0). acceptLoop acquires a
+// slot before spawning the handler and the handler returns the slot when
+// it exits, so the cap is enforced uniformly across the TCP and Unix
+// transports.
 type Server struct {
 	daemonConfig *config.DaemonConfig
 	validator    *Validator
@@ -38,6 +46,7 @@ type Server struct {
 	tcpListener  net.Listener
 	unixListener net.Listener
 	baseDir      string
+	inFlightSem  chan struct{}
 }
 
 // NewServer creates a new Server using the default cmd2host base directory
@@ -66,16 +75,28 @@ func NewServerAt(dir string, daemonConfig *config.DaemonConfig) (*Server, error)
 		return nil, fmt.Errorf("NewServerAt: dir must be non-empty")
 	}
 	tokenStore := auth.NewTokenStoreAt(filepath.Join(dir, "tokens"))
+	var sem chan struct{}
+	if daemonConfig.MaxInFlight > 0 {
+		sem = make(chan struct{}, daemonConfig.MaxInFlight)
+	}
 	return &Server{
 		daemonConfig: daemonConfig,
 		validator:    NewValidator(),
 		tokenStore:   tokenStore,
 		baseDir:      dir,
+		inFlightSem:  sem,
 	}, nil
 }
 
-// handleClient processes a single client connection
-func (s *Server) handleClient(conn net.Conn) {
+// handleClient processes a single client connection.
+//
+// releaseSlot returns the connection's in-flight slot to dispatchConn's
+// semaphore. Long-running but otherwise idle work (notably the
+// authentication-failure throttle sleep) should call releaseSlot before
+// blocking so the slot does not stay reserved for purely synthetic delay.
+// The callback is idempotent (sync.Once) so a final defer in dispatchConn
+// still safely catches paths that did not release explicitly.
+func (s *Server) handleClient(conn net.Conn, releaseSlot func()) {
 	defer conn.Close()
 	defer func() {
 		if r := recover(); r != nil {
@@ -122,18 +143,29 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Use buffered bytes for handlers (same data, no re-encoding)
 	data := buf.Bytes()
 
-	// Determine request type by checking for specific fields
+	// Determine request type by checking for specific fields. The raw_argv
+	// discriminator must precede the operation discriminator: raw-argv mode
+	// requests carry RawArgv but resolve Operation only after reverse-match,
+	// so the operation field may be empty at this point. The boolean is
+	// passed to handleOperationRequest as the single source of truth for
+	// raw-argv mode detection — Go's json.Unmarshal collapses `null` and
+	// missing fields to a nil slice, so inspecting the unmarshaled Request
+	// alone cannot distinguish `{"raw_argv":null}` (caller intent: raw-argv)
+	// from a request that omits the field (caller intent: operation entry).
+	_, hasRawArgv := rawRequest["raw_argv"]
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
-		s.handleListOperationsRequest(conn, data)
+		s.handleListOperationsRequest(conn, data, releaseSlot)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
-		s.handleDescribeOperationRequest(conn, data)
+		s.handleDescribeOperationRequest(conn, data, releaseSlot)
+	} else if hasRawArgv {
+		s.handleOperationRequest(conn, data, true, releaseSlot)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
-		s.handleOperationRequest(conn, data)
+		s.handleOperationRequest(conn, data, false, releaseSlot)
 	} else {
-		fmt.Println("  -> Unknown request type (missing 'operation' field)")
+		fmt.Println("  -> Unknown request type (missing 'operation' or 'raw_argv' field)")
 		s.sendOperationResponse(conn, operations.Response{
 			ExitCode:     1,
-			DeniedReason: strPtr("Unknown request type: missing 'operation' field"),
+			DeniedReason: strPtr("Unknown request type: missing 'operation' or 'raw_argv' field"),
 		})
 	}
 }
@@ -181,11 +213,27 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 	return projectConfig, projectID, nil
 }
 
-// handleOperationRequest handles new-style operation requests
-func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
+// handleOperationRequest handles new-style operation requests for both the
+// explicit operation entry (Operation field set) and the additive raw-argv
+// entry (raw_argv field present in the request JSON, Operation resolved by
+// reverse-match). rawArgvPresent reports JSON-level field presence detected
+// in handleClient — passing it explicitly avoids ambiguity between
+// `{"raw_argv":null}` and a request that omits the field (both deserialize
+// to nil RawArgv slice in Go).
+func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPresent bool, releaseSlot func()) {
+	// Pre-resolution audit lines use [OP:?] so an operator's `grep '\[OP:'`
+	// catches every operation request regardless of how far it gets through
+	// auth / project / target / reverse-match. The resolved [OP:<id>] line
+	// at the end carries the actual operation_id once reverse-match (or the
+	// explicit operation field) has settled it.
+	source := "mcp"
+	if rawArgvPresent {
+		source = "raw_argv"
+	}
+
 	var req operations.Request
 	if err := json.Unmarshal(data, &req); err != nil {
-		fmt.Println("  -> Invalid operation request:", err)
+		fmt.Printf("[OP:?] DENIED (request_parse) source=%s: %v\n", source, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    "",
 			ExitCode:     1,
@@ -197,8 +245,13 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	// Authenticate token
 	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
 	if !valid {
+		fmt.Printf("[OP:?] AUTH FAILED source=%s request_id=%s\n", source, req.RequestID)
+		// Return the slot before the synthetic delay so the cap is not
+		// occupied by a goroutine that is no longer doing useful work.
+		if releaseSlot != nil {
+			releaseSlot()
+		}
 		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
-		fmt.Println("  -> AUTH FAILED")
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -210,7 +263,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	// Resolve project config from token
 	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
-		fmt.Printf("  -> %v\n", err)
+		fmt.Printf("[OP:?] DENIED (project) source=%s request_id=%s: %v\n", source, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -218,16 +271,17 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		})
 		return
 	}
-
-	// Log operation request (params omitted to avoid logging sensitive data like PR body)
-	fmt.Printf("[OP:%s] project=%s target_repo=%q request_id=%s\n", req.Operation, projectID, req.TargetRepo, req.RequestID)
 
 	// Resolve the execution target: target_repo against project allow list +
 	// expected git URL derivation. Empty target_repo defaults to the primary
 	// repo (single-repo project ergonomics).
+	//
+	// Target is resolved before any per-mode branching so the raw-argv
+	// reverse-match path can substitute injection-only placeholders
+	// (repo / repo_path / expected_git_url) with their per-target values.
 	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
 	if err != nil {
-		fmt.Printf("  -> DENIED (target): %v\n", err)
+		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q request_id=%s: %v\n", source, projectID, req.TargetRepo, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -235,6 +289,72 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		})
 		return
 	}
+
+	// Raw-argv mode: resolve Operation/Params/Flags via reverse-match
+	// against the project's allowed operations before continuing through
+	// the shared validate / sanitize / execute path. Triggered by the
+	// presence of the raw_argv field in the request JSON (passed in via
+	// rawArgvPresent so `{"raw_argv":null}` and `{"raw_argv":[]}` both
+	// enter this branch and get an explicit raw-argv denial). Source is
+	// normalized to "raw_argv" for logging regardless of whether the
+	// caller pre-populated it.
+	if rawArgvPresent {
+		req.Source = "raw_argv"
+		if len(req.RawArgv) == 0 {
+			msg := "raw_argv field is present but empty; must contain at least the command token"
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
+		if len(req.RawArgv[0]) == 0 {
+			msg := "raw_argv command is empty"
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
+		injection := map[string]string{
+			"repo":             target.Repo,
+			"repo_path":        target.RepoPath,
+			"expected_git_url": target.ExpectedGitURL,
+		}
+		candidates := buildReverseMatchCandidates(projectConfig)
+		resolved, rerr := operations.ReverseMatch(req.RawArgv[0], req.RawArgv[1:], candidates, injection)
+		if rerr != nil {
+			fmt.Printf("[OP:?] DENIED (reverse_match) source=raw_argv project=%s target_repo=%q request_id=%s: %v\n", projectID, req.TargetRepo, req.RequestID, rerr)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(rerr.Error()),
+			})
+			return
+		}
+		req.Operation = resolved.OperationID
+		req.Params = resolved.Params
+		req.Flags = resolved.Flags
+	} else {
+		// Explicit operation entry. Unconditionally overwrite Source so a
+		// caller cannot spoof `source=raw_argv` in the audit log by
+		// passing source="raw_argv" alongside an explicit operation
+		// (handleClient already decided this is the MCP route via
+		// rawArgvPresent == false; the log must agree).
+		req.Source = "mcp"
+	}
+
+	// Log operation request (params omitted to avoid logging sensitive data
+	// like PR body). source distinguishes raw-argv vs MCP entry, and
+	// resolved_operation_id is identical to the operation field but kept as
+	// a stable log key so downstream parsers do not need to track which
+	// entry shape was used.
+	fmt.Printf("[OP:%s] source=%s project=%s target_repo=%q request_id=%s resolved_operation_id=%s\n",
+		req.Operation, req.Source, projectID, req.TargetRepo, req.RequestID, req.Operation)
 
 	// Validate operation against per-target context
 	op, result := s.validator.ValidateOperation(req, projectConfig, target)
@@ -293,6 +413,24 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		StdoutOriginalBytes: resp.StdoutOriginalBytes,
 		StderrOriginalBytes: resp.StderrOriginalBytes,
 	})
+}
+
+// buildReverseMatchCandidates assembles ReverseMatch input from the project
+// config in AllowedOperations declaration order so ambiguity errors list
+// candidates deterministically.
+func buildReverseMatchCandidates(p *config.ProjectConfig) []operations.CandidateOp {
+	if p == nil {
+		return nil
+	}
+	out := make([]operations.CandidateOp, 0, len(p.AllowedOperations))
+	for _, opID := range p.AllowedOperations {
+		op, ok := p.GetOperation(opID)
+		if !ok {
+			continue
+		}
+		out = append(out, operations.CandidateOp{ID: opID, Operation: op})
+	}
+	return out
 }
 
 // executeWithSanitization executes a command with sanitized environment
@@ -383,18 +521,18 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 	}
 }
 
-// truncatedSuffix is appended to a stream string when the daemon caps the
-// stream at maxBytes. It is kept for backward compatibility with clients that
-// only inspect the string. Newer consumers should rely on the typed
-// (StdoutTruncated / StderrTruncated, StdoutOriginalBytes / StderrOriginalBytes)
-// fields on the response instead.
-const truncatedSuffix = "\n... (truncated)"
-
 // truncateOutput caps s at maxBytes. When truncation happens, the returned
-// string carries truncatedSuffix and wasTruncated is true. originalBytes is
-// always the byte length of the input regardless of truncation, so consumers
-// can report how much of the original stream was actually surfaced even when
-// truncation is disabled (maxBytes <= 0).
+// string is the byte prefix at the rune boundary at or before maxBytes and
+// wasTruncated is true; the daemon does not mix any synthetic marker into
+// the stream body. Consumers signal truncation to their downstream via the
+// typed StdoutTruncated / StderrTruncated and StdoutOriginalBytes /
+// StderrOriginalBytes fields on the response, which keeps the daemon's
+// stream output a clean prefix of the original command output suitable for
+// streaming JSON parsers.
+//
+// originalBytes is always the byte length of the input regardless of
+// truncation, so consumers can report how much of the original stream was
+// actually surfaced even when truncation is disabled (maxBytes <= 0).
 //
 // When the cap falls inside a multi-byte UTF-8 sequence, the cut point is
 // pulled back to the previous rune boundary so the daemon never marshals an
@@ -407,7 +545,7 @@ func truncateOutput(s string, maxBytes int) (out string, originalBytes int64, wa
 		return s, originalBytes, false
 	}
 	cut := runeBoundaryBefore(s, maxBytes)
-	return s[:cut] + truncatedSuffix, originalBytes, true
+	return s[:cut], originalBytes, true
 }
 
 // runeBoundaryBefore returns the largest index i in [0, max] such that
@@ -425,7 +563,7 @@ func runeBoundaryBefore(s string, max int) int {
 }
 
 // handleListOperationsRequest handles requests to list available operations
-func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
+func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte, releaseSlot func()) {
 	var req operations.ListOperationsRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		s.sendListOperationsResponse(conn, operations.ListOperationsResponse{
@@ -437,8 +575,11 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 	// Authenticate token
 	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
 	if !valid {
-		time.Sleep(1 * time.Second)
 		fmt.Println("  -> AUTH FAILED (list_operations)")
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+		time.Sleep(1 * time.Second)
 		s.sendListOperationsResponse(conn, operations.ListOperationsResponse{
 			Error: "Authentication failed",
 		})
@@ -482,7 +623,7 @@ func (s *Server) handleListOperationsRequest(conn net.Conn, data []byte) {
 }
 
 // handleDescribeOperationRequest handles requests to describe a specific operation
-func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
+func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte, releaseSlot func()) {
 	var req operations.DescribeOperationRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		s.sendDescribeOperationResponse(conn, operations.DescribeOperationResponse{
@@ -494,8 +635,11 @@ func (s *Server) handleDescribeOperationRequest(conn net.Conn, data []byte) {
 	// Authenticate token
 	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
 	if !valid {
-		time.Sleep(1 * time.Second)
 		fmt.Println("  -> AUTH FAILED (describe_operation)")
+		if releaseSlot != nil {
+			releaseSlot()
+		}
+		time.Sleep(1 * time.Second)
 		s.sendDescribeOperationResponse(conn, operations.DescribeOperationResponse{
 			Error: "Authentication failed",
 		})
@@ -709,7 +853,13 @@ func (s *Server) createUnixListener() (net.Listener, error) {
 	return listener, nil
 }
 
-// acceptLoop handles incoming connections on a listener
+// acceptLoop handles incoming connections on a listener.
+//
+// When the in-flight cap is set (inFlightSem != nil) the loop tries to
+// acquire a slot before spawning a handler. If the cap is reached the
+// connection is closed immediately without reading a request; this keeps
+// the daemon's authentication-failure delay from amplifying a burst of
+// connections into a long backlog of stacked sleeps.
 func (s *Server) acceptLoop(listener net.Listener) error {
 	for {
 		conn, err := listener.Accept()
@@ -721,7 +871,36 @@ func (s *Server) acceptLoop(listener net.Listener) error {
 			fmt.Println("Accept error:", err)
 			continue
 		}
-		go s.handleClient(conn)
+		s.dispatchConn(conn)
+	}
+}
+
+// dispatchConn launches handleClient under the in-flight cap. When the cap
+// channel is non-nil and at capacity the connection is dropped immediately
+// (no response read, no response written) so the caller sees a clean EOF.
+//
+// The release callback handed to handleClient is wrapped in sync.Once so
+// the handler can return the slot early (e.g. before the
+// authentication-failure throttle sleep) without racing the goroutine's
+// final defer, which catches any path that did not release explicitly.
+func (s *Server) dispatchConn(conn net.Conn) {
+	if s.inFlightSem == nil {
+		go s.handleClient(conn, func() {})
+		return
+	}
+	select {
+	case s.inFlightSem <- struct{}{}:
+		var once sync.Once
+		release := func() {
+			once.Do(func() { <-s.inFlightSem })
+		}
+		go func() {
+			defer release()
+			s.handleClient(conn, release)
+		}()
+	default:
+		fmt.Printf("  -> connection dropped: max_in_flight=%d reached\n", cap(s.inFlightSem))
+		conn.Close()
 	}
 }
 

@@ -20,6 +20,14 @@
 
 set -euo pipefail
 
+# Pin PATH to standard system directories plus Homebrew so `openssl`,
+# `python3`, `git`, and any other binary this script shells out to resolve
+# to a known absolute location regardless of the caller's $PATH. The
+# DevContainer build environment composes $PATH from devcontainer.json and
+# Feature install scripts; pinning here keeps the initializeCommand stable
+# across those compositions.
+export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+
 CMD2HOST_BIN="${HOME}/.cmd2host/cmd2host"
 TOKEN_DIR="${HOME}/.cmd2host/tokens"
 SESSION_DIR=".devcontainer/.session"

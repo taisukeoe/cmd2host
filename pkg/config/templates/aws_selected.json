@@ -1,0 +1,29 @@
+{
+  "repos": ["OWNER/REPO"],
+  "repo_paths": ["/path/to/repo"],
+  "allowed_operations": [
+    "aws_sts_get_caller_identity",
+    "aws_s3_ls"
+  ],
+  "operations": {
+    "aws_sts_get_caller_identity": {
+      "command": "aws",
+      "args_template": ["sts", "get-caller-identity"],
+      "params": {},
+      "description": "Print the IAM identity of the caller. Read-only sample operation intended to verify the raw-argv transparent proxy reaches AWS APIs through the configured credentials."
+    },
+    "aws_s3_ls": {
+      "command": "aws",
+      "args_template": ["s3", "ls", "{bucket}"],
+      "params": {
+        "bucket": {
+          "type": "string",
+          "pattern": "^s3://[A-Za-z0-9._/-]+$",
+          "minLength": 5,
+          "maxLength": 1024
+        }
+      },
+      "description": "List objects under an s3:// URI. Read-only sample operation; the bucket parameter must be an s3:// URI so the raw-argv reverse-match can bind it unambiguously."
+    }
+  }
+}

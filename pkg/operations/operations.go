@@ -19,7 +19,14 @@ type Operation struct {
 	ArgsTemplate []string               `json:"args_template"` // e.g., ["pr", "view", "{number}"]
 	Params       map[string]ParamSchema `json:"params"`        // Parameter schemas
 	AllowedFlags []string               `json:"allowed_flags"` // e.g., ["--state", "--limit"]
-	Description  string                 `json:"description"`   // Human-readable description
+	// BoolFlags lists entries from AllowedFlags that take no value
+	// (presence-only switches such as `--draft`, `--required`,
+	// `--exit-status`). The raw-argv reverse-match's flag-tail
+	// normalizer consults this list so it does not splice the next argv
+	// token into a boolean switch (e.g. `gh pr create --draft "title"`
+	// must reach the host as two tokens, not `--draft=title`).
+	BoolFlags   []string `json:"bool_flags,omitempty"`
+	Description string   `json:"description"` // Human-readable description
 }
 
 // ItemsSchema defines the schema for array items
@@ -45,11 +52,26 @@ type ParamSchema struct {
 // ParamValue represents a parameter value that can be string, int, or []string
 type ParamValue interface{}
 
-// Request represents a request to execute an operation
+// Request represents a request to execute an operation.
+//
+// Two entry shapes are supported:
+//
+//   - Operation entry (existing): Operation carries the resolved operation_id
+//     and Params/Flags carry the typed values directly. Source is empty or
+//     "mcp" depending on the caller.
+//   - Raw-argv entry (additive): RawArgv carries the full [command, args...]
+//     argv as the caller wrote it; the daemon resolves the operation_id and
+//     extracts Params/Flags via reverse-match before dispatching through the
+//     same validation / sanitization / execution path. Source is "raw_argv".
+//
+// Source is also surfaced in daemon log lines so operators can distinguish
+// the two routes when auditing.
 type Request struct {
 	RequestID string                `json:"request_id,omitempty"`
-	Operation string                `json:"operation"`
-	Params    map[string]ParamValue `json:"params"`
+	Operation string                `json:"operation,omitempty"`
+	Source    string                `json:"source,omitempty"`   // "raw_argv" | "mcp" | ""
+	RawArgv   []string              `json:"raw_argv,omitempty"` // [command, args...] for raw-argv entry
+	Params    map[string]ParamValue `json:"params,omitempty"`
 	Flags     []string              `json:"flags,omitempty"`
 	Token     string                `json:"token"`
 	// TargetRepo selects which repo (from the project's allow list) this
@@ -63,9 +85,10 @@ type Request struct {
 // Truncation indicator fields (additive, optional):
 //   - StdoutTruncated / StderrTruncated: true when the corresponding stream
 //     exceeded the configured cap. When the flag is true, the Stdout / Stderr
-//     string contains a prefix of the original output followed by the legacy
-//     `\n... (truncated)` suffix that the daemon still appends for backward
-//     compatibility with clients that ignore the typed flag.
+//     string holds a clean prefix of the original output cut at a UTF-8 rune
+//     boundary. The daemon does not mix any synthetic marker into the stream
+//     body so that streaming JSON parsers downstream see only the original
+//     command output and do not have to filter trailing daemon-supplied text.
 //   - StdoutOriginalBytes / StderrOriginalBytes: the byte length of the
 //     original (pre-truncation) output. Populated for streams that carry
 //     actual command output (success exit and exec exit-code paths). Error

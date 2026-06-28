@@ -1,14 +1,14 @@
 {
   "id": "cmd2host",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "name": "Host Command Proxy",
-  "description": "Proxy commands (gh, etc.) from container to host machine. Requires cmd2host daemon on host.",
+  "description": "Proxy auth-heavy CLI commands from container to host machine through the cmd2host daemon. Bundled with operation templates for gh and AWS CLI; extensible to any other CLI whose normal usage is almost entirely auth-required (gcloud, az, ...) via project config. CLIs that mix local-only and auth-required subcommands (git) are out of the wrapper route's scope. v1.4 adds the cmd2host-proxy transparent dispatch binary so natural CLI invocations reach the host through the project's allowed operation templates.",
   "documentationURL": "https://github.com/taisukeoe/cmd2host",
   "options": {
     "commands": {
       "type": "string",
       "default": "gh",
-      "description": "Comma-separated list of commands to proxy (e.g., 'gh' or 'gh,docker')"
+      "description": "Comma-separated list of commands to proxy. Each entry becomes a /usr/local/bin/<command> symlink to cmd2host-proxy, which reverse-matches the user's argv against the project's allowed operation templates. Default 'gh' preserves existing setups; opt into 'gh,aws' (or any other auth-heavy CLI the project config declares operation templates for) when you want raw-argv transparent dispatch for additional CLIs. Do not include CLIs that mix local-only and auth-required subcommands (git) — local subcommands would be denied by the daemon."
     },
     "installMcpServer": {
       "type": "boolean",

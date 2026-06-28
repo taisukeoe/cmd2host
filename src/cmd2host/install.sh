@@ -21,28 +21,7 @@ GITHUB_REPO="taisukeoe/cmd2host"
 # `releases/download/${BINARY_VERSION}/...`. Current binary releases use bare
 # `v*` tags (e.g. `v0.3.0`) per .github/workflows/release-host-binary.yml;
 # legacy releases use `binary-v*` tags and remain valid pin values.
-BINARY_VERSION="binary-v0.2.0"
-
-# Install netcat if needed
-install_netcat() {
-    if command -v nc &>/dev/null; then
-        echo "netcat already installed"
-        return 0
-    fi
-
-    echo "Installing netcat..."
-    if command -v apt-get &>/dev/null; then
-        apt-get update && apt-get install -y netcat-openbsd
-    elif command -v apk &>/dev/null; then
-        apk add --no-cache netcat-openbsd
-    elif command -v dnf &>/dev/null; then
-        dnf install -y nc
-    elif command -v yum &>/dev/null; then
-        yum install -y nc
-    else
-        echo "Warning: Could not install netcat. Please install manually."
-    fi
-}
+BINARY_VERSION="v0.3.0"
 
 # Verify a binary's sha256 against a checksums.txt entry. Kept structurally
 # parallel with host/scripts/install.sh's helper, but `sha256sum` is the
@@ -155,20 +134,96 @@ install_mcp_server() {
     return "$rc"
 }
 
-install_netcat
+# Install cmd2host-proxy binary from GitHub releases.
+# Same shape as install_mcp_server: download + sha256 verify + atomic move.
+install_proxy() {
+    echo "Installing cmd2host-proxy (transparent proxy binary)..."
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        arm64)   ARCH="arm64" ;;
+        *)
+            echo "Warning: Unsupported architecture $ARCH for cmd2host-proxy"
+            return 1
+            ;;
+    esac
 
-# Install wrapper script
+    local binary_name binary_url checksums_url tmp_dir rc
+    binary_name="cmd2host-proxy-linux-${ARCH}"
+    binary_url="https://github.com/${GITHUB_REPO}/releases/download/${BINARY_VERSION}/${binary_name}"
+    checksums_url="https://github.com/${GITHUB_REPO}/releases/download/${BINARY_VERSION}/checksums.txt"
+
+    if ! tmp_dir="$(mktemp -d -t cmd2host-proxy-install.XXXXXX)"; then
+        echo "Warning: Failed to create temp directory for cmd2host-proxy install"
+        return 1
+    fi
+
+    rc=0
+    echo "  Downloading ${binary_name} (${BINARY_VERSION})..."
+    if ! curl -fsSL -o "$tmp_dir/$binary_name" "$binary_url"; then
+        echo "Warning: Failed to download cmd2host-proxy binary"
+        rc=1
+    fi
+    if [[ "$rc" -eq 0 ]] && ! curl -fsSL -o "$tmp_dir/checksums.txt" "$checksums_url"; then
+        echo "Warning: Failed to download checksums.txt"
+        rc=1
+    fi
+
+    if [[ "$rc" -eq 0 ]] && ! verify_sha256 \
+        "$tmp_dir/checksums.txt" "$tmp_dir/$binary_name" "$binary_name"; then
+        rc=1
+    fi
+
+    if [[ "$rc" -eq 0 ]] && ! mv "$tmp_dir/$binary_name" /usr/local/bin/cmd2host-proxy; then
+        echo "Warning: Failed to install verified cmd2host-proxy binary"
+        rc=1
+    fi
+    if [[ "$rc" -eq 0 ]] && ! chmod 755 /usr/local/bin/cmd2host-proxy; then
+        echo "Warning: Failed to chmod cmd2host-proxy binary"
+        rc=1
+    fi
+
+    rm -rf "$tmp_dir"
+    if [[ "$rc" -eq 0 ]]; then
+        echo "  Installed: /usr/local/bin/cmd2host-proxy"
+    fi
+    return "$rc"
+}
+
+# Install cmd2host-proxy first so the symlinks created below can point at
+# it. The thin shim (cmd-wrapper.sh) is installed alongside as a
+# one-release compatibility fallback; new symlinks bypass it.
+PROXY_INSTALLED=false
+if install_proxy; then
+    PROXY_INSTALLED=true
+fi
+
+# Install the legacy thin shim. When cmd2host-proxy is present the shim is
+# never reached (symlinks point straight at the binary); it stays around
+# this release for installs whose symlinks still target it after an
+# in-place upgrade. Removed in a follow-up release.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/cmd-wrapper.sh" /usr/local/bin/cmd-wrapper.sh
 chmod 755 /usr/local/bin/cmd-wrapper.sh
 
-# Create symlinks for each command
-echo "Creating command wrappers for: $COMMANDS"
+# Create symlinks for each command. When the proxy binary is installed,
+# symlinks point at it directly so the host command sees a one-hop
+# delegation. When the binary failed to install, fall back to the shim
+# (which will print a self-contained cmd2host: error at runtime and exit
+# 200) so callers cannot silently miss the failure.
+SYMLINK_TARGET="/usr/local/bin/cmd2host-proxy"
+if [[ "$PROXY_INSTALLED" != true ]]; then
+    SYMLINK_TARGET="/usr/local/bin/cmd-wrapper.sh"
+    echo "Warning: cmd2host-proxy not installed; symlinks fall back to legacy shim"
+fi
+
+echo "Creating command wrappers for: $COMMANDS (target: $SYMLINK_TARGET)"
 IFS=',' read -ra CMD_ARRAY <<< "$COMMANDS"
 for cmd in "${CMD_ARRAY[@]}"; do
     cmd=$(echo "$cmd" | xargs)  # trim whitespace
     if [[ -n "$cmd" ]]; then
-        ln -sf /usr/local/bin/cmd-wrapper.sh "/usr/local/bin/$cmd"
+        ln -sf "$SYMLINK_TARGET" "/usr/local/bin/$cmd"
         echo "  Created wrapper: /usr/local/bin/$cmd"
     fi
 done

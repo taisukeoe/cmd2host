@@ -120,7 +120,7 @@ func TestServer_ListOperations(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -260,7 +260,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -315,7 +315,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -440,12 +440,12 @@ func TestTruncateOutput(t *testing.T) {
 		{"empty", "", 100, "", 0, false},
 		{"below cap", "hello", 100, "hello", 5, false},
 		{"equal to cap", "hello", 5, "hello", 5, false},
-		{"above cap", "helloworld", 5, "hello\n... (truncated)", 10, true},
+		{"above cap", "helloworld", 5, "hello", 10, true},
 		{"disabled when cap is zero", "hello", 0, "hello", 5, false},
 		{"disabled when cap is negative", "hello", -1, "hello", 5, false},
 		{"non-empty stream reports bytes even when cap disabled", "hello", 0, "hello", 5, false},
-		{"utf8 cut pulled back to rune boundary", "あい", 4, "あ\n... (truncated)", 6, true},
-		{"utf8 cut on rune boundary", "あい", 3, "あ\n... (truncated)", 6, true},
+		{"utf8 cut pulled back to rune boundary", "あい", 4, "あ", 6, true},
+		{"utf8 cut on rune boundary", "あい", 3, "あ", 6, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -516,7 +516,7 @@ func TestServer_RunOperation_TruncatesStdoutWithTypedFlag(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -556,8 +556,13 @@ func TestServer_RunOperation_TruncatesStdoutWithTypedFlag(t *testing.T) {
 	if resp.StdoutOriginalBytes != 11 {
 		t.Errorf("expected StdoutOriginalBytes=11, got %d", resp.StdoutOriginalBytes)
 	}
-	if !strings.HasSuffix(resp.Stdout, "\n... (truncated)") {
-		t.Errorf("expected legacy truncation suffix preserved in stdout, got %q", resp.Stdout)
+	// The truncation signal is the typed flag; the stream body must be a
+	// clean prefix of the original output with no synthetic suffix mixed in.
+	if strings.Contains(resp.Stdout, "... (truncated)") {
+		t.Errorf("stream body must not contain a synthetic truncation marker, got %q", resp.Stdout)
+	}
+	if resp.Stdout != "hello" {
+		t.Errorf("expected stdout prefix %q, got %q", "hello", resp.Stdout)
 	}
 	if resp.StderrTruncated {
 		t.Errorf("expected StderrTruncated=false, got true")
@@ -581,7 +586,7 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -621,6 +626,210 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 	// echo "hi" produces 3 bytes (2 + newline).
 	if resp.StdoutOriginalBytes != 3 {
 		t.Errorf("expected StdoutOriginalBytes=3, got %d", resp.StdoutOriginalBytes)
+	}
+}
+
+// TestServer_RunOperation_RawArgvDispatch exercises the raw-argv mode end
+// to end: a client sends RawArgv=["echo","value"], the server reverse-matches
+// it to test_op (template ["{message}"]), and the resolved request flows
+// through the same validate/sanitize/execute path as the explicit operation
+// entry.
+func TestServer_RunOperation_RawArgvDispatch(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := operations.Request{
+		RawArgv: []string{"echo", "hello-raw"},
+		Token:   testToken,
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason != nil {
+		t.Fatalf("raw-argv operation denied: %s", *resp.DeniedReason)
+	}
+	if resp.ExitCode != 0 {
+		t.Errorf("expected exit_code=0, got %d (stderr=%q)", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "hello-raw" {
+		t.Errorf("expected stdout=%q, got %q", "hello-raw", resp.Stdout)
+	}
+}
+
+// TestServer_RunOperation_RawArgvUnknownIsDenied verifies the raw-argv path
+// emits a denial (with a non-nil DeniedReason) when no allowed operation
+// matches the argv, rather than passing through to execution or erroring
+// silently.
+func TestServer_RunOperation_RawArgvUnknownIsDenied(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := operations.Request{
+		RawArgv: []string{"echo", "value-a", "extra-positional"},
+		Token:   testToken,
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason == nil {
+		t.Fatalf("expected denial for argv with no matching template, got nil DeniedReason; resp=%+v", resp)
+	}
+	if !strings.Contains(*resp.DeniedReason, "cmd2host:") {
+		t.Errorf("expected denial reason to carry cmd2host prefix, got %q", *resp.DeniedReason)
+	}
+	if resp.ExitCode == 0 {
+		t.Errorf("expected non-zero exit_code on denial, got 0")
+	}
+}
+
+// TestServer_RunOperation_RawArgvEmptyOrNullIsDenied covers the two raw_argv
+// field shapes that look "absent" to Go's json.Unmarshal but carry an
+// explicit raw-argv intent in the JSON: `{"raw_argv":[]}` (non-nil empty
+// slice) and `{"raw_argv":null}` (collapses to nil slice). Both must
+// produce an explicit raw-argv denial rather than falling through to the
+// explicit operation entry path with an empty Operation.
+func TestServer_RunOperation_RawArgvEmptyOrNullIsDenied(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	// Raw JSON literals here because operations.Request marshals these
+	// shapes ambiguously: a nil slice with `omitempty` would drop the
+	// field entirely, defeating the test. We send the wire bytes verbatim
+	// so the daemon sees field presence as the request would carry on
+	// the wire.
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "empty array",
+			payload: `{"raw_argv":[],"token":"` + testToken + `"}`,
+		},
+		{
+			name:    "explicit null",
+			payload: `{"raw_argv":null,"token":"` + testToken + `"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			writeAndCloseWrite(t, conn, []byte(tt.payload))
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+
+			if resp.DeniedReason == nil {
+				t.Fatalf("expected explicit raw-argv denial, got nil DeniedReason; resp=%+v", resp)
+			}
+			if !strings.Contains(*resp.DeniedReason, "raw_argv field is present but empty") {
+				t.Errorf("expected denial to name the empty-raw_argv reason, got %q", *resp.DeniedReason)
+			}
+			if resp.ExitCode == 0 {
+				t.Errorf("expected non-zero exit_code on denial, got 0")
+			}
+		})
 	}
 }
 
@@ -726,5 +935,123 @@ func TestNewServerAt_ConcurrentInstances(t *testing.T) {
 func TestNewServerAt_RejectsEmptyDir(t *testing.T) {
 	if _, err := NewServerAt("", config.DefaultDaemonConfig()); err == nil {
 		t.Fatal("NewServerAt(\"\") must return error")
+	}
+}
+
+// TestServer_DispatchConn_ClosesAtCapacity pins the in-flight cap: when
+// the semaphore is full, dispatchConn must close the connection
+// immediately instead of spawning another handleClient goroutine that
+// would stack another auth-failure delay.
+func TestServer_DispatchConn_ClosesAtCapacity(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	// Replace the default cap with a single slot and pre-fill it so the
+	// next dispatch is forced into the at-capacity branch.
+	server.inFlightSem = make(chan struct{}, 1)
+	server.inFlightSem <- struct{}{}
+
+	a, b := net.Pipe()
+	defer b.Close()
+	server.dispatchConn(a)
+
+	// dispatchConn closed `a`; the peer end `b` must see EOF without any
+	// payload being written, confirming handleClient never ran.
+	b.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	n, err := b.Read(buf)
+	if err == nil {
+		t.Fatalf("expected EOF on rejected connection, got n=%d err=nil", n)
+	}
+}
+
+// TestServer_AuthFailure_ReleasesInFlightSlotBeforeThrottleSleep pins
+// the cap-amplification fix: when a connection authenticates with a
+// bogus token, the handler must release its in-flight slot before the
+// 1-second throttle sleep so the cap does not stay reserved by a
+// goroutine that has no remaining work. Otherwise a stream of failed
+// auth attempts can exhaust max_in_flight for the entire duration of
+// the synthetic delay and block legitimate clients via the
+// dispatchConn drop branch.
+func TestServer_AuthFailure_ReleasesInFlightSlotBeforeThrottleSleep(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	server.inFlightSem = make(chan struct{}, 1)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			server.dispatchConn(conn)
+		}
+	}()
+
+	// Fire a request with a bogus token. The handler should log
+	// AUTH FAILED, release the slot, then sleep ~1s before sending
+	// the response. We do not wait for the response here.
+	conn, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	req := operations.Request{
+		Operation: "test_op",
+		Token:     "this-is-not-a-valid-token-just-bytes-bytes-bytes-bytes-bytes-x",
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	// Within the 1-second throttle window, the slot must already be
+	// free. Poll with a 500ms ceiling — well under the 1s sleep and
+	// well above the time the handler needs to reach the release call.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		select {
+		case server.inFlightSem <- struct{}{}:
+			// Acquired — release immediately and return clean.
+			<-server.inFlightSem
+			return
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("slot stayed reserved through the throttle window; release must happen before time.Sleep")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// TestServer_DispatchConn_NoCapPassesThrough verifies the disabled-cap
+// path (MaxInFlight < 0 → inFlightSem == nil): dispatchConn must still
+// dispatch the connection to handleClient with no semaphore handshake.
+func TestServer_DispatchConn_NoCapPassesThrough(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	server.inFlightSem = nil
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+
+	// handleClient will block on the decoder for up to readTimeout (5s)
+	// since we never write a request. We only need to confirm dispatchConn
+	// returned without panic and without closing `a` before handleClient
+	// ran. Write a single byte from the peer so a non-piped read on `a`
+	// inside handleClient would unblock — even if handleClient discards
+	// it as invalid JSON, the dispatch path itself is what we are
+	// pinning here.
+	done := make(chan struct{})
+	go func() {
+		server.dispatchConn(a)
+		close(done)
+	}()
+	select {
+	case <-done:
+		// dispatchConn returns immediately after launching the handler.
+	case <-time.After(time.Second):
+		t.Fatal("dispatchConn did not return within 1s")
 	}
 }
