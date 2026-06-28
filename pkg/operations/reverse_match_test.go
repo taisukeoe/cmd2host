@@ -352,6 +352,71 @@ func TestReverseMatch_RejectsBadInputs(t *testing.T) {
 	}
 }
 
+func TestReverseMatch_RepeatedPlaceholderMismatchIsRejected(t *testing.T) {
+	// git_push's template "{branch}:refs/heads/{branch}" reuses the same
+	// placeholder name. A user-typed argv with mismatched halves (e.g.
+	// "foo:refs/heads/bar") must NOT be silently coerced to "bar:refs/heads/bar"
+	// by BuildArgs; reverse-match rejects the candidate so the daemon
+	// surfaces "no allowed operation matches argv".
+	candidates := gitGithubWriteCandidates(t)
+
+	_, err := ReverseMatch(
+		"git",
+		[]string{"push", "foo:refs/heads/bar"},
+		candidates,
+		stdInjection,
+	)
+	if err == nil {
+		t.Fatalf("expected mismatched-branch argv to be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "no allowed operation matches argv") {
+		t.Errorf("unexpected error string: %q", err.Error())
+	}
+}
+
+func TestReverseMatch_AcceptsAbsolutePathCommand(t *testing.T) {
+	// Phase B wrappers can be invoked with argv[0] equal to a basename
+	// ("gh") or an absolute path ("/usr/bin/gh") depending on how the
+	// caller resolved the command. Reverse-match basename-normalizes both
+	// the request command and Operation.Command so either form matches.
+	candidates := gitGithubWriteCandidates(t)
+
+	got, err := ReverseMatch(
+		"/usr/local/bin/gh",
+		[]string{"pr", "view", "42"},
+		candidates,
+		stdInjection,
+	)
+	if err != nil {
+		t.Fatalf("expected absolute-path command to resolve, got err=%v", err)
+	}
+	if got.OperationID != "gh_pr_view" {
+		t.Errorf("operation_id = %q, want %q", got.OperationID, "gh_pr_view")
+	}
+}
+
+func TestReverseMatch_OptionalPlaceholderOmissionIsRejectedV1(t *testing.T) {
+	// gh_pr_edit declares body as optional and BuildArgs paired-drops
+	// "--body {body}" when body is missing. Reverse-match v1 does NOT
+	// attempt the paired-drop layout; the user must pass an empty value
+	// explicitly. This test pins the v1 reject so the limitation does not
+	// silently regress when paired-drop reverse-match lands in a later PR.
+	candidates := gitGithubWriteCandidates(t)
+
+	_, err := ReverseMatch(
+		"gh",
+		[]string{"pr", "edit", "42"},
+		candidates,
+		stdInjection,
+	)
+	if err == nil {
+		t.Fatalf("expected v1 to reject `gh pr edit 42` (no --body), got nil error")
+	}
+	if !strings.Contains(err.Error(), "no allowed operation matches argv") {
+		t.Errorf("unexpected error string: %q", err.Error())
+	}
+}
+
 func TestReverseMatch_AmbiguousFailsLoud(t *testing.T) {
 	// Two ops with identical effective templates: reverse-match cannot pick.
 	opA := &Operation{

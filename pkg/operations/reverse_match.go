@@ -36,6 +36,17 @@
 // shape-preserving). Reordering flags from the template form into a
 // different position is not supported in v1.
 //
+// v1 limitation — optional placeholder paired-drop is NOT supported on the
+// reverse-match side. BuildArgs drops `--body {body}` when {body} is
+// missing, but reverse-match only tries the single fully-present template
+// shape. A user-typed `gh pr edit 42` (no `--body`) therefore reports
+// "no allowed operation matches argv" rather than dispatching to
+// `gh_pr_edit` with body omitted. Workaround: pass an empty value
+// explicitly (`gh pr edit 42 --body ""`). Supporting paired-drop would
+// require trying 2^N effective-template shapes per candidate (one per
+// optional placeholder subset), which inflates ambiguity surface and is
+// deferred. Only `gh_pr_edit.body` is affected in the bundled templates.
+//
 // Ambiguity (more than one candidate matches) and unknown argv (zero
 // candidates match) both surface as errors — the daemon fails loud rather
 // than guessing.
@@ -141,16 +152,19 @@ func ReverseMatch(command string, argv []string, candidates []CandidateOp, injec
 }
 
 // filterByCommand keeps candidates whose Operation.Command basename matches
-// the requested command. Templates may have been rewritten to absolute paths
-// (e.g. "/usr/bin/git") by ResolveOperationCommands, so basename comparison
-// is used.
+// the requested command's basename. Both sides are basename-normalized so
+// the match holds regardless of whether the caller (typically the
+// container-side wrapper) sends "gh" or "/usr/bin/gh", and regardless of
+// whether ResolveOperationCommands has rewritten the template Command to
+// an absolute path.
 func filterByCommand(command string, candidates []CandidateOp) []CandidateOp {
+	want := filepath.Base(command)
 	var out []CandidateOp
 	for _, c := range candidates {
 		if c.Operation == nil {
 			continue
 		}
-		if filepath.Base(c.Operation.Command) == command {
+		if filepath.Base(c.Operation.Command) == want {
 			out = append(out, c)
 		}
 	}
@@ -293,25 +307,41 @@ func effectiveTemplate(tmpl []string) []string {
 }
 
 // bindParam stores a captured value under name with the schema's typing.
+// When the same name appears twice in a template (e.g. git_push's
+// "{branch}:refs/heads/{branch}"), the second bind must produce the same
+// value as the first; otherwise the candidate is rejected so the daemon
+// does not silently rewrite mismatched user input via BuildArgs (which
+// only renders one canonical value per parameter).
+//
 // Returns a non-nil error when the raw value cannot be coerced to the
-// declared type so the caller treats the candidate as a non-match.
+// declared type or conflicts with a prior bind. The caller treats any
+// error as "candidate did not match" so reverse-match continues to the
+// next candidate or reports zero matches.
 func bindParam(op *Operation, name, raw string, params map[string]ParamValue) error {
 	schema, hasSchema := op.Params[name]
 	if !hasSchema {
 		return fmt.Errorf("placeholder %q has no schema", name)
 	}
+	var newVal ParamValue
 	switch schema.Type {
 	case "integer":
 		n, err := strconv.Atoi(raw)
 		if err != nil {
 			return err
 		}
-		params[name] = n
+		newVal = n
 	case "string", "":
-		params[name] = raw
+		newVal = raw
 	default:
 		return fmt.Errorf("placeholder %q has unsupported reverse-match type %q", name, schema.Type)
 	}
+	if existing, ok := params[name]; ok {
+		if existing != newVal {
+			return fmt.Errorf("placeholder %q bound twice with mismatched values (%v vs %v)", name, existing, newVal)
+		}
+		return nil
+	}
+	params[name] = newVal
 	return nil
 }
 
