@@ -58,6 +58,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // errSchemaMissing and errUnsupportedType are sentinel errors that
@@ -397,12 +398,19 @@ func compileInlineTemplateRegex(tmpl string, schemas map[string]ParamSchema, inj
 	b.WriteString("(?s)^")
 	var captureNames []string
 
-	i := 0
-	for i < len(tmpl) {
-		ch := tmpl[i]
-		if ch != '{' {
-			b.WriteString(regexp.QuoteMeta(string(ch)))
-			i++
+	// Iterate by rune, not byte: `string(byte)` for a byte >= 0x80 reinterprets
+	// the value as a Unicode code point and re-encodes it as a multi-byte UTF-8
+	// sequence, which would no longer match the bytes a user's argv carries
+	// for the same literal token. Operating on runes preserves the original
+	// UTF-8 byte sequence (regexp.QuoteMeta is a string transform that already
+	// understands UTF-8). The placeholder syntax itself (`{name}`) uses ASCII
+	// delimiters so the rune-walk loop can still scan for `{` byte-equivalent
+	// with rune == '{'.
+	for i := 0; i < len(tmpl); {
+		r, size := utf8.DecodeRuneInString(tmpl[i:])
+		if r != '{' {
+			b.WriteString(regexp.QuoteMeta(tmpl[i : i+size]))
+			i += size
 			continue
 		}
 		end := strings.IndexByte(tmpl[i:], '}')

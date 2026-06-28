@@ -374,6 +374,39 @@ func TestReverseMatch_RepeatedPlaceholderMismatchIsRejected(t *testing.T) {
 	}
 }
 
+func TestReverseMatch_InlineTemplateLiteralsPreserveUTF8(t *testing.T) {
+	// compileInlineTemplateRegex iterates the template token rune-by-rune
+	// so non-ASCII literal segments are preserved byte-for-byte in the
+	// compiled regex. Earlier implementations walked byte-by-byte and
+	// emitted `regexp.QuoteMeta(string(byte))`, which for any byte >= 0x80
+	// re-encoded the value as a 2-byte UTF-8 sequence — corrupting the
+	// literal so a user template like "репо/{number}/コメント" silently
+	// failed to match the bytes the user's argv carried.
+	//
+	// Drive compileInlineTemplateRegex directly with a tmpl that holds
+	// multi-byte literal segments around a placeholder. Match the regex
+	// against the same string the caller would type, byte-for-byte.
+	schemas := map[string]ParamSchema{
+		"number": {Type: "integer", Min: ptrInt(1)},
+	}
+	re, captures, err := compileInlineTemplateRegex("コメント/{number}/репо", schemas, nil)
+	if err != nil {
+		t.Fatalf("compileInlineTemplateRegex returned err: %v", err)
+	}
+	if len(captures) != 1 || captures[0] != "number" {
+		t.Fatalf("capture names = %v, want [number]", captures)
+	}
+	m := re.FindStringSubmatch("コメント/42/репо")
+	if m == nil {
+		t.Fatalf("regex did not match the UTF-8 token verbatim")
+	}
+	if m[1] != "42" {
+		t.Errorf("captured number = %q, want 42", m[1])
+	}
+}
+
+func ptrInt(v int) *int { return &v }
+
 func TestReverseMatch_AcceptsAbsolutePathCommand(t *testing.T) {
 	// Phase B wrappers can be invoked with argv[0] equal to a basename
 	// ("gh") or an absolute path ("/usr/bin/gh") depending on how the
