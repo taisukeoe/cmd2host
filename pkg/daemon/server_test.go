@@ -120,7 +120,7 @@ func TestServer_ListOperations(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -260,7 +260,7 @@ func TestServer_RepoMismatch(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -315,7 +315,7 @@ func TestServer_DescribeOperation(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -516,7 +516,7 @@ func TestServer_RunOperation_TruncatesStdoutWithTypedFlag(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -586,7 +586,7 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -651,7 +651,7 @@ func TestServer_RunOperation_RawArgvDispatch(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -712,7 +712,7 @@ func TestServer_RunOperation_RawArgvUnknownIsDenied(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -775,7 +775,7 @@ func TestServer_RunOperation_RawArgvEmptyOrNullIsDenied(t *testing.T) {
 			if err != nil {
 				return
 			}
-			go server.handleClient(conn)
+			go server.handleClient(conn, func() {})
 		}
 	}()
 
@@ -960,6 +960,68 @@ func TestServer_DispatchConn_ClosesAtCapacity(t *testing.T) {
 	n, err := b.Read(buf)
 	if err == nil {
 		t.Fatalf("expected EOF on rejected connection, got n=%d err=nil", n)
+	}
+}
+
+// TestServer_AuthFailure_ReleasesInFlightSlotBeforeThrottleSleep pins
+// the cap-amplification fix: when a connection authenticates with a
+// bogus token, the handler must release its in-flight slot before the
+// 1-second throttle sleep so the cap does not stay reserved by a
+// goroutine that has no remaining work. Otherwise a stream of failed
+// auth attempts can exhaust max_in_flight for the entire duration of
+// the synthetic delay and block legitimate clients via the
+// dispatchConn drop branch.
+func TestServer_AuthFailure_ReleasesInFlightSlotBeforeThrottleSleep(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+	server.inFlightSem = make(chan struct{}, 1)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			server.dispatchConn(conn)
+		}
+	}()
+
+	// Fire a request with a bogus token. The handler should log
+	// AUTH FAILED, release the slot, then sleep ~1s before sending
+	// the response. We do not wait for the response here.
+	conn, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	req := operations.Request{
+		Operation: "test_op",
+		Token:     "this-is-not-a-valid-token-just-bytes-bytes-bytes-bytes-bytes-x",
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	// Within the 1-second throttle window, the slot must already be
+	// free. Poll with a 500ms ceiling — well under the 1s sleep and
+	// well above the time the handler needs to reach the release call.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		select {
+		case server.inFlightSem <- struct{}{}:
+			// Acquired — release immediately and return clean.
+			<-server.inFlightSem
+			return
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("slot stayed reserved through the throttle window; release must happen before time.Sleep")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }
 
