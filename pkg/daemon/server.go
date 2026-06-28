@@ -213,9 +213,19 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 // `{"raw_argv":null}` and a request that omits the field (both deserialize
 // to nil RawArgv slice in Go).
 func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPresent bool) {
+	// Pre-resolution audit lines use [OP:?] so an operator's `grep '\[OP:'`
+	// catches every operation request regardless of how far it gets through
+	// auth / project / target / reverse-match. The resolved [OP:<id>] line
+	// at the end carries the actual operation_id once reverse-match (or the
+	// explicit operation field) has settled it.
+	source := "mcp"
+	if rawArgvPresent {
+		source = "raw_argv"
+	}
+
 	var req operations.Request
 	if err := json.Unmarshal(data, &req); err != nil {
-		fmt.Println("  -> Invalid operation request:", err)
+		fmt.Printf("[OP:?] DENIED (request_parse) source=%s: %v\n", source, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    "",
 			ExitCode:     1,
@@ -227,8 +237,8 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Authenticate token
 	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
 	if !valid {
+		fmt.Printf("[OP:?] AUTH FAILED source=%s request_id=%s\n", source, req.RequestID)
 		time.Sleep(1 * time.Second) // Delay to slow down brute force attacks
-		fmt.Println("  -> AUTH FAILED")
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -240,7 +250,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Resolve project config from token
 	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
-		fmt.Printf("  -> %v\n", err)
+		fmt.Printf("[OP:?] DENIED (project) source=%s request_id=%s: %v\n", source, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -258,7 +268,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// (repo / repo_path / expected_git_url) with their per-target values.
 	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
 	if err != nil {
-		fmt.Printf("  -> DENIED (target): %v\n", err)
+		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q request_id=%s: %v\n", source, projectID, req.TargetRepo, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -279,7 +289,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		req.Source = "raw_argv"
 		if len(req.RawArgv) == 0 {
 			msg := "raw_argv field is present but empty; must contain at least the command token"
-			fmt.Printf("  -> DENIED (raw_argv): %s\n", msg)
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
@@ -289,7 +299,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		}
 		if len(req.RawArgv[0]) == 0 {
 			msg := "raw_argv command is empty"
-			fmt.Printf("  -> DENIED (raw_argv): %s\n", msg)
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
@@ -305,7 +315,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		candidates := buildReverseMatchCandidates(projectConfig)
 		resolved, rerr := operations.ReverseMatch(req.RawArgv[0], req.RawArgv[1:], candidates, injection)
 		if rerr != nil {
-			fmt.Printf("  -> DENIED (reverse_match): %v\n", rerr)
+			fmt.Printf("[OP:?] DENIED (reverse_match) source=raw_argv project=%s target_repo=%q request_id=%s: %v\n", projectID, req.TargetRepo, req.RequestID, rerr)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
