@@ -103,8 +103,57 @@ jobs:
           name: cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
           path: cmd2host-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
 
+  build-proxy:
+    runs-on: ubuntu-slim
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6
+
+      - name: Derive binary version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Unexpected tag format: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver in tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # ratchet:actions/setup-go@v6
+        with:
+          go-version: '1.25.11'
+          cache-dependency-path: go.sum
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o cmd2host-proxy-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/cmd2host-proxy
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7
+        with:
+          name: cmd2host-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: cmd2host-proxy-${{ matrix.goos }}-${{ matrix.goarch }}
+
   release:
-    needs: [build-host, build-mcp]
+    needs: [build-host, build-mcp, build-proxy]
     runs-on: ubuntu-slim
     steps:
       - name: Derive binary version from tag
@@ -148,6 +197,10 @@ jobs:
             cmd2host-mcp-linux-arm64
             cmd2host-mcp-darwin-amd64
             cmd2host-mcp-darwin-arm64
+            cmd2host-proxy-linux-amd64
+            cmd2host-proxy-linux-arm64
+            cmd2host-proxy-darwin-amd64
+            cmd2host-proxy-darwin-arm64
           )
           missing=0
           for name in "${expected[@]}"; do

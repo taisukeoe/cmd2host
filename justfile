@@ -17,7 +17,9 @@ build-darwin-arm64:
     GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-darwin-arm64 ./cmd/cmd2host
 
 # Build all release binaries
-build-all: build-darwin-amd64 build-darwin-arm64 build-mcp-darwin-amd64 build-mcp-darwin-arm64
+build-all: build-darwin-amd64 build-darwin-arm64 \
+    build-mcp-darwin-amd64 build-mcp-darwin-arm64 build-mcp-linux-amd64 build-mcp-linux-arm64 \
+    build-proxy-darwin-amd64 build-proxy-darwin-arm64 build-proxy-linux-amd64 build-proxy-linux-arm64
 
 # Build MCP server for current platform
 build-mcp:
@@ -34,6 +36,30 @@ build-mcp-darwin-arm64:
 # Build MCP server for Linux amd64 (for containers)
 build-mcp-linux-amd64:
     GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-mcp-linux-amd64 ./cmd/cmd2host-mcp
+
+# Build MCP server for Linux arm64 (for containers)
+build-mcp-linux-arm64:
+    GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-mcp-linux-arm64 ./cmd/cmd2host-mcp
+
+# Build cmd2host-proxy for current platform (container-side transparent proxy)
+build-proxy:
+    go build -o dist/cmd2host-proxy ./cmd/cmd2host-proxy
+
+# Build cmd2host-proxy for macOS Intel
+build-proxy-darwin-amd64:
+    GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-proxy-darwin-amd64 ./cmd/cmd2host-proxy
+
+# Build cmd2host-proxy for macOS Apple Silicon
+build-proxy-darwin-arm64:
+    GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-proxy-darwin-arm64 ./cmd/cmd2host-proxy
+
+# Build cmd2host-proxy for Linux amd64 (primary container target)
+build-proxy-linux-amd64:
+    GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/cmd2host-proxy-linux-amd64 ./cmd/cmd2host-proxy
+
+# Build cmd2host-proxy for Linux arm64 (ARM container target)
+build-proxy-linux-arm64:
+    GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/cmd2host-proxy-linux-arm64 ./cmd/cmd2host-proxy
 
 # Run unit tests for host daemon (root module: pkg/, cmd/, internal/)
 test:
