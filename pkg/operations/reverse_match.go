@@ -193,17 +193,29 @@ func filterByCommand(command string, candidates []CandidateOp) []CandidateOp {
 
 // NormalizeFlagTail rewrites "--flag value" two-token pairs into
 // "--flag=value" one-token form when the flag name is in the candidate's
-// value-bearing allow list and the following token does not itself start
-// with "-". Boolean flags and unrecognized flag-shaped tokens pass through
-// verbatim. Operates only on the flag tail produced by the per-candidate
-// template walk, so template-literal flags (which were matched 1:1 against
-// the template) are not in scope.
-func NormalizeFlagTail(tail []string, allowedFlags []string) []string {
+// value-bearing allow list (allowedFlags minus boolFlags) and the
+// following token does not itself start with "-". Boolean flags
+// (presence-only switches such as `--draft`) and unrecognized
+// flag-shaped tokens pass through verbatim. Operates only on the flag
+// tail produced by the per-candidate template walk, so template-literal
+// flags (which were matched 1:1 against the template) are not in scope.
+//
+// boolFlags MUST be a subset of allowedFlags. Entries in boolFlags that
+// are not also in allowedFlags are ignored (they cannot reach this code
+// path anyway — ValidateFlags would reject them).
+func NormalizeFlagTail(tail, allowedFlags, boolFlags []string) []string {
 	if len(tail) == 0 {
 		return tail
 	}
+	boolSet := make(map[string]struct{}, len(boolFlags))
+	for _, f := range boolFlags {
+		boolSet[f] = struct{}{}
+	}
 	valueBearing := make(map[string]struct{}, len(allowedFlags))
 	for _, f := range allowedFlags {
+		if _, isBool := boolSet[f]; isBool {
+			continue
+		}
 		valueBearing[f] = struct{}{}
 	}
 
@@ -289,7 +301,7 @@ func tryMatchCandidate(op *Operation, argv []string, injection map[string]string
 	}
 
 	flagTail := argv[len(effective):]
-	flags := NormalizeFlagTail(flagTail, op.AllowedFlags)
+	flags := NormalizeFlagTail(flagTail, op.AllowedFlags, op.BoolFlags)
 
 	// Flag validation: ValidateOperation re-runs this later, but rejecting
 	// here treats out-of-policy flags as "this candidate does not match"

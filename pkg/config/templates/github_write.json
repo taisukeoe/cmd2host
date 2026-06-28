@@ -55,6 +55,7 @@
         "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
+      "bool_flags": ["--draft"],
       "description": "Create a pull request"
     },
     "gh_pr_comment": {

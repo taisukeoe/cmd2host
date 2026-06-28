@@ -544,6 +544,7 @@ func TestNormalizeFlagTail(t *testing.T) {
 		name         string
 		tail         []string
 		allowedFlags []string
+		boolFlags    []string
 		want         []string
 	}{
 		{
@@ -568,6 +569,7 @@ func TestNormalizeFlagTail(t *testing.T) {
 			name:         "leaves boolean flag alone (next token is also a flag)",
 			tail:         []string{"--draft", "--state", "open"},
 			allowedFlags: []string{"--draft", "--state"},
+			boolFlags:    []string{"--draft"},
 			want:         []string{"--draft", "--state=open"},
 		},
 		{
@@ -582,11 +584,33 @@ func TestNormalizeFlagTail(t *testing.T) {
 			allowedFlags: []string{"--state", "--limit"},
 			want:         []string{"--state", "--limit=5"},
 		},
+		{
+			// Pins the bool-flag fix: a presence-only switch followed by a
+			// positional argument must reach the host as two separate
+			// tokens. Without the boolFlags carve-out the normalizer used
+			// to splice them into `--draft=positional`, which corrupts the
+			// user's intent.
+			name:         "leaves bool flag alone even when followed by a positional",
+			tail:         []string{"--draft", "positional-value"},
+			allowedFlags: []string{"--draft"},
+			boolFlags:    []string{"--draft"},
+			want:         []string{"--draft", "positional-value"},
+		},
+		{
+			// Sanity check: an entry in boolFlags that is not in
+			// allowedFlags is silently ignored — the validator's allow
+			// list is still the authority over what survives.
+			name:         "ignores bool-flag entry not in allow list",
+			tail:         []string{"--state", "open"},
+			allowedFlags: []string{"--state"},
+			boolFlags:    []string{"--rogue"},
+			want:         []string{"--state=open"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeFlagTail(tt.tail, tt.allowedFlags)
+			got := NormalizeFlagTail(tt.tail, tt.allowedFlags, tt.boolFlags)
 			if !stringSliceEqual(got, tt.want) {
 				t.Errorf("NormalizeFlagTail = %v, want %v", got, tt.want)
 			}

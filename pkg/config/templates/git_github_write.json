@@ -57,6 +57,7 @@
         "number": {"type": "integer", "min": 1}
       },
       "allowed_flags": ["--json", "--required"],
+      "bool_flags": ["--required"],
       "description": "Show CI check status for a pull request"
     },
     "gh_pr_review_comments": {
@@ -75,6 +76,7 @@
         "body": {"type": "string", "minLength": 1, "maxLength": 65535, "pattern": "\\S"}
       },
       "allowed_flags": ["--title", "--base", "--head", "--draft", "--label", "--assignee", "--reviewer"],
+      "bool_flags": ["--draft"],
       "description": "Create a pull request"
     },
     "gh_pr_edit": {
@@ -129,6 +131,7 @@
         "run_id": {"type": "integer", "min": 1}
       },
       "allowed_flags": ["--json", "--log", "--log-failed", "--exit-status", "--job"],
+      "bool_flags": ["--log", "--log-failed", "--exit-status"],
       "description": "View a workflow run (supports --log / --log-failed)"
     }
   }

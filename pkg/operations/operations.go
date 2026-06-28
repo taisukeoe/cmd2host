@@ -19,7 +19,14 @@ type Operation struct {
 	ArgsTemplate []string               `json:"args_template"` // e.g., ["pr", "view", "{number}"]
 	Params       map[string]ParamSchema `json:"params"`        // Parameter schemas
 	AllowedFlags []string               `json:"allowed_flags"` // e.g., ["--state", "--limit"]
-	Description  string                 `json:"description"`   // Human-readable description
+	// BoolFlags lists entries from AllowedFlags that take no value
+	// (presence-only switches such as `--draft`, `--required`,
+	// `--exit-status`). The raw-argv reverse-match's flag-tail
+	// normalizer consults this list so it does not splice the next argv
+	// token into a boolean switch (e.g. `gh pr create --draft "title"`
+	// must reach the host as two tokens, not `--draft=title`).
+	BoolFlags   []string `json:"bool_flags,omitempty"`
+	Description string   `json:"description"` // Human-readable description
 }
 
 // ItemsSchema defines the schema for array items
