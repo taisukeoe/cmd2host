@@ -64,11 +64,19 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	// Symlink form (argv[0] basename is gh / aws / ...) skips wrapper
 	// flag parsing entirely so the host command's flags (e.g.
 	// `gh --version`, `gh -R owner/repo`) are not mis-interpreted as
-	// wrapper flags. Direct form (argv[0] basename is "cmd2host-proxy")
-	// parses wrapper-owned flags first and may exit early on
-	// `--version`; only then does it require a host command.
+	// wrapper flags. Direct form (argv[0] basename starts with
+	// "cmd2host-proxy") parses wrapper-owned flags first and may exit
+	// early on `--version`; only then does it require a host command.
+	//
+	// `strings.HasPrefix` instead of exact equality so renamed binary
+	// artefacts (`cmd2host-proxy-v0.3.0` release asset,
+	// `cmd2host-proxy.bak` after a manual upgrade) still hit the direct
+	// branch. The trade-off is that a user-created symlink whose name
+	// itself starts with "cmd2host-proxy" gets treated as direct
+	// invocation; the failure mode is loud (unknown flag rather than
+	// silent dispatch).
 	base := filepath.Base(argv[0])
-	if base != "cmd2host-proxy" {
+	if !strings.HasPrefix(base, "cmd2host-proxy") {
 		// Symlink form: env-resolved defaults are used; per-invocation
 		// flag overrides are not available on this path.
 		return dispatch(base, argv[1:],

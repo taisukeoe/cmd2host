@@ -76,6 +76,35 @@ func TestRun_SymlinkInvocationDoesNotConsumeHostVersionFlag(t *testing.T) {
 	}
 }
 
+// TestRun_RenamedDirectBinaryStillParsesWrapperFlags pins the symlink
+// discriminator: a binary whose basename starts with `cmd2host-proxy`
+// (release asset suffixed with a version, manual upgrade rename to
+// `.bak`, etc.) must still take the direct branch and parse the
+// wrapper's own --version flag, not be misinterpreted as a host
+// command named `cmd2host-proxy-v0.3.0`.
+func TestRun_RenamedDirectBinaryStillParsesWrapperFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{name: "versioned release asset", argv: []string{"cmd2host-proxy-v0.3.0", "--version"}},
+		{name: "backup file after upgrade", argv: []string{"cmd2host-proxy.bak", "--version"}},
+		{name: "absolute path with version suffix", argv: []string{"/usr/local/bin/cmd2host-proxy-v0.3.0-rc1", "--version"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			exit := run(tt.argv, &stdout, &stderr)
+			if exit != 0 {
+				t.Errorf("exit = %d, want 0 (wrapper --version should win)", exit)
+			}
+			if !strings.Contains(stdout.String(), "cmd2host-proxy version") {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), "cmd2host-proxy version")
+			}
+		})
+	}
+}
+
 // Ensure the package compiles its os import — Go's unused-import rule
 // would otherwise hide a future stray edit. The import survives because
 // it is used in run()'s real callers; this is a defensive no-op assert.
