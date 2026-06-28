@@ -1,6 +1,7 @@
 // cmd2host-proxy is the container-side transparent proxy binary for the
 // cmd2host daemon. Installed as a single binary plus per-command symlinks
-// (gh, git, aws, ...), it argv[0]-dispatches the user's invocation into
+// for auth-heavy CLIs the project config declares operation templates for
+// (gh, aws, gcloud, ...), it argv[0]-dispatches the user's invocation into
 // pkg/proxyclient.Dispatch which:
 //
 //   - runs container-side early-reject checks (stdin / file:// /
@@ -56,7 +57,7 @@ func main() {
 func run(argv []string, stdout, stderr *os.File) int {
 	// Strip wrapper-owned flags from a copy of argv before extracting
 	// the host command. The remaining args (after FlagSet.Parse) are
-	// what the user wanted to send to gh / git / aws.
+	// what the user wanted to send to gh / aws / ....
 	fs := flag.NewFlagSet("cmd2host-proxy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -68,7 +69,7 @@ func run(argv []string, stdout, stderr *os.File) int {
 	showVersion := fs.Bool("version", false, "Show version and exit")
 
 	// Wrapper-owned flags must be split from the host command's flags.
-	// When invoked via symlink (argv[0] is gh / git / aws / ...), the
+	// When invoked via symlink (argv[0] is gh / aws / ... / ...), the
 	// wrapper has no flags of its own to parse — everything after
 	// argv[0] belongs to the host command. The direct-invocation form
 	// (`cmd2host-proxy [flags] <command> [args...]`) is the only one
@@ -108,7 +109,7 @@ func run(argv []string, stdout, stderr *os.File) int {
 }
 
 // splitArgvByInvocation distinguishes the symlink invocation form
-// (argv[0] is gh / git / aws / etc.) from the direct invocation form
+// (argv[0] is gh / aws / ... / etc.) from the direct invocation form
 // (argv[0] basename is cmd2host-proxy). Returns the host command name
 // and the host command's argv tail.
 //

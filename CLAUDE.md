@@ -10,6 +10,10 @@ cmd2host is a DevContainer Feature that proxies authentication-required CLI invo
 
 cmd2host owns authenticated host-side execution of explicitly allowed CLI operations, whether invoked through MCP tools or through the container-side CLI wrapper (`cmd2host-proxy`). MCP and the wrapper binary are two front doors into the same typed operation contract: the project-bound operation templates, validation, sanitization, and policy enforcement that live in `pkg/operations` and `pkg/daemon`. Both routes terminate in the same `handleOperationRequest` path.
 
+`cmd2host-proxy`'s wrapper-route fit criterion is **CLIs whose normal usage is almost entirely auth-required against an external service the container cannot reach** — gh (GitHub), AWS CLI, gcloud, az, and similar are the natural fit. The source tree ships sample operation templates for `gh` and `aws` (see `pkg/config/templates/`), but the project-config layer is open: users can declare allowed operations for any auth-heavy CLI in their own `~/.cmd2host/projects/<id>/config.json` and add it to the DevContainer Feature's `commands` option.
+
+CLIs whose normal usage mixes local-only subcommands with auth-required ones (`git` is the canonical example: `commit` / `status` / `log` / `diff` are local-only, `push` / `fetch` are auth-required) are NOT a good fit for the wrapper route. Routing every invocation through the daemon would turn the local-only subcommands into denials (they are not in any operation template, so reverse-match fails loud). For such CLIs, run the local subcommands directly inside the container with the native binary, and use the MCP route's typed operation templates (`git_push` / `git_fetch`) for the auth-required ones.
+
 - **Source code (strict core)**: only features needed to proxy auth-required operations through the typed operation contract — token-based session auth, the MCP server, the container-side `cmd2host-proxy` wrapper, raw-argv reverse-match into the same operation templates, project-bound policies (`allowed_operations`, `path_deny`, `env`, `git_config`). Behavior outside this scope does not belong in the source tree, even if a config-layer extension could express it.
 - **Config layer (user-controlled)**: project configs (`~/.cmd2host/projects/<id>/config.json`) can define any custom operation a user wants to expose. cmd2host does not police user configs — that flexibility is intentional and lives entirely on the user side.
 
@@ -19,7 +23,7 @@ When evaluating a proposed feature, ask first whether it is required to proxy an
 
 ### Container precondition
 
-cmd2host assumes the container already has `git` installed and the project's `.git` directory accessible. Local-only git operations (`git commit`, `git merge`, `git add`, `git status`, `git log`, `git diff`, etc.) run **inside the container** directly — they are not declared as allowed operations and the raw-argv reverse-match rejects them so they cannot accidentally reach the host. Default templates therefore expose only auth-required operations: git pushes / fetches over the network, GitHub API calls via `gh`, and (when the `cmd2host-proxy` wrapper is installed and the `commands` option lists a CLI) raw-argv transparent dispatch for the same declared operation set.
+cmd2host assumes the container already has `git` installed and the project's `.git` directory accessible. Because `git` is a mixed-nature CLI (local-only subcommands and auth-required subcommands intermixed) and therefore outside the wrapper route, every `git` invocation stays on the native container binary: `git commit`, `git status`, `git log`, `git diff`, `git add`, `git merge`, and so on run in-container without touching the daemon. Authenticated git operations (`git push`, `git fetch`) reach the host through the MCP route's `git_push` / `git_fetch` operation templates rather than the wrapper. Default templates expose only auth-required operations: GitHub API calls via `gh`, authenticated git pushes / fetches (MCP route only), and (when the `cmd2host-proxy` wrapper is installed for an auth-heavy CLI declared in the project config) raw-argv transparent dispatch for that CLI.
 
 ### Tool output trust boundary
 
@@ -37,15 +41,16 @@ Four-part system:
 1. **Container side** (`src/cmd2host/`): DevContainer Feature that installs the MCP server, the `cmd2host-proxy` transparent dispatch binary, and per-command symlinks (`gh`, `git`, `aws`, ...) pointing at the binary
 2. **Host side** (`cmd/cmd2host/` + `pkg/`): Go daemon that receives and executes commands. Business logic lives in importable packages under `pkg/`; the CLI binary is a thin wrapper
 3. **MCP server** (`pkg/mcpserver/` library + `cmd/cmd2host-mcp/` binary): Model Context Protocol server for AI agent integration. `pkg/mcpserver` is importable for in-process embedding; `cmd/cmd2host-mcp` is the thin wrapper that ships as the `cmd2host-mcp` binary
-4. **Transparent proxy** (`pkg/proxyclient/` library + `cmd/cmd2host-proxy/` binary): container-side raw-argv dispatcher for natural CLI invocations (`gh pr view 42`, `git push main:refs/heads/main`, `aws s3 ls s3://bucket`). `pkg/proxyclient` is importable for in-process embedding; `cmd/cmd2host-proxy` is the thin wrapper that ships as the `cmd2host-proxy` binary, argv[0]-dispatched via per-command symlinks
+4. **Transparent proxy** (`pkg/proxyclient/` library + `cmd/cmd2host-proxy/` binary): container-side raw-argv dispatcher for CLIs whose invocations are almost entirely auth-required against an external service (`gh pr view 42`, `aws s3 ls s3://bucket`, and any other auth-heavy CLI the project config declares operation templates for). `pkg/proxyclient` is importable for in-process embedding; `cmd/cmd2host-proxy` is the thin wrapper that ships as the `cmd2host-proxy` binary, argv[0]-dispatched via per-command symlinks. CLIs that mix local-only and auth-required subcommands (`git` being the canonical case) are intentionally outside the wrapper route — see the Scope section above
 
 Communication flow:
 ```
-MCP route:        AI Agent  → cmd2host-mcp   → JSON over TCP:9876 → cmd2host daemon → actual CLI → response
-Wrapper route:    Container → cmd2host-proxy → JSON over TCP:9876 → cmd2host daemon → actual CLI → response (stdout / stderr / exit code propagated to the caller)
+MCP route:        AI agent (typed tool call)                       → cmd2host-mcp   → JSON over TCP:9876 → cmd2host daemon → actual CLI on host → response
+Wrapper route:    AI agent (Bash tool / script runs gh or aws,     → cmd2host-proxy → JSON over TCP:9876 → cmd2host daemon → actual CLI on host → response (stdout / stderr / exit code propagated to the caller)
+                  resolved via /usr/local/bin/<cmd> symlink)
 ```
 
-Both routes terminate in the same `handleOperationRequest` on the daemon, which validates the resolved operation against the project's allow list and sanitizes the execution environment before launching the host CLI.
+Both routes have the AI agent as the originating caller. The MCP route is invoked when the agent composes a typed tool call (or when authenticated git operations such as `git push` are needed — those always go through MCP). The wrapper route is invoked when the agent (or any container-side script the agent runs) executes a natural CLI command for an auth-heavy CLI the project config has declared operation templates for; `gh pr view 42` and `aws s3 ls` are the bundled examples. Both terminate in the same `handleOperationRequest` on the daemon, which validates the resolved operation against the project's allow list and sanitizes the execution environment before launching the host CLI.
 
 ## Security Model
 

@@ -5,24 +5,34 @@
 //
 // Exit code policy (v1):
 //
-//   - 0..127            : passthrough of the host command's actual exit
-//     (success or non-zero from the underlying gh / git / aws / ...).
-//   - 200               : daemon connectivity / protocol failure (proxy-
-//                         side infrastructure issue, not the host
-//                         command's fault).
-//   - 201               : token file read failure (proxy-side
-//                         configuration issue).
-//   - 220               : daemon-side denial (unknown operation,
-//                         ambiguous reverse-match, validation failure,
-//                         consistency check failure, etc.).
-//   - 230               : container-side early reject (stdin attached,
-//                         file:// argv, TTY-required subcommand).
+//   Passthrough (host command's actual exit, full Unix 0..255 range):
+//     - 0..127       : command-defined success / failure surfaced by
+//                      the underlying gh / aws / ... (whichever
+//                      auth-heavy CLI the project config exposes)
+//     - 128..143     : process killed by signal n (128+n; e.g. a host
+//                      command killed by SIGPIPE exits 141 = 128+13)
+//     - 144..255     : other command-defined exits in the upper Unix
+//                      range (CLIs commonly use 254/255 for transport
+//                      or generic failure)
 //
-// The 200/220/230 bands are reserved by the proxy so callers
-// (CI scripts, AI wrappers) can distinguish "the proxy could not even
-// reach the host" from "the host refused the operation" from "the host
-// command actually failed". Users who do not care about the distinction
-// can treat any non-zero exit as failure.
+//   Proxy-originated (reserved high codes):
+//     - 200          : daemon connectivity / protocol failure
+//     - 201          : token file read failure
+//     - 220          : daemon-side denial (unknown operation, ambiguous
+//                      reverse-match, validation failure, consistency
+//                      check failure)
+//     - 230          : container-side early reject (stdin attached,
+//                      file:// argv, TTY-required subcommand)
+//
+// Numeric collision: a host command that explicitly exits with a code
+// the proxy also reserves (e.g. a custom CLI returns 200) surfaces as
+// the same integer the proxy uses. The proxy distinguishes its own
+// outcomes from passthrough by always writing a `cmd2host:` prefix on
+// stderr (carrying the daemon's DeniedReason or a local diagnostic),
+// while genuine host command output passes through with whatever stderr
+// the host CLI wrote. Callers that need a robust contract should
+// inspect stderr or treat the `cmd2host:` prefix as the authoritative
+// signal for proxy-originated outcomes.
 
 package proxyclient
 

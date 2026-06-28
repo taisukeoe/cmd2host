@@ -125,15 +125,21 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Determine request type by checking for specific fields. The raw_argv
 	// discriminator must precede the operation discriminator: raw-argv mode
 	// requests carry RawArgv but resolve Operation only after reverse-match,
-	// so the operation field may be empty at this point.
+	// so the operation field may be empty at this point. The boolean is
+	// passed to handleOperationRequest as the single source of truth for
+	// raw-argv mode detection — Go's json.Unmarshal collapses `null` and
+	// missing fields to a nil slice, so inspecting the unmarshaled Request
+	// alone cannot distinguish `{"raw_argv":null}` (caller intent: raw-argv)
+	// from a request that omits the field (caller intent: operation entry).
+	_, hasRawArgv := rawRequest["raw_argv"]
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
 		s.handleListOperationsRequest(conn, data)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
 		s.handleDescribeOperationRequest(conn, data)
-	} else if _, hasRawArgv := rawRequest["raw_argv"]; hasRawArgv {
-		s.handleOperationRequest(conn, data)
+	} else if hasRawArgv {
+		s.handleOperationRequest(conn, data, true)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
-		s.handleOperationRequest(conn, data)
+		s.handleOperationRequest(conn, data, false)
 	} else {
 		fmt.Println("  -> Unknown request type (missing 'operation' or 'raw_argv' field)")
 		s.sendOperationResponse(conn, operations.Response{
@@ -188,8 +194,12 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 
 // handleOperationRequest handles new-style operation requests for both the
 // explicit operation entry (Operation field set) and the additive raw-argv
-// entry (RawArgv field set, Operation resolved by reverse-match).
-func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
+// entry (raw_argv field present in the request JSON, Operation resolved by
+// reverse-match). rawArgvPresent reports JSON-level field presence detected
+// in handleClient — passing it explicitly avoids ambiguity between
+// `{"raw_argv":null}` and a request that omits the field (both deserialize
+// to nil RawArgv slice in Go).
+func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPresent bool) {
 	var req operations.Request
 	if err := json.Unmarshal(data, &req); err != nil {
 		fmt.Println("  -> Invalid operation request:", err)
@@ -247,10 +257,23 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	// Raw-argv mode: resolve Operation/Params/Flags via reverse-match
 	// against the project's allowed operations before continuing through
 	// the shared validate / sanitize / execute path. Triggered by the
-	// presence of RawArgv; Source is normalized to "raw_argv" for logging
-	// regardless of whether the caller pre-populated it.
-	if len(req.RawArgv) > 0 {
+	// presence of the raw_argv field in the request JSON (passed in via
+	// rawArgvPresent so `{"raw_argv":null}` and `{"raw_argv":[]}` both
+	// enter this branch and get an explicit raw-argv denial). Source is
+	// normalized to "raw_argv" for logging regardless of whether the
+	// caller pre-populated it.
+	if rawArgvPresent {
 		req.Source = "raw_argv"
+		if len(req.RawArgv) == 0 {
+			msg := "raw_argv field is present but empty; must contain at least the command token"
+			fmt.Printf("  -> DENIED (raw_argv): %s\n", msg)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
 		if len(req.RawArgv[0]) == 0 {
 			msg := "raw_argv command is empty"
 			fmt.Printf("  -> DENIED (raw_argv): %s\n", msg)

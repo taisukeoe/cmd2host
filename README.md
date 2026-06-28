@@ -6,6 +6,10 @@ A DevContainer Feature that proxies authentication-required CLI invocations from
 
 cmd2host owns authenticated host-side execution of explicitly allowed CLI operations, whether invoked through MCP tools or through the container-side CLI wrapper (`cmd2host-proxy`). MCP and the wrapper binary are two front doors into the same typed operation contract: project-bound operation templates, validation, sanitization, and policy enforcement.
 
+`cmd2host-proxy`'s wrapper-route fit criterion is **CLIs whose normal usage is almost entirely auth-required against an external service** the container cannot reach directly. `gh` (GitHub) and AWS CLI are the bundled examples — the source tree ships operation templates for them under `pkg/config/templates/` — but the project-config layer is open: users can declare allowed operations for any auth-heavy CLI (gcloud, az, etc.) in their own `~/.cmd2host/projects/<id>/config.json` and add it to the DevContainer Feature's `commands` option.
+
+CLIs whose normal usage mixes local-only and auth-required subcommands (`git` is the canonical example: `commit` / `status` / `log` / `diff` are local-only, `push` / `fetch` are auth-required) are NOT a good fit for the wrapper route. Routing every invocation through the daemon would turn the local-only subcommands into denials. For such CLIs, run the local subcommands directly inside the container with the native binary, and use the MCP route's typed operation templates (`git_push` / `git_fetch`) for the auth-required ones.
+
 - **Source code (strict core)**: only what is necessary to proxy auth-required operations through the typed operation contract — token-based session auth, the MCP server, the container-side `cmd2host-proxy` wrapper, raw-argv reverse-match into the same operation templates, project-bound policies (`allowed_operations`, `path_deny`, `env`, `git_config`). New behavior outside this scope does not go into the source tree.
 - **Config layer (user-controlled)**: project configs can define any custom operation a user wants to expose via this proxy. cmd2host does not police what users put in their own `~/.cmd2host/projects/<id>/config.json` — that flexibility is intentional.
 
@@ -18,28 +22,27 @@ cmd2host assumes the DevContainer (or wrapper-managed container) already has `gi
 ## Architecture
 
 ```
-DevContainer                              Host Machine (macOS)
-+--------------------------+              +----------------------+
-| AI Agent                 |              | cmd2host daemon      |
-|   |                      |              |   |                  |
-|   v                      |              |   v                  |
-| cmd2host-mcp (MCP route) |   TCP:9876   | cmd2host (Go)        |
-|   |                      |  --or------> |   |                  |
-| Operations API           |  Unix socket |   v                  |
-+--------------------------+  <---------- | gh / git / aws (CLI) |
-                                          |                      |
-+--------------------------+              |   ^                  |
-| User command (gh, git,   |   TCP:9876   |   |                  |
-| aws, ...)                |  --or------> | same daemon path     |
-|   |                      |  Unix socket |                      |
-|   v                      |              +----------------------+
-| /usr/local/bin/<cmd>     |
-|   symlink -> cmd2host-   |
-|   proxy (raw-argv route) |
-+--------------------------+
+DevContainer                                          Host Machine (macOS)
++------------------------------------------+          +----------------------+
+| AI agent                                 |          | cmd2host daemon      |
+|   |                                      |          |   |                  |
+|   |-- typed MCP tool call                | TCP:9876 |   v                  |
+|   |     -> cmd2host-mcp -----------------|--or----->| cmd2host (Go)        |
+|   |                                      | Unix     |   |                  |
+|   |-- Bash tool / script runs gh or aws  | sock     |   v                  |
+|   |     -> /usr/local/bin/<cmd> symlink  |          | gh / aws             |
+|   |     -> cmd2host-proxy ---------------|--TCP --->|   (real CLI on host) |
+|   |                                      |  or      |                      |
+|   |-- git commit / status / log / ...    |  Unix    +----------------------+
+|       -> container's native /usr/bin/git |  sock
+|       (in-container; never reaches the   |
+|        daemon)                           |
++------------------------------------------+
 ```
 
-Both routes terminate in the same daemon entry, which validates the resolved operation against the project's allow list and sanitizes the execution environment before launching the host CLI.
+Two routes share the daemon: typed MCP tool calls dispatched by `cmd2host-mcp`, and natural invocations of auth-heavy CLIs dispatched by `cmd2host-proxy` via per-command symlinks (`gh` and AWS CLI are bundled; users can extend the proxy surface to any auth-heavy CLI via project config). Both terminate in the same daemon entry, which validates the resolved operation against the project's allow list and sanitizes the execution environment before launching the host CLI.
+
+`git` is intentionally outside the wrapper route because its invocations mix local-only subcommands (`commit` / `status` / `log` / ...) with auth-required ones (`push` / `fetch`). Local subcommands stay on the container's native git binary; authenticated git operations reach the host through the MCP route's `git_push` / `git_fetch` operation templates rather than through `cmd2host-proxy`.
 
 Connection modes:
 - **TCP** (default): Uses `host.docker.internal:9876` - works with most DevContainers
@@ -64,7 +67,7 @@ Inside either path, the container exposes **two parallel entry points** to the s
 | Entry | Used by |
 |---|---|
 | **MCP tools** (`cmd2host_list_operations` / `_describe_operation` / `_run_operation`) | AI agents that compose typed operation requests directly — discovery (list / describe) is exclusive to this route. |
-| **Raw-argv transparent proxy** (`gh ...`, `git push ...`, `aws s3 ls ...` via symlinks at `/usr/local/bin/<command>`) | Container-side scripts and CLI invocations that should reach the host without being rewritten as explicit MCP calls. Reverse-matches the argv against the project's allowed operation templates and dispatches through the same validation / sanitization / policy path as the MCP route. |
+| **Raw-argv transparent proxy** (per-command symlinks at `/usr/local/bin/<command>` to `cmd2host-proxy`) | Container-side scripts and CLI invocations that should reach the host without being rewritten as explicit MCP calls. Fits CLIs whose normal usage is almost entirely auth-required against an external service — `gh` and AWS CLI are bundled, other auth-heavy CLIs can be added via project config. Reverse-matches argv against the project's allowed operation templates and dispatches through the same validation / sanitization / policy path as the MCP route. CLIs that mix local-only and auth-required subcommands (`git`) are intentionally out of scope. |
 
 Both paths share the same host daemon and project configuration — they only differ in how the container side is constructed.
 
@@ -179,7 +182,9 @@ Or copy `src/cmd2host/mcp.json` to `.devcontainer/mcp.json` for manual MCP clien
 
 ## Raw-argv transparent proxy
 
-When the DevContainer Feature installs the `cmd2host-proxy` binary, each command in the feature's `commands` option becomes a `/usr/local/bin/<command>` symlink pointing at the proxy. Natural CLI invocations (`gh pr view 42`, `git push main:refs/heads/main`, `aws s3 ls s3://my-bucket`) reach the host through the same `handleOperationRequest` path that the MCP route uses.
+When the DevContainer Feature installs the `cmd2host-proxy` binary, each command in the feature's `commands` option becomes a `/usr/local/bin/<command>` symlink pointing at the proxy. Natural CLI invocations of auth-heavy CLIs (`gh pr view 42`, `aws s3 ls s3://my-bucket`, and any other auth-heavy CLI the project config declares operation templates for) reach the host through the same `handleOperationRequest` path that the MCP route uses.
+
+Wrapper-route fit criterion: CLIs whose normal usage is almost entirely auth-required against an external service the container cannot reach directly. `gh` and AWS CLI are bundled — `pkg/config/templates/` ships their operation templates as the starting point — and users can extend the proxy surface to any other auth-heavy CLI (gcloud, az, ...) via their own project config. CLIs that mix local-only subcommands with auth-required ones (`git` is the canonical example) are intentionally out of scope: routing every invocation through the daemon would turn the local-only subcommands into denials.
 
 ### How a request is resolved
 
@@ -199,17 +204,19 @@ Ambiguous resolution (multiple operations match) and unknown resolution (no oper
 
 ### Exit codes
 
-The proxy reserves three bands so callers can distinguish wrapper-originated outcomes from the host command's own exit:
+The proxy passes through the host command's exit code across the full Unix 0..255 range and reserves a small set of high codes for its own outcomes:
 
 | Range | Meaning |
 |---|---|
-| 0..127 | Passthrough of the host command's actual exit (success or non-zero from `gh` / `git` / `aws` / ...). |
+| 0..127 | Host command's command-defined exit (success or non-zero from `gh` / `aws` / whichever auth-heavy CLI the project config exposes). |
+| 128..143 | Host command killed by signal n (128+n; for example a process killed by SIGPIPE exits 141 = 128+13). |
+| 144..255 | Other host command-defined exits in the upper Unix range (CLIs commonly use 254/255 for transport or generic failure). |
 | 200 | Daemon connectivity or protocol failure (the proxy could not reach the host). |
 | 201 | Token file read failure (the proxy could not load the session token). |
 | 220 | Daemon-side denial (unknown operation, ambiguous reverse-match, validation or consistency check failure). |
 | 230 | Container-side early reject (piped stdin, `file://` argv value, or TTY-required subcommand). |
 
-Wrapper-originated diagnostics are written to stderr with a `cmd2host:` prefix and a hint at MCP discovery:
+A host command that explicitly exits with a reserved high code (e.g. a custom CLI that returns 200) surfaces as the same integer the proxy uses; the bands are not numerically collision-free. To distinguish proxy-originated outcomes from passthrough, the proxy always writes a `cmd2host:` prefix on stderr (carrying the daemon's `DeniedReason` or a local diagnostic), while genuine host command stderr passes through unchanged. Callers that need a robust contract should inspect stderr or use the `cmd2host:` prefix as the authoritative signal.
 
 ```
 cmd2host: no allowed operation matches argv "gh foo bar"; run mcp__cmd2host__cmd2host_list_operations to discover supported operations

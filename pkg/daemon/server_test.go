@@ -747,6 +747,87 @@ func TestServer_RunOperation_RawArgvUnknownIsDenied(t *testing.T) {
 	}
 }
 
+// TestServer_RunOperation_RawArgvEmptyOrNullIsDenied covers the two raw_argv
+// field shapes that look "absent" to Go's json.Unmarshal but carry an
+// explicit raw-argv intent in the JSON: `{"raw_argv":[]}` (non-nil empty
+// slice) and `{"raw_argv":null}` (collapses to nil slice). Both must
+// produce an explicit raw-argv denial rather than falling through to the
+// explicit operation entry path with an empty Operation.
+func TestServer_RunOperation_RawArgvEmptyOrNullIsDenied(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn)
+		}
+	}()
+
+	// Raw JSON literals here because operations.Request marshals these
+	// shapes ambiguously: a nil slice with `omitempty` would drop the
+	// field entirely, defeating the test. We send the wire bytes verbatim
+	// so the daemon sees field presence as the request would carry on
+	// the wire.
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "empty array",
+			payload: `{"raw_argv":[],"token":"` + testToken + `"}`,
+		},
+		{
+			name:    "explicit null",
+			payload: `{"raw_argv":null,"token":"` + testToken + `"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			writeAndCloseWrite(t, conn, []byte(tt.payload))
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+
+			if resp.DeniedReason == nil {
+				t.Fatalf("expected explicit raw-argv denial, got nil DeniedReason; resp=%+v", resp)
+			}
+			if !strings.Contains(*resp.DeniedReason, "raw_argv field is present but empty") {
+				t.Errorf("expected denial to name the empty-raw_argv reason, got %q", *resp.DeniedReason)
+			}
+			if resp.ExitCode == 0 {
+				t.Errorf("expected non-zero exit_code on denial, got 0")
+			}
+		})
+	}
+}
+
 // seedAllowedProjectAt writes a minimal allowed project config under baseDir
 // and stores a token file bound to its primary repo. tokenStr is the caller-
 // supplied raw token to bind (the helper does not generate one).
