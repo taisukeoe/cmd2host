@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+# Pin PATH to the standard system directories plus Homebrew so `command -v`,
+# `gh`, `curl`, `launchctl`, and the build toolchain all resolve to known
+# absolute locations regardless of the caller's $PATH. The `curl | bash`
+# install path inherits the caller shell's $PATH otherwise, which leaves the
+# script susceptible to whichever earlier entries the user happens to have
+# in place.
+export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+
 # The entire procedural body is wrapped in main() and only invoked from the
 # final `main "$@"` line, so `curl | bash` cannot start executing partway
 # through the script — bash must read the full file (including every heredoc
