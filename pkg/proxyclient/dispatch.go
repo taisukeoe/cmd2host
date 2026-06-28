@@ -16,13 +16,17 @@
 //                      or generic failure)
 //
 //   Proxy-originated (reserved high codes):
+//     - 141          : caller closed our stdout (SIGPIPE equivalent;
+//                      mirrors what a native host CLI would exit when
+//                      its stdout reader closed early)
 //     - 200          : daemon connectivity / protocol failure
 //     - 201          : token file read failure
 //     - 220          : daemon-side denial (unknown operation, ambiguous
 //                      reverse-match, validation failure, consistency
 //                      check failure)
 //     - 230          : container-side early reject (stdin attached,
-//                      file:// argv, TTY-required subcommand)
+//                      file:// or fileb:// argv, TTY-required
+//                      subcommand)
 //
 // Numeric collision: a host command that explicitly exits with a code
 // the proxy also reserves (e.g. a custom CLI returns 200) surfaces as
@@ -37,11 +41,13 @@
 package proxyclient
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Exit codes for non-passthrough cases. See file comment.
@@ -50,6 +56,14 @@ const (
 	ExitTokenRead      = 201
 	ExitDenied         = 220
 	ExitEarlyReject    = 230
+	// ExitSIGPIPE matches the conventional 128 + signal-number for
+	// SIGPIPE (13 on Unix). Returned when the wrapper's stdout has
+	// been closed by an upstream reader (`gh pr list | head -1` and
+	// similar pipelines). Native host commands exit with this code
+	// when they receive SIGPIPE; the proxy buffers the full daemon
+	// response, so an explicit map keeps pipeline-aware tooling in
+	// sync with what the host CLI would have produced.
+	ExitSIGPIPE = 141
 )
 
 // Options bundles the inputs the cmd2host-proxy binary collects from
@@ -129,9 +143,27 @@ func Dispatch(opts Options) int {
 	}
 
 	if resp.Stdout != "" {
-		_, _ = io.WriteString(stdout, resp.Stdout)
+		if _, err := io.WriteString(stdout, resp.Stdout); err != nil {
+			if errors.Is(err, syscall.EPIPE) {
+				// Match what a native host CLI would see when its
+				// stdout reader closed early (e.g. `gh pr list | head
+				// -1`): receive SIGPIPE, exit 128+13. The wrapper
+				// buffered the full daemon response, so map the write
+				// failure to the same exit code so pipeline-aware
+				// tooling sees the same outcome it would have without
+				// the proxy.
+				return ExitSIGPIPE
+			}
+			// Other write failures (closed FD, disk full, etc.) are
+			// rare and surface as infrastructure failure so the caller
+			// distinguishes them from a host-command exit.
+			writeWrapperError(stderr, fmt.Sprintf("write stdout: %v", err))
+			return ExitInfrastructure
+		}
 	}
 	if resp.Stderr != "" {
+		// Best-effort: if stderr itself is unavailable there is nowhere
+		// to surface the failure, so we deliberately drop the result.
 		_, _ = io.WriteString(stderr, resp.Stderr)
 	}
 	// Surface daemon-side truncation flags on stderr so a caller piping

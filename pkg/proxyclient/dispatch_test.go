@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -370,6 +371,43 @@ func TestDispatch_SurfacesStderrTruncationOnStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "errlog") {
 		t.Errorf("stderr = %q, want it to still carry the host stderr body", stderr.String())
+	}
+}
+
+// epipeWriter always returns syscall.EPIPE on Write, simulating a
+// caller-side pipe that was closed by an upstream reader.
+type epipeWriter struct{}
+
+func (epipeWriter) Write(p []byte) (int, error) {
+	return 0, syscall.EPIPE
+}
+
+// TestDispatch_StdoutBrokenPipeMapsToSIGPIPE pins the SIGPIPE-equivalent
+// exit code: when the wrapper's own stdout is a broken pipe (the
+// upstream reader closed early, e.g. `gh pr list --json ... | head -1`)
+// the proxy must exit 141 so pipeline-aware tooling sees the same
+// signal-driven outcome a native host CLI would produce. The proxy
+// buffers the full daemon response, so a write failure at the wrapper
+// boundary is the only signal we have to convey the pipe closure.
+func TestDispatch_StdoutBrokenPipeMapsToSIGPIPE(t *testing.T) {
+	fd := newFakeDaemon(t, operations.Response{
+		ExitCode: 0,
+		Stdout:   "hello world\n",
+	})
+	defer fd.close()
+	host, port := fd.addr()
+
+	var stderr bytes.Buffer
+	exit := Dispatch(Options{
+		Command:      "gh",
+		Argv:         []string{"pr", "list"},
+		Client:       &Client{Host: host, Port: port, Token: "tok"},
+		Stdout:       epipeWriter{},
+		Stderr:       &stderr,
+		IsStdinPiped: stdinAbsent,
+	})
+	if exit != ExitSIGPIPE {
+		t.Errorf("exit = %d, want %d (SIGPIPE equivalent)", exit, ExitSIGPIPE)
 	}
 }
 
