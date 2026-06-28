@@ -61,14 +61,19 @@ func CheckEarlyReject(command string, argv []string, isStdinPiped StdinDetector)
 	for _, tok := range argv {
 		// Match only URL-shaped tokens so natural-language `file://`
 		// mentions inside a `--body` / `--title` / commit-message value
-		// pass through unscathed. The two forms we want to catch are the
-		// standalone URL token (`file:///etc/passwd` after `--cli-input-json`)
-		// and the `flag=value` joined form (`--cli-input-json=file:///etc/passwd`).
-		if strings.HasPrefix(tok, "file://") || strings.Contains(tok, "=file://") {
+		// pass through unscathed. The forms we want to catch are:
+		//   - standalone URL token (`file:///etc/passwd` after `--cli-input-json`)
+		//   - the `flag=value` joined form (`--cli-input-json=file:///etc/passwd`)
+		//   - AWS CLI's binary variant `fileb://...` (and its `=fileb://` joined form),
+		//     which the AWS CLI documents as reading host-side bytes from
+		//     the path and is interpreted in the daemon's filesystem context
+		//     just like `file://`.
+		if strings.HasPrefix(tok, "file://") || strings.Contains(tok, "=file://") ||
+			strings.HasPrefix(tok, "fileb://") || strings.Contains(tok, "=fileb://") {
 			return &EarlyRejectReason{
 				Kind:    "file_uri",
 				Detail:  tok,
-				Message: fmt.Sprintf("raw-argv mode rejects file:// arguments (container vs host filesystem mismatch); offending token: %q", tok),
+				Message: fmt.Sprintf("raw-argv mode rejects file:// and fileb:// arguments (container vs host filesystem mismatch); offending token: %q", tok),
 			}
 		}
 	}
@@ -82,11 +87,16 @@ func CheckEarlyReject(command string, argv []string, isStdinPiped StdinDetector)
 	return nil
 }
 
-// matchTTYRequiredSubcommand looks up command + leading argv tokens
-// against the hard-coded TTY-required list. The list is intentionally
-// minimum (only the high-confidence cases that cannot work over a
-// one-shot request/response) so callers do not lose access to less
-// problematic commands.
+// matchTTYRequiredSubcommand looks up command + argv tokens against the
+// hard-coded TTY-required list. Leading global flags are tolerated:
+// `aws --region us-east-1 configure` and `aws --debug configure` both
+// match against `aws configure` because the matcher tries each plausible
+// interpretation of a leading flag (flag-only vs flag-with-value) before
+// giving up.
+//
+// The list is intentionally minimum (only the high-confidence cases
+// that cannot work over a one-shot request/response) so callers do not
+// lose access to less problematic commands.
 //
 // Returns the matched subcommand path (e.g. "aws configure") or "" when
 // nothing matches.
@@ -95,21 +105,41 @@ func matchTTYRequiredSubcommand(command string, argv []string) string {
 		if entry.command != command {
 			continue
 		}
-		if len(argv) < len(entry.subcommand) {
-			continue
-		}
-		match := true
-		for i, tok := range entry.subcommand {
-			if argv[i] != tok {
-				match = false
-				break
-			}
-		}
-		if match {
+		if matchSubcommandFromAnyAnchor(argv, entry.subcommand, 0) {
 			return command + " " + strings.Join(entry.subcommand, " ")
 		}
 	}
 	return ""
+}
+
+// matchSubcommandFromAnyAnchor walks argv from start, treating each
+// flag-shaped token (starts with "-") as a potential global-flag prefix
+// that may or may not consume the next argv token as its value. At each
+// candidate non-flag anchor (or at the start when no leading flag), it
+// checks whether subcommand matches consecutively from there. Returns
+// true on the first match.
+//
+// The "-flag=value" form consumes exactly one argv slot. The "-flag" form
+// is tried both ways: flag-only (advance 1) and flag-with-value
+// (advance 2). The recursion depth is bounded by the number of leading
+// flags in argv.
+func matchSubcommandFromAnyAnchor(argv, subcommand []string, start int) bool {
+	if start+len(subcommand) > len(argv) {
+		return false
+	}
+	if !strings.HasPrefix(argv[start], "-") {
+		for i, tok := range subcommand {
+			if argv[start+i] != tok {
+				return false
+			}
+		}
+		return true
+	}
+	if strings.Contains(argv[start], "=") {
+		return matchSubcommandFromAnyAnchor(argv, subcommand, start+1)
+	}
+	return matchSubcommandFromAnyAnchor(argv, subcommand, start+1) ||
+		matchSubcommandFromAnyAnchor(argv, subcommand, start+2)
 }
 
 type ttyRequiredEntry struct {
