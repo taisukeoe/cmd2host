@@ -303,8 +303,12 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		req.Operation = resolved.OperationID
 		req.Params = resolved.Params
 		req.Flags = resolved.Flags
-	} else if req.Source == "" {
-		// Explicit operation entry; tag for log clarity.
+	} else {
+		// Explicit operation entry. Unconditionally overwrite Source so a
+		// caller cannot spoof `source=raw_argv` in the audit log by
+		// passing source="raw_argv" alongside an explicit operation
+		// (handleClient already decided this is the MCP route via
+		// rawArgvPresent == false; the log must agree).
 		req.Source = "mcp"
 	}
 

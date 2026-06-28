@@ -228,8 +228,8 @@ The proxy rejects three input shapes on the container side, before the daemon is
 
 | Shape | Why |
 |---|---|
-| Piped stdin (anything other than a TTY on fd 0) | The proxy does not forward stdin to the host process. Commands such as `git commit -F -` or `aws s3 cp - s3://bucket/key` cannot work over the request/response transport. |
-| `file://` argv value (e.g. `aws --cli-input-json file://...`) | The argument references a path inside the container, but the host command would interpret it against the host filesystem. Silently letting the daemon resolve it would mismatch user intent. |
+| Piped stdin **carrying data** (regular file with content, or a pipe with buffered bytes) | The proxy does not forward stdin to the host process. Commands such as `echo BODY \| gh pr create --body-file -` or `cat payload.json \| aws s3api put-object --body -` cannot work over the request/response transport. **Empty pipes** attached structurally by the parent shell (AI agent `Bash` tool, CI step shell, systemd `ExecStart`, `< /dev/null` redirect) are NOT treated as piped data and pass through to the host. If a caller's environment still trips a false reject, redirect stdin from `/dev/null` at launch (e.g. `gh pr view 42 < /dev/null`). |
+| `file://` argv value (e.g. `aws --cli-input-json file://...` or `--template-body=file://...`) | The argument references a path inside the container, but the host command would interpret it against the host filesystem. The detector matches URL-shaped tokens only (token starts with `file://`, or contains `=file://` for the joined `flag=value` form), so natural-language `file://` mentions inside a `--body` / `--title` / commit-message value pass through. |
 | TTY-required subcommand (`aws configure`, `aws sso login`, `aws ecs execute-command`) | These commands require interactive terminal I/O on the host and cannot complete inside a one-shot dispatch. |
 
 ### Environment

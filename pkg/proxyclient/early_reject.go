@@ -59,7 +59,12 @@ func CheckEarlyReject(command string, argv []string, isStdinPiped StdinDetector)
 		}
 	}
 	for _, tok := range argv {
-		if strings.Contains(tok, "file://") {
+		// Match only URL-shaped tokens so natural-language `file://`
+		// mentions inside a `--body` / `--title` / commit-message value
+		// pass through unscathed. The two forms we want to catch are the
+		// standalone URL token (`file:///etc/passwd` after `--cli-input-json`)
+		// and the `flag=value` joined form (`--cli-input-json=file:///etc/passwd`).
+		if strings.HasPrefix(tok, "file://") || strings.Contains(tok, "=file://") {
 			return &EarlyRejectReason{
 				Kind:    "file_uri",
 				Detail:  tok,

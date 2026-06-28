@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-func stdinPiped() bool   { return true }
-func stdinAbsent() bool  { return false }
-func stdinNilCheck() bool { return false }
+func stdinPiped() bool  { return true }
+func stdinAbsent() bool { return false }
 
 func TestCheckEarlyReject_AllowsCleanInvocation(t *testing.T) {
 	tests := []struct {
@@ -73,6 +72,42 @@ func TestCheckEarlyReject_FileURIInArgvTrips(t *testing.T) {
 			}
 			if !strings.Contains(r.Error(), tt.want) {
 				t.Errorf("error %q does not contain %q", r.Error(), tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckEarlyReject_FileURIInNaturalTextPassesThrough verifies the
+// narrowed file:// detector lets through tokens whose `file://` is part
+// of natural-language prose (PR body, issue title, commit message) and
+// not a URL-shaped value. The earlier substring match used to fire on
+// these and break common gh / aws invocations.
+func TestCheckEarlyReject_FileURIInNaturalTextPassesThrough(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		argv    []string
+	}{
+		{
+			name:    "gh pr comment body mentions file:// in prose",
+			command: "gh",
+			argv:    []string{"pr", "comment", "42", "--body", "See the file:// scheme docs for details"},
+		},
+		{
+			name:    "gh pr create body mentions file:// in prose",
+			command: "gh",
+			argv:    []string{"pr", "create", "--body", "Refactored file:// URL handling on the host side"},
+		},
+		{
+			name:    "gh pr edit title contains file:// mention",
+			command: "gh",
+			argv:    []string{"pr", "edit", "42", "--title", "fix file:// scheme handling"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if r := CheckEarlyReject(tt.command, tt.argv, stdinAbsent); r != nil {
+				t.Errorf("expected pass-through for prose containing file://, got reject: %q", r.Error())
 			}
 		})
 	}
