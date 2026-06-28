@@ -3,8 +3,7 @@
 // raw-argv mode requests through the same validation / sanitization path as
 // explicit MCP operation requests.
 //
-// The algorithm stands on three pillars (see plan note 2026-06-28
-// raw-argv-transparent-proxy):
+// The algorithm stands on three pillars:
 //
 //  1. Injection-only placeholder skip — template tokens whose whole-arg
 //     placeholder names a per-request injection value (repo / repo_path /
