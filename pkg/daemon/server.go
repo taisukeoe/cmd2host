@@ -122,18 +122,23 @@ func (s *Server) handleClient(conn net.Conn) {
 	// Use buffered bytes for handlers (same data, no re-encoding)
 	data := buf.Bytes()
 
-	// Determine request type by checking for specific fields
+	// Determine request type by checking for specific fields. The raw_argv
+	// discriminator must precede the operation discriminator: raw-argv mode
+	// requests carry RawArgv but resolve Operation only after reverse-match,
+	// so the operation field may be empty at this point.
 	if _, hasListOps := rawRequest["list_operations"]; hasListOps {
 		s.handleListOperationsRequest(conn, data)
 	} else if _, hasDescribeOp := rawRequest["describe_operation"]; hasDescribeOp {
 		s.handleDescribeOperationRequest(conn, data)
+	} else if _, hasRawArgv := rawRequest["raw_argv"]; hasRawArgv {
+		s.handleOperationRequest(conn, data)
 	} else if _, hasOperation := rawRequest["operation"]; hasOperation {
 		s.handleOperationRequest(conn, data)
 	} else {
-		fmt.Println("  -> Unknown request type (missing 'operation' field)")
+		fmt.Println("  -> Unknown request type (missing 'operation' or 'raw_argv' field)")
 		s.sendOperationResponse(conn, operations.Response{
 			ExitCode:     1,
-			DeniedReason: strPtr("Unknown request type: missing 'operation' field"),
+			DeniedReason: strPtr("Unknown request type: missing 'operation' or 'raw_argv' field"),
 		})
 	}
 }
@@ -181,7 +186,9 @@ func (s *Server) resolveProject(tokenData auth.TokenData) (*config.ProjectConfig
 	return projectConfig, projectID, nil
 }
 
-// handleOperationRequest handles new-style operation requests
+// handleOperationRequest handles new-style operation requests for both the
+// explicit operation entry (Operation field set) and the additive raw-argv
+// entry (RawArgv field set, Operation resolved by reverse-match).
 func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 	var req operations.Request
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -219,12 +226,13 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		return
 	}
 
-	// Log operation request (params omitted to avoid logging sensitive data like PR body)
-	fmt.Printf("[OP:%s] project=%s target_repo=%q request_id=%s\n", req.Operation, projectID, req.TargetRepo, req.RequestID)
-
 	// Resolve the execution target: target_repo against project allow list +
 	// expected git URL derivation. Empty target_repo defaults to the primary
 	// repo (single-repo project ergonomics).
+	//
+	// Target is resolved before any per-mode branching so the raw-argv
+	// reverse-match path can substitute injection-only placeholders
+	// (repo / repo_path / expected_git_url) with their per-target values.
 	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
 	if err != nil {
 		fmt.Printf("  -> DENIED (target): %v\n", err)
@@ -235,6 +243,55 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		})
 		return
 	}
+
+	// Raw-argv mode: resolve Operation/Params/Flags via reverse-match
+	// against the project's allowed operations before continuing through
+	// the shared validate / sanitize / execute path. Triggered by the
+	// presence of RawArgv; Source is normalized to "raw_argv" for logging
+	// regardless of whether the caller pre-populated it.
+	if len(req.RawArgv) > 0 {
+		req.Source = "raw_argv"
+		if len(req.RawArgv[0]) == 0 {
+			msg := "raw_argv command is empty"
+			fmt.Printf("  -> DENIED (raw_argv): %s\n", msg)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(msg),
+			})
+			return
+		}
+		injection := map[string]string{
+			"repo":             target.Repo,
+			"repo_path":        target.RepoPath,
+			"expected_git_url": target.ExpectedGitURL,
+		}
+		candidates := buildReverseMatchCandidates(projectConfig)
+		resolved, rerr := operations.ReverseMatch(req.RawArgv[0], req.RawArgv[1:], candidates, injection)
+		if rerr != nil {
+			fmt.Printf("  -> DENIED (reverse_match): %v\n", rerr)
+			s.sendOperationResponse(conn, operations.Response{
+				RequestID:    req.RequestID,
+				ExitCode:     1,
+				DeniedReason: strPtr(rerr.Error()),
+			})
+			return
+		}
+		req.Operation = resolved.OperationID
+		req.Params = resolved.Params
+		req.Flags = resolved.Flags
+	} else if req.Source == "" {
+		// Explicit operation entry; tag for log clarity.
+		req.Source = "mcp"
+	}
+
+	// Log operation request (params omitted to avoid logging sensitive data
+	// like PR body). source distinguishes raw-argv vs MCP entry, and
+	// resolved_operation_id is identical to the operation field but kept as
+	// a stable log key so downstream parsers do not need to track which
+	// entry shape was used.
+	fmt.Printf("[OP:%s] source=%s project=%s target_repo=%q request_id=%s resolved_operation_id=%s\n",
+		req.Operation, req.Source, projectID, req.TargetRepo, req.RequestID, req.Operation)
 
 	// Validate operation against per-target context
 	op, result := s.validator.ValidateOperation(req, projectConfig, target)
@@ -293,6 +350,24 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte) {
 		StdoutOriginalBytes: resp.StdoutOriginalBytes,
 		StderrOriginalBytes: resp.StderrOriginalBytes,
 	})
+}
+
+// buildReverseMatchCandidates assembles ReverseMatch input from the project
+// config in AllowedOperations declaration order so ambiguity errors list
+// candidates deterministically.
+func buildReverseMatchCandidates(p *config.ProjectConfig) []operations.CandidateOp {
+	if p == nil {
+		return nil
+	}
+	out := make([]operations.CandidateOp, 0, len(p.AllowedOperations))
+	for _, opID := range p.AllowedOperations {
+		op, ok := p.GetOperation(opID)
+		if !ok {
+			continue
+		}
+		out = append(out, operations.CandidateOp{ID: opID, Operation: op})
+	}
+	return out
 }
 
 // executeWithSanitization executes a command with sanitized environment

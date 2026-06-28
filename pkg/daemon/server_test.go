@@ -624,6 +624,129 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 	}
 }
 
+// TestServer_RunOperation_RawArgvDispatch exercises the raw-argv mode end
+// to end: a client sends RawArgv=["echo","value"], the server reverse-matches
+// it to test_op (template ["{message}"]), and the resolved request flows
+// through the same validate/sanitize/execute path as the explicit operation
+// entry.
+func TestServer_RunOperation_RawArgvDispatch(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn)
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := operations.Request{
+		RawArgv: []string{"echo", "hello-raw"},
+		Token:   testToken,
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason != nil {
+		t.Fatalf("raw-argv operation denied: %s", *resp.DeniedReason)
+	}
+	if resp.ExitCode != 0 {
+		t.Errorf("expected exit_code=0, got %d (stderr=%q)", resp.ExitCode, resp.Stderr)
+	}
+	if strings.TrimSpace(resp.Stdout) != "hello-raw" {
+		t.Errorf("expected stdout=%q, got %q", "hello-raw", resp.Stdout)
+	}
+}
+
+// TestServer_RunOperation_RawArgvUnknownIsDenied verifies the raw-argv path
+// emits a denial (with a non-nil DeniedReason) when no allowed operation
+// matches the argv, rather than passing through to execution or erroring
+// silently.
+func TestServer_RunOperation_RawArgvUnknownIsDenied(t *testing.T) {
+	server, _, tmpDir := setupServerWithProject(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn)
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := operations.Request{
+		RawArgv: []string{"echo", "value-a", "extra-positional"},
+		Token:   testToken,
+	}
+	reqData, _ := json.Marshal(req)
+	writeAndCloseWrite(t, conn, reqData)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason == nil {
+		t.Fatalf("expected denial for argv with no matching template, got nil DeniedReason; resp=%+v", resp)
+	}
+	if !strings.Contains(*resp.DeniedReason, "cmd2host:") {
+		t.Errorf("expected denial reason to carry cmd2host prefix, got %q", *resp.DeniedReason)
+	}
+	if resp.ExitCode == 0 {
+		t.Errorf("expected non-zero exit_code on denial, got 0")
+	}
+}
+
 // seedAllowedProjectAt writes a minimal allowed project config under baseDir
 // and stores a token file bound to its primary repo. tokenStr is the caller-
 // supplied raw token to bind (the helper does not generate one).

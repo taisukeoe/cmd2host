@@ -45,11 +45,26 @@ type ParamSchema struct {
 // ParamValue represents a parameter value that can be string, int, or []string
 type ParamValue interface{}
 
-// Request represents a request to execute an operation
+// Request represents a request to execute an operation.
+//
+// Two entry shapes are supported:
+//
+//   - Operation entry (existing): Operation carries the resolved operation_id
+//     and Params/Flags carry the typed values directly. Source is empty or
+//     "mcp" depending on the caller.
+//   - Raw-argv entry (additive): RawArgv carries the full [command, args...]
+//     argv as the caller wrote it; the daemon resolves the operation_id and
+//     extracts Params/Flags via reverse-match before dispatching through the
+//     same validation / sanitization / execution path. Source is "raw_argv".
+//
+// Source is also surfaced in daemon log lines so operators can distinguish
+// the two routes when auditing.
 type Request struct {
 	RequestID string                `json:"request_id,omitempty"`
-	Operation string                `json:"operation"`
-	Params    map[string]ParamValue `json:"params"`
+	Operation string                `json:"operation,omitempty"`
+	Source    string                `json:"source,omitempty"`   // "raw_argv" | "mcp" | ""
+	RawArgv   []string              `json:"raw_argv,omitempty"` // [command, args...] for raw-argv entry
+	Params    map[string]ParamValue `json:"params,omitempty"`
 	Flags     []string              `json:"flags,omitempty"`
 	Token     string                `json:"token"`
 	// TargetRepo selects which repo (from the project's allow list) this
