@@ -148,6 +148,15 @@ func dispatch(command string, hostArgs []string, host string, port int, socket, 
 		Argv:       hostArgs,
 		Client:     client,
 		TargetRepo: targetRepo,
+		// Always collect the cwd hint. The daemon ignores it when
+		// TargetRepo is non-empty; with no flag, single-repo projects
+		// fall back to the primary repo even when the hint does not
+		// match, while multi-repo projects deny loudly when neither an
+		// explicit flag nor an allow-list AND-match resolves the
+		// target. Wiring the hint unconditionally keeps multi-repo
+		// ergonomics aligned with gh CLI's cwd-based resolve without a
+		// per-invoke flag.
+		CwdContext: proxyclient.CollectCwdContext(),
 		Stdout:     stdout,
 		Stderr:     stderr,
 	})

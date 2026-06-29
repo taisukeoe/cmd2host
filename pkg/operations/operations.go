@@ -78,6 +78,24 @@ type Request struct {
 	// request acts on. Required when the project has more than one repo;
 	// optional when the project has a single repo (defaults to Repos[0]).
 	TargetRepo string `json:"target_repo,omitempty"`
+	// CwdContext carries an optional hint derived from the caller's
+	// current working directory: the git toplevel path and the origin
+	// remote URL. When TargetRepo is empty, the daemon may auto-resolve
+	// the target by AND-matching (toplevel == repo_paths[i] AND
+	// origin URL → repos[i]) against the project's allow list. The
+	// allow-list AND check is the same security boundary as the explicit
+	// flag path; auto-resolve only adds an ergonomic fallback for the
+	// multi-repo case that mirrors gh CLI's cwd-based resolve semantics.
+	CwdContext *CwdContext `json:"cwd_context,omitempty"`
+}
+
+// CwdContext carries the caller's cwd-derived auto-resolve hint. Both
+// fields are filled in by the container-side proxyclient and consumed by
+// the daemon; an empty / partial context disables auto-resolve and the
+// daemon falls back to the explicit flag / primary-repo / error path.
+type CwdContext struct {
+	Toplevel  string `json:"toplevel,omitempty"`   // absolute path of git toplevel (`git rev-parse --show-toplevel`)
+	OriginURL string `json:"origin_url,omitempty"` // raw `git remote get-url origin` output
 }
 
 // Response represents the response from an operation.

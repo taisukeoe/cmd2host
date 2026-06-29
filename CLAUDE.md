@@ -66,7 +66,7 @@ Commands are validated using **operation mode**: predefined operation templates 
 **Project-based policies** (per-project config in `~/.cmd2host/projects/<project-id>/`):
 - Multi-repo allow list (`repos` + `repo_paths`, index-corresponding arrays). The first entry is the primary (parent) repo; additional entries are submodules or sibling repos hosted under the same workspace
 - Token binding (token → `project_id` → project config). Legacy tokens carrying only `repo` are resolved via `NormalizeProjectID(repo)` and required to match `repos[0]`
-- Per-operation `target_repo` selects which repo (from the allow list) the request acts on; defaults to the primary repo when omitted
+- Per-operation `target_repo` selects which repo (from the allow list) the request acts on. When omitted: single-repo projects default to the primary repo; multi-repo projects require either an explicit `target_repo` or a cwd-derived auto-resolve hint (cwd's git toplevel + origin URL AND-matching one allow-list entry — `cmd2host-proxy` collects this hint automatically so a bare `gh pr view 42` inside a submodule resolves to that submodule's repo). A multi-repo request without flag and without a matching hint is denied loudly
 - Default deny (only `allowed_operations` can execute)
 - Path denylist (glob patterns)
 - Git config overrides

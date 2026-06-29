@@ -14,8 +14,10 @@ package daemon
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // ExecutionTarget bundles the resolved execution context for one operation request.
@@ -26,42 +28,93 @@ type ExecutionTarget struct {
 	Host           string // hostname portion of ExpectedGitURL (e.g., "github.com")
 }
 
+// ResolvedSource labels which resolution rule picked the target_repo,
+// used for audit logging so operators can see whether the explicit flag,
+// the cwd auto-resolve fallback, or the single-repo primary default was
+// the load-bearing path.
+type ResolvedSource string
+
+const (
+	// SourceExplicitFlag — caller passed a non-empty target_repo.
+	SourceExplicitFlag ResolvedSource = "explicit_flag"
+	// SourceAutoResolve — target_repo derived from cwd context AND-match
+	// against the project's allow list (toplevel == repo_paths[i] AND
+	// origin URL → repos[i]).
+	SourceAutoResolve ResolvedSource = "auto_resolve"
+	// SourcePrimaryDefault — single-repo project fallback (Repos[0])
+	// when no explicit flag and no usable cwd context.
+	SourcePrimaryDefault ResolvedSource = "primary_default"
+)
+
 // defaultRemoteHost is used when the project does not declare remote_hosts_allow.
 // GitHub is the only currently supported provider.
 const defaultRemoteHost = "github.com"
 
 // ResolveExecutionTarget validates target_repo against the project's allow
-// list and returns the corresponding ExecutionTarget. Pass "" for targetRepo
-// to default to the project's primary repo (Repos[0]); this preserves the
-// single-repo project ergonomics where the caller need not declare the repo.
+// list and returns the corresponding ExecutionTarget along with the
+// resolution source used. Resolution order (first match wins):
+//
+//  1. SourceExplicitFlag — targetRepo non-empty: must be in project.Repos.
+//  2. SourceAutoResolve  — cwdContext supplies a (toplevel, origin URL)
+//     pair AND there exists index i such that filepath.Clean(toplevel) ==
+//     filepath.Clean(project.RepoPaths[i]) AND
+//     ParseOriginOwnerRepo(origin URL) == project.Repos[i]. Both halves
+//     must match the same index; partial / cross-index matches do not
+//     resolve. This mirrors the explicit-flag path's allow-list AND
+//     check so auto-resolve cannot reach a repo outside the policy.
+//  3. SourcePrimaryDefault — single-repo project (len(Repos) == 1)
+//     falls back to Repos[0] for ergonomics. Multi-repo projects with
+//     neither an explicit flag nor a usable cwd hint return an error so
+//     a missing context never silently picks a default.
 //
 // host is derived from project.Constraints.RemoteHostsAllow (first entry) or
 // falls back to "github.com". When RemoteHostsAllow is non-empty, the derived
 // host MUST appear in the list — this is the minimal RemoteHostsAllow guard
-// integrated with the explicit URL fixation design (see plan Phase C).
-func ResolveExecutionTarget(project *config.ProjectConfig, targetRepo string) (*ExecutionTarget, error) {
+// integrated with the explicit URL fixation design.
+func ResolveExecutionTarget(project *config.ProjectConfig, targetRepo string, cwdContext *operations.CwdContext) (*ExecutionTarget, ResolvedSource, error) {
 	if project == nil {
-		return nil, fmt.Errorf("project config is nil")
+		return nil, "", fmt.Errorf("project config is nil")
 	}
-	repo := targetRepo
+
+	var (
+		repo   string
+		source ResolvedSource
+	)
+	switch {
+	case targetRepo != "":
+		repo = targetRepo
+		source = SourceExplicitFlag
+	default:
+		if resolved, ok := autoResolveFromCwd(project, cwdContext); ok {
+			repo = resolved
+			source = SourceAutoResolve
+			break
+		}
+		// Single-repo projects keep the single-repo ergonomics: no flag
+		// and no cwd match still defaults to the only allowed repo.
+		if len(project.Repos) == 1 {
+			repo = project.PrimaryRepo()
+			source = SourcePrimaryDefault
+			break
+		}
+		// Multi-repo: cwd hint absent or did not match any allow-list
+		// entry. Surface the available repos so the operator sees both
+		// what was requested and what the project permits.
+		if cwdContext != nil {
+			return nil, "", fmt.Errorf("target_repo is required for projects with multiple repos and cwd auto-resolve did not match (cwd toplevel %q, origin %q; project has %d repos: %v)", cwdContext.Toplevel, cwdContext.OriginURL, len(project.Repos), project.Repos)
+		}
+		return nil, "", fmt.Errorf("target_repo is required for projects with multiple repos (project has %d repos: %v)", len(project.Repos), project.Repos)
+	}
+
 	if repo == "" {
-		// Multi-repo projects: caller MUST specify target_repo. The
-		// single-repo default-to-primary path is reserved for 1:1
-		// ergonomics where there is no ambiguity.
-		if len(project.Repos) > 1 {
-			return nil, fmt.Errorf("target_repo is required for projects with multiple repos (project has %d repos: %v)", len(project.Repos), project.Repos)
-		}
-		repo = project.PrimaryRepo()
-		if repo == "" {
-			return nil, fmt.Errorf("project has no repos configured")
-		}
+		return nil, "", fmt.Errorf("project has no repos configured")
 	}
 	idx := project.IndexOfRepo(repo)
 	if idx < 0 {
-		return nil, fmt.Errorf("target_repo %q is not in the project allow list", repo)
+		return nil, "", fmt.Errorf("target_repo %q is not in the project allow list", repo)
 	}
 	if idx >= len(project.RepoPaths) {
-		return nil, fmt.Errorf("internal: repo index %d has no matching repo_paths entry (config bug)", idx)
+		return nil, "", fmt.Errorf("internal: repo index %d has no matching repo_paths entry (config bug)", idx)
 	}
 	repoPath := project.RepoPaths[idx]
 
@@ -70,15 +123,12 @@ func ResolveExecutionTarget(project *config.ProjectConfig, targetRepo string) (*
 		host = project.Constraints.RemoteHostsAllow[0]
 		if !hostInAllowList(host, project.Constraints.RemoteHostsAllow) {
 			// Defensive: should never happen because we picked from the list.
-			return nil, fmt.Errorf("internal: derived host %q is not in remote_hosts_allow", host)
+			return nil, "", fmt.Errorf("internal: derived host %q is not in remote_hosts_allow", host)
 		}
-	} else {
-		// No allow list declared — default host is permitted.
 	}
 
-	// Validate host shape (no scheme, no slash, no whitespace) before embedding.
 	if !isValidBareHost(host) {
-		return nil, fmt.Errorf("remote_hosts_allow[0] %q is not a bare hostname", host)
+		return nil, "", fmt.Errorf("remote_hosts_allow[0] %q is not a bare hostname", host)
 	}
 
 	expectedGitURL := fmt.Sprintf("git@%s:%s.git", host, repo)
@@ -88,7 +138,38 @@ func ResolveExecutionTarget(project *config.ProjectConfig, targetRepo string) (*
 		RepoPath:       repoPath,
 		ExpectedGitURL: expectedGitURL,
 		Host:           host,
-	}, nil
+	}, source, nil
+}
+
+// autoResolveFromCwd implements the AND-check fallback described on
+// ResolveExecutionTarget. Returns ("", false) on any mismatch so the caller
+// can fall through to the primary-default or error path without losing the
+// distinction between "no context supplied" and "context did not match".
+func autoResolveFromCwd(project *config.ProjectConfig, cwdContext *operations.CwdContext) (string, bool) {
+	if cwdContext == nil {
+		return "", false
+	}
+	if cwdContext.Toplevel == "" || cwdContext.OriginURL == "" {
+		return "", false
+	}
+	originRepo := ParseOriginOwnerRepo(cwdContext.OriginURL)
+	if originRepo == "" {
+		return "", false
+	}
+	wantPath := filepath.Clean(cwdContext.Toplevel)
+	for i, repoPath := range project.RepoPaths {
+		if i >= len(project.Repos) {
+			break
+		}
+		if filepath.Clean(repoPath) != wantPath {
+			continue
+		}
+		if project.Repos[i] != originRepo {
+			continue
+		}
+		return project.Repos[i], true
+	}
+	return "", false
 }
 
 func hostInAllowList(host string, allow []string) bool {

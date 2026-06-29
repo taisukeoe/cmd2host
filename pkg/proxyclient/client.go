@@ -52,17 +52,25 @@ type Client struct {
 // typed response. command + argv form the [command, args...] pair the
 // daemon reverse-matches against the project's allowed operation
 // templates. targetRepo selects which repo to act on; "" defaults to the
-// project's primary repo.
+// cwd auto-resolve fallback (when cwdContext is non-nil and AND-matches
+// an allow-list entry) or the project's single-repo primary.
+//
+// cwdContext supplies the caller's git toplevel + origin URL so the
+// daemon can resolve target_repo from cwd when no explicit flag is
+// given. Pass nil to disable the hint; nil is equivalent to the
+// pre-v0.5 behaviour where only explicit flag and single-repo primary
+// participated in resolution.
 //
 // Network / serialization / parsing errors are returned as Go errors; the
 // daemon's own denial / execution reply is returned as a non-nil Response
 // whose ExitCode and DeniedReason carry the outcome.
-func (c *Client) SendRawArgv(command string, argv []string, targetRepo string) (*operations.Response, error) {
+func (c *Client) SendRawArgv(command string, argv []string, targetRepo string, cwdContext *operations.CwdContext) (*operations.Response, error) {
 	req := operations.Request{
 		Source:     "raw_argv",
 		RawArgv:    append([]string{command}, argv...),
 		Token:      c.Token,
 		TargetRepo: targetRepo,
+		CwdContext: cwdContext,
 	}
 
 	var resp operations.Response

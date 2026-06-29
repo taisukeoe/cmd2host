@@ -279,9 +279,18 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Target is resolved before any per-mode branching so the raw-argv
 	// reverse-match path can substitute injection-only placeholders
 	// (repo / repo_path / expected_git_url) with their per-target values.
-	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
+	target, resolvedSource, err := ResolveExecutionTarget(projectConfig, req.TargetRepo, req.CwdContext)
 	if err != nil {
-		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q request_id=%s: %v\n", source, projectID, req.TargetRepo, req.RequestID, err)
+		// Surface both the requested target_repo and the cwd hint
+		// (when present) so an operator grep'ing a denial line sees
+		// what the caller asked for and what the auto-resolve probe
+		// saw. The auto-resolve failure message itself carries the
+		// detail; this log line keeps the key=value shape stable.
+		var cwdSummary string
+		if req.CwdContext != nil {
+			cwdSummary = fmt.Sprintf(" cwd_toplevel=%q cwd_origin=%q", req.CwdContext.Toplevel, req.CwdContext.OriginURL)
+		}
+		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q%s request_id=%s: %v\n", source, projectID, req.TargetRepo, cwdSummary, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -349,12 +358,15 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	}
 
 	// Log operation request (params omitted to avoid logging sensitive data
-	// like PR body). source distinguishes raw-argv vs MCP entry, and
+	// like PR body). source distinguishes raw-argv vs MCP entry,
 	// resolved_operation_id is identical to the operation field but kept as
 	// a stable log key so downstream parsers do not need to track which
-	// entry shape was used.
-	fmt.Printf("[OP:%s] source=%s project=%s target_repo=%q request_id=%s resolved_operation_id=%s\n",
-		req.Operation, req.Source, projectID, req.TargetRepo, req.RequestID, req.Operation)
+	// entry shape was used, and resolved_target_source surfaces whether the
+	// target_repo came from an explicit flag, the cwd auto-resolve
+	// fallback, or the single-repo primary default — operators can grep on
+	// `resolved_target_source=auto_resolve` to audit cwd-derived targets.
+	fmt.Printf("[OP:%s] source=%s project=%s target_repo=%q resolved_target_source=%s request_id=%s resolved_operation_id=%s\n",
+		req.Operation, req.Source, projectID, target.Repo, resolvedSource, req.RequestID, req.Operation)
 
 	// Validate operation against per-target context
 	op, result := s.validator.ValidateOperation(req, projectConfig, target)
