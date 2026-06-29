@@ -83,3 +83,28 @@ func canonicalOwnerRepo(path string) string {
 	}
 	return parts[0] + "/" + parts[1]
 }
+
+// originRepoUnparsed is the placeholder substituted by OriginRepoForLog
+// when ParseOriginOwnerRepo cannot normalize the input. Centralized as a
+// constant so log / error consumers can grep for the exact literal and
+// distinguish "URL was unparseable" from "URL parsed to empty string".
+const originRepoUnparsed = "<unparsed>"
+
+// OriginRepoForLog returns a log-safe owner/repo identifier extracted
+// from a raw git remote URL. Raw URLs from `git remote get-url origin`
+// may embed credentials (`https://x-access-token:TOKEN@github.com/...`
+// is the canonical CI form, plus the generic `https://user:password@...`
+// shape), so any path that surfaces the value into operator logs or
+// caller-visible error / DeniedReason strings must route the URL
+// through this helper instead of formatting it raw.
+//
+// Returns the parsed "owner/repo" on success; returns the literal
+// `<unparsed>` placeholder when the URL does not normalize so the
+// caller can keep its log format stable without leaking the raw value
+// for forms ParseOriginOwnerRepo does not understand.
+func OriginRepoForLog(url string) string {
+	if repo := ParseOriginOwnerRepo(url); repo != "" {
+		return repo
+	}
+	return originRepoUnparsed
+}

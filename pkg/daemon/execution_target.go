@@ -99,9 +99,11 @@ func ResolveExecutionTarget(project *config.ProjectConfig, targetRepo string, cw
 		}
 		// Multi-repo: cwd hint absent or did not match any allow-list
 		// entry. Surface the available repos so the operator sees both
-		// what was requested and what the project permits.
+		// what was requested and what the project permits. The origin
+		// URL is routed through OriginRepoForLog so a credential-bearing
+		// https URL never reaches the caller via DeniedReason / log.
 		if cwdContext != nil {
-			return nil, "", fmt.Errorf("target_repo is required for projects with multiple repos and cwd auto-resolve did not match (cwd toplevel %q, origin %q; project has %d repos: %v)", cwdContext.Toplevel, cwdContext.OriginURL, len(project.Repos), project.Repos)
+			return nil, "", fmt.Errorf("target_repo is required for projects with multiple repos and cwd auto-resolve did not match (cwd toplevel %q, origin_repo %q; project has %d repos: %v)", cwdContext.Toplevel, OriginRepoForLog(cwdContext.OriginURL), len(project.Repos), project.Repos)
 		}
 		return nil, "", fmt.Errorf("target_repo is required for projects with multiple repos (project has %d repos: %v)", len(project.Repos), project.Repos)
 	}

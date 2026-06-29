@@ -56,7 +56,12 @@ func VerifyPathRepoConsistency(repoPath, expectedRepo string) error {
 	actualURL := strings.TrimSpace(string(out))
 	_, actualRepo := ParseRemoteRepo(actualURL)
 	if actualRepo == "" {
-		return fmt.Errorf("path-repo consistency check: remote URL %q does not match expected SSH/HTTPS pattern", actualURL)
+		// Raw URL is intentionally omitted: ParseRemoteRepo rejects
+		// credential-bearing HTTPS forms (regex has no `@` slot), so an
+		// unparseable URL on this branch may carry an embedded token.
+		// The error reaches the caller via DeniedReason, so report only
+		// the bare fact rather than echoing the URL.
+		return fmt.Errorf("path-repo consistency check: remote URL at %q does not match expected SSH/HTTPS pattern", repoPath)
 	}
 	if !strings.EqualFold(actualRepo, expectedRepo) {
 		return fmt.Errorf("path-repo consistency check: repo_path %q has origin %q, expected %q (misconfiguration; aborting)", repoPath, actualRepo, expectedRepo)

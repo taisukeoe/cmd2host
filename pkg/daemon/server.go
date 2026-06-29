@@ -286,9 +286,11 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		// what the caller asked for and what the auto-resolve probe
 		// saw. The auto-resolve failure message itself carries the
 		// detail; this log line keeps the key=value shape stable.
+		// The origin URL is routed through OriginRepoForLog so a
+		// credential-bearing https URL never reaches operator logs.
 		var cwdSummary string
 		if req.CwdContext != nil {
-			cwdSummary = fmt.Sprintf(" cwd_toplevel=%q cwd_origin=%q", req.CwdContext.Toplevel, req.CwdContext.OriginURL)
+			cwdSummary = fmt.Sprintf(" cwd_toplevel=%q cwd_origin_repo=%q", req.CwdContext.Toplevel, OriginRepoForLog(req.CwdContext.OriginURL))
 		}
 		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q%s request_id=%s: %v\n", source, projectID, req.TargetRepo, cwdSummary, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
@@ -298,6 +300,13 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		})
 		return
 	}
+	// Promote the resolved target_repo back onto the request so every
+	// subsequent denial / audit log line in this function reports the
+	// effective target rather than the (possibly empty) caller-supplied
+	// value. cwd auto-resolve and single-repo primary-default paths
+	// otherwise leave req.TargetRepo as "" — observability only, no
+	// resolution semantics change.
+	req.TargetRepo = target.Repo
 
 	// Raw-argv mode: resolve Operation/Params/Flags via reverse-match
 	// against the project's allowed operations before continuing through
