@@ -21,20 +21,31 @@ var inlinePlaceholderPattern = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 // formatting at all.
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// operationPattern restricts caller-supplied operation identifiers to the
+// same shape the operation templates themselves use as map keys (lowercase
+// letters, digits, underscore, leading letter). Values matching this
+// pattern cannot break audit log lines even before the `%q` quoting
+// applies. Operation IDs that the daemon itself resolves (raw-argv
+// reverse-match) always come from the project's allow list and satisfy
+// the pattern by construction; the check only limits caller input.
+var operationPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
 // MaxRequestIDLength caps caller-supplied request_id length. The value
 // is generous enough for UUIDs and prefixed identifiers while still
 // bounding log line width.
 const MaxRequestIDLength = 128
 
-// Validate checks caller-supplied diagnostic fields (RequestID, Source)
-// against their allowed shape before the daemon commits them to audit
-// log format strings. Fields that the daemon itself resolves after
-// dispatch (Operation, Params, Flags, TargetRepo) are validated
-// elsewhere via operation templates and the target allow list.
+// Validate checks caller-supplied diagnostic fields (RequestID, Source,
+// Operation) against their allowed shape before the daemon commits them
+// to audit log format strings. Fields that the daemon itself resolves
+// after dispatch (Params, Flags, TargetRepo) are validated elsewhere via
+// operation templates and the target allow list.
 //
 // RequestID is optional; when non-empty it must match requestIDPattern
 // and stay within MaxRequestIDLength bytes. Source is enum-restricted
-// to "", "mcp", or "raw_argv".
+// to "", "mcp", or "raw_argv". Operation is optional at raw-argv entry
+// (reverse-match populates it) and mandatory otherwise; when non-empty
+// it must match operationPattern.
 func (r *Request) Validate() error {
 	if r.RequestID != "" {
 		if len(r.RequestID) > MaxRequestIDLength {
@@ -48,6 +59,9 @@ func (r *Request) Validate() error {
 	case "", "mcp", "raw_argv":
 	default:
 		return fmt.Errorf("source must be empty, \"mcp\", or \"raw_argv\"")
+	}
+	if r.Operation != "" && !operationPattern.MatchString(r.Operation) {
+		return fmt.Errorf("operation contains characters outside [a-z0-9_] or exceeds 64 bytes")
 	}
 	return nil
 }

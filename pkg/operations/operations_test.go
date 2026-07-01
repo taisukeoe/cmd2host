@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -721,6 +722,17 @@ func TestRequest_Validate(t *testing.T) {
 
 		{name: "source unknown enum", req: Request{Source: "attacker"}, wantErr: true},
 		{name: "source with newline", req: Request{Source: "mcp\ninjected"}, wantErr: true},
+
+		{name: "operation valid template shape", req: Request{Operation: "gh_pr_view"}, wantErr: false},
+		{name: "operation numeric suffix", req: Request{Operation: "gh_pr_view_2"}, wantErr: false},
+		{name: "operation embedded newline", req: Request{Operation: "gh_pr_view\n[OP:git_push]"}, wantErr: true},
+		{name: "operation embedded CRLF", req: Request{Operation: "gh_pr_view\r\n[OP:git_push]"}, wantErr: true},
+		{name: "operation embedded NUL", req: Request{Operation: "gh_pr_view\x00"}, wantErr: true},
+		{name: "operation leading digit", req: Request{Operation: "1st_op"}, wantErr: true},
+		{name: "operation uppercase", req: Request{Operation: "GH_PR_VIEW"}, wantErr: true},
+		{name: "operation hyphen", req: Request{Operation: "gh-pr-view"}, wantErr: true},
+		{name: "operation dot", req: Request{Operation: "gh.pr.view"}, wantErr: true},
+		{name: "operation over length", req: Request{Operation: "a" + strings.Repeat("b", 64)}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

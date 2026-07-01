@@ -1118,6 +1118,90 @@ func TestServer_RejectsControlCharsInRequestID(t *testing.T) {
 	}
 }
 
+// TestServer_RejectsControlCharsInOperation mirrors the request_id
+// rejection test for the caller-supplied operation field. An operation
+// name carrying a newline (or any character outside the operation
+// template naming shape) must be denied before it reaches the
+// `[OP:%q]` / `Unknown operation: %q` audit log format strings — even
+// a `%q` second layer would still emit the escaped payload, so the
+// character-set check runs first.
+func TestServer_RejectsControlCharsInOperation(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	cases := []struct {
+		name      string
+		operation string
+	}{
+		{name: "embedded newline (log-line spoof shape)", operation: "gh_pr_view\n[OP:git_push] source=\"mcp\" exit_code=0"},
+		{name: "CRLF", operation: "gh_pr_view\r\n[OP:git_push]"},
+		{name: "NUL byte", operation: "gh_pr_view\x00"},
+		{name: "uppercase", operation: "GH_PR_VIEW"},
+		{name: "hyphen", operation: "gh-pr-view"},
+		{name: "leading digit", operation: "1gh"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			req := map[string]any{
+				"operation": tc.operation,
+				"token":     "invalid",
+			}
+			data, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("Failed to marshal request: %v", err)
+			}
+			writeAndCloseWrite(t, conn, data)
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+
+			if resp.DeniedReason == nil {
+				t.Fatalf("Expected DeniedReason for bad operation, got nil")
+			}
+			if !strings.Contains(*resp.DeniedReason, "operation") {
+				t.Errorf("Expected DeniedReason to mention operation, got: %s", *resp.DeniedReason)
+			}
+			// Validation must short-circuit before the auth check.
+			if strings.Contains(*resp.DeniedReason, "Authentication failed") {
+				t.Errorf("Validation should run before auth; got auth-failure DeniedReason: %s", *resp.DeniedReason)
+			}
+		})
+	}
+}
+
 // TestServer_RejectsUnknownSource pins the enum-restriction on the
 // caller-supplied source field. Any value outside {"", "mcp", "raw_argv"}
 // must be denied before it reaches audit log format strings.

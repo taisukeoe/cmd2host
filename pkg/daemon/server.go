@@ -387,7 +387,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// target_repo came from an explicit flag, the cwd auto-resolve
 	// fallback, or the single-repo primary default — operators can grep on
 	// `resolved_target_source=auto_resolve` to audit cwd-derived targets.
-	fmt.Printf("[OP:%s] source=%q project=%q target_repo=%q resolved_target_source=%q request_id=%q resolved_operation_id=%q\n",
+	fmt.Printf("[OP:%q] source=%q project=%q target_repo=%q resolved_target_source=%q request_id=%q resolved_operation_id=%q\n",
 		req.Operation, req.Source, projectID, target.Repo, resolvedSource, req.RequestID, req.Operation)
 
 	// Validate operation against per-target context
