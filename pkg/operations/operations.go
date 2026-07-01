@@ -37,15 +37,19 @@ const MaxRequestIDLength = 128
 
 // Validate checks caller-supplied diagnostic fields (RequestID, Source,
 // Operation) against their allowed shape before the daemon commits them
-// to audit log format strings. Fields that the daemon itself resolves
-// after dispatch (Params, Flags, TargetRepo) are validated elsewhere via
-// operation templates and the target allow list.
+// to audit log format strings. It is a pre-dispatch shape check, not a
+// full semantic validator: presence of Operation and the values inside
+// Params / Flags / TargetRepo are enforced later by
+// Validator.ValidateOperation, the operation templates, and the target
+// allow list.
 //
 // RequestID is optional; when non-empty it must match requestIDPattern
 // and stay within MaxRequestIDLength bytes. Source is enum-restricted
-// to "", "mcp", or "raw_argv". Operation is optional at raw-argv entry
-// (reverse-match populates it) and mandatory otherwise; when non-empty
-// it must match operationPattern.
+// to "", "mcp", or "raw_argv". Operation is optional at Validate() time
+// on both entries: the raw-argv entry populates it later via
+// reverse-match, and an empty Operation on the MCP entry is rejected
+// downstream by Validator.ValidateOperation ("Unknown operation"). When
+// non-empty, Operation must match operationPattern.
 func (r *Request) Validate() error {
 	if r.RequestID != "" {
 		if len(r.RequestID) > MaxRequestIDLength {

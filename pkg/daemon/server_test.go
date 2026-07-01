@@ -1202,6 +1202,75 @@ func TestServer_RejectsControlCharsInOperation(t *testing.T) {
 	}
 }
 
+// TestServer_ValidatorRejectsEmptyOperation locks the downstream contract
+// that Request.Validate documents: an MCP entry with an empty Operation
+// passes the pre-dispatch shape check (Validate) but is rejected
+// downstream by Validator.ValidateOperation as "Unknown operation".
+// Anchoring this at the transport layer confirms the two-layer split
+// (shape validation early, presence enforcement at validator) survives
+// future edits to either side.
+func TestServer_ValidatorRejectsEmptyOperation(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Send raw JSON with an explicit empty operation field so handleClient's
+	// discriminator (field presence, not value) routes to
+	// handleOperationRequest. operations.Request has json omitempty on the
+	// Operation tag; marshalling a zero-valued struct would drop the key and
+	// hit the "Unknown request type" branch instead of the validator.
+	req := map[string]any{
+		"operation": "",
+		"token":     testToken,
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+	writeAndCloseWrite(t, conn, data)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason == nil {
+		t.Fatalf("Expected DeniedReason for empty operation, got nil")
+	}
+	if !strings.Contains(*resp.DeniedReason, "Unknown operation") {
+		t.Errorf("Expected DeniedReason to mention Unknown operation, got: %s", *resp.DeniedReason)
+	}
+}
+
 // TestServer_RejectsUnknownSource pins the enum-restriction on the
 // caller-supplied source field. Any value outside {"", "mcp", "raw_argv"}
 // must be denied before it reaches audit log format strings.
