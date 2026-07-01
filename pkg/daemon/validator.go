@@ -28,12 +28,15 @@ type ValidationResult struct {
 // repo_path, expected git URL); validators that need a repo path use
 // target.RepoPath rather than project-level state.
 func (v *Validator) ValidateOperation(req operations.Request, project *config.ProjectConfig, target *ExecutionTarget) (*operations.Operation, ValidationResult) {
-	// Check if operation exists in project
+	// Check if operation exists in project. The caller-supplied Operation
+	// field is already restricted by Request.Validate() to the operation
+	// template naming shape; the extra %q here keeps any future path that
+	// bypasses Validate() from splicing control characters into audit logs.
 	op, exists := project.GetOperation(req.Operation)
 	if !exists {
 		return nil, ValidationResult{
 			OK:      false,
-			Message: fmt.Sprintf("Unknown operation: %s", req.Operation),
+			Message: fmt.Sprintf("Unknown operation: %q", req.Operation),
 		}
 	}
 
@@ -41,7 +44,7 @@ func (v *Validator) ValidateOperation(req operations.Request, project *config.Pr
 	if !project.HasOperation(req.Operation) {
 		return nil, ValidationResult{
 			OK:      false,
-			Message: fmt.Sprintf("Operation %s not allowed", req.Operation),
+			Message: fmt.Sprintf("Operation %q not allowed", req.Operation),
 		}
 	}
 

@@ -13,6 +13,63 @@ import (
 
 var inlinePlaceholderPattern = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 
+// requestIDPattern restricts caller-supplied request_id values to a
+// printable subset (letters, digits, and the delimiters `.`, `_`, `-`)
+// so daemon audit log lines cannot be split by embedded control
+// characters. The `%q` quoting on the log format acts as a second
+// layer; this pattern rejects the payload before it reaches log
+// formatting at all.
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// operationPattern restricts caller-supplied operation identifiers to the
+// same shape the operation templates themselves use as map keys (lowercase
+// letters, digits, underscore, leading letter). Values matching this
+// pattern cannot break audit log lines even before the `%q` quoting
+// applies. Operation IDs that the daemon itself resolves (raw-argv
+// reverse-match) always come from the project's allow list and satisfy
+// the pattern by construction; the check only limits caller input.
+var operationPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// MaxRequestIDLength caps caller-supplied request_id length. The value
+// is generous enough for UUIDs and prefixed identifiers while still
+// bounding log line width.
+const MaxRequestIDLength = 128
+
+// Validate checks caller-supplied diagnostic fields (RequestID, Source,
+// Operation) against their allowed shape before the daemon commits them
+// to audit log format strings. It is a pre-dispatch shape check, not a
+// full semantic validator: presence of Operation and the values inside
+// Params / Flags / TargetRepo are enforced later by
+// Validator.ValidateOperation, the operation templates, and the target
+// allow list.
+//
+// RequestID is optional; when non-empty it must match requestIDPattern
+// and stay within MaxRequestIDLength bytes. Source is enum-restricted
+// to "", "mcp", or "raw_argv". Operation is optional at Validate() time
+// on both entries: the raw-argv entry populates it later via
+// reverse-match, and an empty Operation on the MCP entry is rejected
+// downstream by Validator.ValidateOperation ("Unknown operation"). When
+// non-empty, Operation must match operationPattern.
+func (r *Request) Validate() error {
+	if r.RequestID != "" {
+		if len(r.RequestID) > MaxRequestIDLength {
+			return fmt.Errorf("request_id length %d exceeds maximum %d", len(r.RequestID), MaxRequestIDLength)
+		}
+		if !requestIDPattern.MatchString(r.RequestID) {
+			return fmt.Errorf("request_id contains characters outside [A-Za-z0-9._-]")
+		}
+	}
+	switch r.Source {
+	case "", "mcp", "raw_argv":
+	default:
+		return fmt.Errorf("source must be empty, \"mcp\", or \"raw_argv\"")
+	}
+	if r.Operation != "" && !operationPattern.MatchString(r.Operation) {
+		return fmt.Errorf("operation contains characters outside [a-z0-9_] or exceeds 64 bytes")
+	}
+	return nil
+}
+
 // Operation defines a predefined command template
 type Operation struct {
 	Command      string                 `json:"command"`       // e.g., "gh", "git"
@@ -78,6 +135,24 @@ type Request struct {
 	// request acts on. Required when the project has more than one repo;
 	// optional when the project has a single repo (defaults to Repos[0]).
 	TargetRepo string `json:"target_repo,omitempty"`
+	// CwdContext carries an optional hint derived from the caller's
+	// current working directory: the git toplevel path and the origin
+	// remote URL. When TargetRepo is empty, the daemon may auto-resolve
+	// the target by AND-matching (toplevel == repo_paths[i] AND
+	// origin URL → repos[i]) against the project's allow list. The
+	// allow-list AND check is the same security boundary as the explicit
+	// flag path; auto-resolve only adds an ergonomic fallback for the
+	// multi-repo case that mirrors gh CLI's cwd-based resolve semantics.
+	CwdContext *CwdContext `json:"cwd_context,omitempty"`
+}
+
+// CwdContext carries the caller's cwd-derived auto-resolve hint. Both
+// fields are filled in by the container-side proxyclient and consumed by
+// the daemon; an empty / partial context disables auto-resolve and the
+// daemon falls back to the explicit flag / primary-repo / error path.
+type CwdContext struct {
+	Toplevel  string `json:"toplevel,omitempty"`   // absolute path of git toplevel (`git rev-parse --show-toplevel`)
+	OriginURL string `json:"origin_url,omitempty"` // raw `git remote get-url origin` output
 }
 
 // Response represents the response from an operation.

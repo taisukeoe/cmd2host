@@ -2,6 +2,8 @@ module github.com/taisukeoe/cmd2host
 
 go 1.25.0
 
+toolchain go1.25.11
+
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/zeebo/blake3 v0.2.4

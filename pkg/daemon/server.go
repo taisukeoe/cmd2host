@@ -233,7 +233,20 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 
 	var req operations.Request
 	if err := json.Unmarshal(data, &req); err != nil {
-		fmt.Printf("[OP:?] DENIED (request_parse) source=%s: %v\n", source, err)
+		fmt.Printf("[OP:?] DENIED (request_parse) source=%q: %v\n", source, err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    "",
+			ExitCode:     1,
+			DeniedReason: strPtr(fmt.Sprintf("Invalid request: %v", err)),
+		})
+		return
+	}
+
+	// Reject caller-supplied diagnostic fields (request_id / source) whose
+	// character set could otherwise reach audit log format strings. The
+	// per-field %q quoting on downstream log lines is a second layer.
+	if err := req.Validate(); err != nil {
+		fmt.Printf("[OP:?] DENIED (request_validate) source=%q: %v\n", source, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    "",
 			ExitCode:     1,
@@ -245,7 +258,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Authenticate token
 	tokenData, valid := s.tokenStore.GetTokenData(req.Token)
 	if !valid {
-		fmt.Printf("[OP:?] AUTH FAILED source=%s request_id=%s\n", source, req.RequestID)
+		fmt.Printf("[OP:?] AUTH FAILED source=%q request_id=%q\n", source, req.RequestID)
 		// Return the slot before the synthetic delay so the cap is not
 		// occupied by a goroutine that is no longer doing useful work.
 		if releaseSlot != nil {
@@ -263,7 +276,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Resolve project config from token
 	projectConfig, projectID, err := s.resolveProject(tokenData)
 	if err != nil {
-		fmt.Printf("[OP:?] DENIED (project) source=%s request_id=%s: %v\n", source, req.RequestID, err)
+		fmt.Printf("[OP:?] DENIED (project) source=%q request_id=%q: %v\n", source, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -279,9 +292,20 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	// Target is resolved before any per-mode branching so the raw-argv
 	// reverse-match path can substitute injection-only placeholders
 	// (repo / repo_path / expected_git_url) with their per-target values.
-	target, err := ResolveExecutionTarget(projectConfig, req.TargetRepo)
+	target, resolvedSource, err := ResolveExecutionTarget(projectConfig, req.TargetRepo, req.CwdContext)
 	if err != nil {
-		fmt.Printf("[OP:?] DENIED (target) source=%s project=%s target_repo=%q request_id=%s: %v\n", source, projectID, req.TargetRepo, req.RequestID, err)
+		// Surface both the requested target_repo and the cwd hint
+		// (when present) so an operator grep'ing a denial line sees
+		// what the caller asked for and what the auto-resolve probe
+		// saw. The auto-resolve failure message itself carries the
+		// detail; this log line keeps the key=value shape stable.
+		// The origin URL is routed through OriginRepoForLog so a
+		// credential-bearing https URL never reaches operator logs.
+		var cwdSummary string
+		if req.CwdContext != nil {
+			cwdSummary = fmt.Sprintf(" cwd_toplevel=%q cwd_origin_repo=%q", req.CwdContext.Toplevel, OriginRepoForLog(req.CwdContext.OriginURL))
+		}
+		fmt.Printf("[OP:?] DENIED (target) source=%q project=%q target_repo=%q%s request_id=%q: %v\n", source, projectID, req.TargetRepo, cwdSummary, req.RequestID, err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -289,6 +313,13 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		})
 		return
 	}
+	// Promote the resolved target_repo back onto the request so every
+	// subsequent denial / audit log line in this function reports the
+	// effective target rather than the (possibly empty) caller-supplied
+	// value. cwd auto-resolve and single-repo primary-default paths
+	// otherwise leave req.TargetRepo as "" — observability only, no
+	// resolution semantics change.
+	req.TargetRepo = target.Repo
 
 	// Raw-argv mode: resolve Operation/Params/Flags via reverse-match
 	// against the project's allowed operations before continuing through
@@ -302,7 +333,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		req.Source = "raw_argv"
 		if len(req.RawArgv) == 0 {
 			msg := "raw_argv field is present but empty; must contain at least the command token"
-			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=%q project=%q target_repo=%q request_id=%q: %s\n", "raw_argv", projectID, req.TargetRepo, req.RequestID, msg)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
@@ -312,7 +343,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		}
 		if len(req.RawArgv[0]) == 0 {
 			msg := "raw_argv command is empty"
-			fmt.Printf("[OP:?] DENIED (raw_argv) source=raw_argv project=%s target_repo=%q request_id=%s: %s\n", projectID, req.TargetRepo, req.RequestID, msg)
+			fmt.Printf("[OP:?] DENIED (raw_argv) source=%q project=%q target_repo=%q request_id=%q: %s\n", "raw_argv", projectID, req.TargetRepo, req.RequestID, msg)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
@@ -328,7 +359,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		candidates := buildReverseMatchCandidates(projectConfig)
 		resolved, rerr := operations.ReverseMatch(req.RawArgv[0], req.RawArgv[1:], candidates, injection)
 		if rerr != nil {
-			fmt.Printf("[OP:?] DENIED (reverse_match) source=raw_argv project=%s target_repo=%q request_id=%s: %v\n", projectID, req.TargetRepo, req.RequestID, rerr)
+			fmt.Printf("[OP:?] DENIED (reverse_match) source=%q project=%q target_repo=%q request_id=%q: %v\n", "raw_argv", projectID, req.TargetRepo, req.RequestID, rerr)
 			s.sendOperationResponse(conn, operations.Response{
 				RequestID:    req.RequestID,
 				ExitCode:     1,
@@ -349,12 +380,15 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	}
 
 	// Log operation request (params omitted to avoid logging sensitive data
-	// like PR body). source distinguishes raw-argv vs MCP entry, and
+	// like PR body). source distinguishes raw-argv vs MCP entry,
 	// resolved_operation_id is identical to the operation field but kept as
 	// a stable log key so downstream parsers do not need to track which
-	// entry shape was used.
-	fmt.Printf("[OP:%s] source=%s project=%s target_repo=%q request_id=%s resolved_operation_id=%s\n",
-		req.Operation, req.Source, projectID, req.TargetRepo, req.RequestID, req.Operation)
+	// entry shape was used, and resolved_target_source surfaces whether the
+	// target_repo came from an explicit flag, the cwd auto-resolve
+	// fallback, or the single-repo primary default — operators can grep on
+	// `resolved_target_source=auto_resolve` to audit cwd-derived targets.
+	fmt.Printf("[OP:%q] source=%q project=%q target_repo=%q resolved_target_source=%q request_id=%q resolved_operation_id=%q\n",
+		req.Operation, req.Source, projectID, target.Repo, resolvedSource, req.RequestID, req.Operation)
 
 	// Validate operation against per-target context
 	op, result := s.validator.ValidateOperation(req, projectConfig, target)

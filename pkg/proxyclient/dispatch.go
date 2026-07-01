@@ -48,6 +48,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // Exit codes for non-passthrough cases. See file comment.
@@ -84,9 +86,18 @@ type Options struct {
 	Client *Client
 
 	// TargetRepo selects which repo (from the project's allow list)
-	// the request acts on. Empty defaults to the project's primary
-	// repo on the daemon side.
+	// the request acts on. Empty defers resolution to the daemon's
+	// cwd auto-resolve fallback (when CwdContext is non-nil) or the
+	// single-repo primary default.
 	TargetRepo string
+
+	// CwdContext carries the caller's cwd-derived auto-resolve hint
+	// (git toplevel + origin URL). Wired explicitly so callers can
+	// inject a deterministic context in tests; production callers
+	// pass CollectCwdContext() for the natural cwd-based resolve. Nil
+	// disables the hint and the daemon falls back to TargetRepo or
+	// the single-repo primary.
+	CwdContext *operations.CwdContext
 
 	// Stdout / Stderr default to os.Stdout / os.Stderr when nil.
 	// Wired explicitly for testability.
@@ -131,7 +142,7 @@ func Dispatch(opts Options) int {
 		return ExitEarlyReject
 	}
 
-	resp, err := opts.Client.SendRawArgv(opts.Command, opts.Argv, opts.TargetRepo)
+	resp, err := opts.Client.SendRawArgv(opts.Command, opts.Argv, opts.TargetRepo, opts.CwdContext)
 	if err != nil {
 		writeWrapperError(stderr, fmt.Sprintf("daemon request failed: %v", err))
 		return ExitInfrastructure
