@@ -689,3 +689,45 @@ func TestOperation_BuildArgs_MigratedBodyOps(t *testing.T) {
 		})
 	}
 }
+
+func TestRequest_Validate(t *testing.T) {
+	// Values chosen so a downstream `grep '\[OP:'` parser cannot be
+	// tricked into treating a caller-supplied diagnostic field as the
+	// start of a new audit log line. The upper-length case bounds log
+	// width so a single request cannot produce an unbounded line.
+	longID := ""
+	for i := 0; i < MaxRequestIDLength+1; i++ {
+		longID += "a"
+	}
+
+	tests := []struct {
+		name    string
+		req     Request
+		wantErr bool
+	}{
+		{name: "empty", req: Request{}, wantErr: false},
+		{name: "hyphen-uuid-ish", req: Request{RequestID: "req-1234.abcd_XYZ"}, wantErr: false},
+		{name: "source mcp", req: Request{Source: "mcp"}, wantErr: false},
+		{name: "source raw_argv", req: Request{Source: "raw_argv"}, wantErr: false},
+
+		{name: "embedded newline", req: Request{RequestID: "INJECTED\n[OP:git_push]"}, wantErr: true},
+		{name: "embedded carriage return", req: Request{RequestID: "abc\rdef"}, wantErr: true},
+		{name: "embedded tab", req: Request{RequestID: "abc\tdef"}, wantErr: true},
+		{name: "embedded NUL", req: Request{RequestID: "abc\x00def"}, wantErr: true},
+		{name: "embedded space", req: Request{RequestID: "abc def"}, wantErr: true},
+		{name: "embedded quote", req: Request{RequestID: "abc\"def"}, wantErr: true},
+		{name: "utf8 letters not allowed", req: Request{RequestID: "日本語"}, wantErr: true},
+		{name: "over length cap", req: Request{RequestID: longID}, wantErr: true},
+
+		{name: "source unknown enum", req: Request{Source: "attacker"}, wantErr: true},
+		{name: "source with newline", req: Request{Source: "mcp\ninjected"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() err = %v, wantErr = %v", err, tt.wantErr)
+			}
+		})
+	}
+}

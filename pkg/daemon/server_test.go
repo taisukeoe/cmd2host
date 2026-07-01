@@ -1027,6 +1027,159 @@ func TestServer_AuthFailure_ReleasesInFlightSlotBeforeThrottleSleep(t *testing.T
 
 // TestServer_DispatchConn_NoCapPassesThrough verifies the disabled-cap
 // path (MaxInFlight < 0 → inFlightSem == nil): dispatchConn must still
+// TestServer_RejectsControlCharsInRequestID pins the daemon's early rejection
+// of caller-supplied diagnostic fields whose payload could otherwise reach
+// the audit log format strings intact. When the request_id carries a
+// character outside the allowed set (newline, carriage return, quote,
+// space, ...), the daemon must respond with a validation-shaped
+// DeniedReason and must not proceed to auth. Anchoring this at the
+// transport layer (rather than only at the pure operations.Validate unit
+// test) confirms handleOperationRequest wires Validate() into the request
+// path before token check.
+func TestServer_RejectsControlCharsInRequestID(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	cases := []struct {
+		name      string
+		requestID string
+	}{
+		{name: "embedded newline (log-line spoof shape)", requestID: "INJECTED\n[OP:git_push] source=mcp"},
+		{name: "carriage return", requestID: "abc\rdef"},
+		{name: "tab", requestID: "abc\tdef"},
+		{name: "NUL byte", requestID: "abc\x00def"},
+		{name: "quote", requestID: "abc\"def"},
+		{name: "space", requestID: "abc def"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			// Note: token is intentionally invalid. The validation must
+			// fire before auth so callers cannot spoof audit lines via a
+			// bare unauthenticated request.
+			req := map[string]any{
+				"request_id": tc.requestID,
+				"operation":  "test_op",
+				"token":      "invalid",
+			}
+			data, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("Failed to marshal request: %v", err)
+			}
+			writeAndCloseWrite(t, conn, data)
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+
+			if resp.DeniedReason == nil {
+				t.Fatalf("Expected DeniedReason for control-char request_id, got nil")
+			}
+			if !strings.Contains(*resp.DeniedReason, "request_id") {
+				t.Errorf("Expected DeniedReason to mention request_id, got: %s", *resp.DeniedReason)
+			}
+			// The daemon must not report auth failure — validation must
+			// short-circuit before the token check runs.
+			if strings.Contains(*resp.DeniedReason, "Authentication failed") {
+				t.Errorf("Validation should run before auth; got auth-failure DeniedReason: %s", *resp.DeniedReason)
+			}
+		})
+	}
+}
+
+// TestServer_RejectsUnknownSource pins the enum-restriction on the
+// caller-supplied source field. Any value outside {"", "mcp", "raw_argv"}
+// must be denied before it reaches audit log format strings.
+func TestServer_RejectsUnknownSource(t *testing.T) {
+	server, _, _ := setupServerWithProject(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	req := map[string]any{
+		"request_id": "req-1",
+		"operation":  "test_op",
+		"source":     "attacker",
+		"token":      "invalid",
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+	writeAndCloseWrite(t, conn, data)
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 65536)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read: %v", err)
+	}
+
+	var resp operations.Response
+	if err := json.Unmarshal(buf[:n], &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.DeniedReason == nil {
+		t.Fatalf("Expected DeniedReason for unknown source enum, got nil")
+	}
+	if !strings.Contains(*resp.DeniedReason, "source") {
+		t.Errorf("Expected DeniedReason to mention source, got: %s", *resp.DeniedReason)
+	}
+}
+
 // dispatch the connection to handleClient with no semaphore handshake.
 func TestServer_DispatchConn_NoCapPassesThrough(t *testing.T) {
 	server, _, _ := setupServerWithProject(t)

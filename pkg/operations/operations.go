@@ -13,6 +13,45 @@ import (
 
 var inlinePlaceholderPattern = regexp.MustCompile(`\{([A-Za-z0-9_]+)\}`)
 
+// requestIDPattern restricts caller-supplied request_id values to a
+// printable subset (letters, digits, and the delimiters `.`, `_`, `-`)
+// so daemon audit log lines cannot be split by embedded control
+// characters. The `%q` quoting on the log format acts as a second
+// layer; this pattern rejects the payload before it reaches log
+// formatting at all.
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// MaxRequestIDLength caps caller-supplied request_id length. The value
+// is generous enough for UUIDs and prefixed identifiers while still
+// bounding log line width.
+const MaxRequestIDLength = 128
+
+// Validate checks caller-supplied diagnostic fields (RequestID, Source)
+// against their allowed shape before the daemon commits them to audit
+// log format strings. Fields that the daemon itself resolves after
+// dispatch (Operation, Params, Flags, TargetRepo) are validated
+// elsewhere via operation templates and the target allow list.
+//
+// RequestID is optional; when non-empty it must match requestIDPattern
+// and stay within MaxRequestIDLength bytes. Source is enum-restricted
+// to "", "mcp", or "raw_argv".
+func (r *Request) Validate() error {
+	if r.RequestID != "" {
+		if len(r.RequestID) > MaxRequestIDLength {
+			return fmt.Errorf("request_id length %d exceeds maximum %d", len(r.RequestID), MaxRequestIDLength)
+		}
+		if !requestIDPattern.MatchString(r.RequestID) {
+			return fmt.Errorf("request_id contains characters outside [A-Za-z0-9._-]")
+		}
+	}
+	switch r.Source {
+	case "", "mcp", "raw_argv":
+	default:
+		return fmt.Errorf("source must be empty, \"mcp\", or \"raw_argv\"")
+	}
+	return nil
+}
+
 // Operation defines a predefined command template
 type Operation struct {
 	Command      string                 `json:"command"`       // e.g., "gh", "git"
