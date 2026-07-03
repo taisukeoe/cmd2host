@@ -489,6 +489,30 @@ func TestInferSanitizeProfile_EmbeddedTemplates(t *testing.T) {
 	}
 }
 
+func TestExecutionProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		op   operations.Operation
+		args []string
+		want string
+	}{
+		{"git literal push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}"}}, []string{"push", "git@github.com:owner/repo.git"}, "git_push_strict"},
+		{"git placeholder expanding to push", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"push", "origin"}, "git_push_strict"},
+		{"git placeholder expanding to fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"fetch", "origin"}, "git"},
+		{"git fetch stays base profile", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, []string{"fetch", "origin"}, "git"},
+		{"gh unaffected by push arg", operations.Operation{Command: "gh", ArgsTemplate: []string{"{subcommand}"}}, []string{"push"}, "gh"},
+		{"non-git unaffected by push arg", operations.Operation{Command: "aws", ArgsTemplate: []string{"{subcommand}"}}, []string{"push"}, "minimal"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExecutionProfile(&tc.op, tc.args); got != tc.want {
+				t.Errorf("ExecutionProfile(%q, %v) = %q, want %q", tc.op.Command, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPrepareCommand_UnknownProfileFailsClosed(t *testing.T) {
 	sanitizer := NewCommandSanitizer(nil, nil)
 
@@ -577,6 +601,7 @@ func TestPrepareCommand_GoldenEnvParity(t *testing.T) {
 		{"gh", operations.Operation{Command: "gh", ArgsTemplate: []string{"pr", "list"}}, []string{"pr", "list"}},
 		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, []string{"fetch", "origin"}},
 		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, []string{"push", "git@github.com:owner/repo.git", "main"}},
+		{"git placeholder push", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"push", "origin"}},
 		{"unknown command", operations.Operation{Command: "aws", ArgsTemplate: []string{"s3", "ls"}}, []string{"s3", "ls"}},
 	}
 
@@ -586,7 +611,7 @@ func TestPrepareCommand_GoldenEnvParity(t *testing.T) {
 
 			want := legacyPrepareEnv(sanitizer, tc.op.Command, tc.args)
 
-			cmd, err := sanitizer.PrepareCommand(tc.op.Command, tc.args, InferSanitizeProfile(&tc.op))
+			cmd, err := sanitizer.PrepareCommand(tc.op.Command, tc.args, ExecutionProfile(&tc.op, tc.args))
 			if err != nil {
 				t.Fatalf("PrepareCommand returned error: %v", err)
 			}

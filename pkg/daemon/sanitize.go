@@ -238,6 +238,21 @@ func InferSanitizeProfile(op *operations.Operation) string {
 	}
 }
 
+// ExecutionProfile returns the sanitization profile for an operation about
+// to execute with the given argv. It starts from the template-declarative
+// InferSanitizeProfile and applies a strengthen-only correction: a git
+// invocation whose first runtime argument is "push" always executes under
+// "git_push_strict", even when the operation template reaches "push"
+// through a placeholder rather than a literal head. This keeps the runtime
+// invariant that git push never runs under a weaker profile.
+func ExecutionProfile(op *operations.Operation, args []string) string {
+	profile := InferSanitizeProfile(op)
+	if profile == "git" && len(args) > 0 && args[0] == "push" {
+		return "git_push_strict"
+	}
+	return profile
+}
+
 // PrepareCommand creates an exec.Cmd with sanitized environment. profile
 // selects the sanitization behavior from sanitizeProfiles; a name outside
 // the registry is an error and no command is prepared.

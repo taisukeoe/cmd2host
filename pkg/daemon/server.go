@@ -484,7 +484,7 @@ func (s *Server) executeWithSanitization(op *operations.Operation, args []string
 
 	// Create sanitizer with project + target and prepare command once
 	sanitizer := NewCommandSanitizer(project, target)
-	preparedCmd, err := sanitizer.PrepareCommand(cmdName, args, InferSanitizeProfile(op))
+	preparedCmd, err := sanitizer.PrepareCommand(cmdName, args, ExecutionProfile(op, args))
 	if err != nil {
 		return ExecuteResult{
 			ExitCode: 1,
