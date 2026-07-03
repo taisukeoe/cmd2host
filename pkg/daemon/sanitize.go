@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 // SanitizedEnv builds a sanitized environment for command execution
@@ -189,8 +190,78 @@ func (cs *CommandSanitizer) SanitizeForGitPushStrict(env *SanitizedEnv) {
 	env.SetGitConfig("submodule.recurse", "false")
 }
 
-// PrepareCommand creates an exec.Cmd with sanitized environment
-func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.Cmd {
+// sanitizeProfile is a named, registry-managed sanitization behavior.
+// apply mutates the environment the way the profile's target CLI expects.
+type sanitizeProfile struct {
+	apply func(cs *CommandSanitizer, env *SanitizedEnv)
+}
+
+// sanitizeProfiles is the registry of daemon-side sanitization profiles.
+// PrepareCommand only executes profiles present in this registry; a name
+// outside it is rejected rather than silently mapped to a weaker profile.
+var sanitizeProfiles = map[string]sanitizeProfile{
+	"minimal":         {apply: func(cs *CommandSanitizer, env *SanitizedEnv) {}},
+	"gh":              {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGH(env) }},
+	"git":             {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGit(env) }},
+	"git_push_strict": {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGitPushStrict(env) }},
+}
+
+// commandBasename returns the command's basename with a trailing ".exe"
+// suffix removed (Windows), the shape sanitization profiles key on.
+func commandBasename(cmdPath string) string {
+	name := strings.TrimSuffix(cmdPath, ".exe") // Handle Windows
+	return name[strings.LastIndex(name, "/")+1:]
+}
+
+// InferSanitizeProfile returns the sanitization profile for an operation
+// derived from its command and args template:
+//
+//   - command basename "gh" → "gh"
+//   - command basename "git" with an args_template whose first element is
+//     the literal "push" → "git_push_strict"
+//   - any other "git" operation → "git"
+//   - everything else → "minimal"
+//
+// The decision reads the operation template rather than the built argv, so
+// the profile is a property of the declared operation shape.
+func InferSanitizeProfile(op *operations.Operation) string {
+	switch commandBasename(op.Command) {
+	case "gh":
+		return "gh"
+	case "git":
+		if len(op.ArgsTemplate) > 0 && op.ArgsTemplate[0] == "push" {
+			return "git_push_strict"
+		}
+		return "git"
+	default:
+		return "minimal"
+	}
+}
+
+// ExecutionProfile returns the sanitization profile for an operation about
+// to execute with the given argv. It starts from the template-declarative
+// InferSanitizeProfile and applies a strengthen-only correction: a git
+// invocation whose first runtime argument is "push" always executes under
+// "git_push_strict", even when the operation template reaches "push"
+// through a placeholder rather than a literal head. This keeps the runtime
+// invariant that git push never runs under a weaker profile.
+func ExecutionProfile(op *operations.Operation, args []string) string {
+	profile := InferSanitizeProfile(op)
+	if profile == "git" && len(args) > 0 && args[0] == "push" {
+		return "git_push_strict"
+	}
+	return profile
+}
+
+// PrepareCommand creates an exec.Cmd with sanitized environment. profile
+// selects the sanitization behavior from sanitizeProfiles; a name outside
+// the registry is an error and no command is prepared.
+func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string, profile string) (*exec.Cmd, error) {
+	p, ok := sanitizeProfiles[profile]
+	if !ok {
+		return nil, fmt.Errorf("unknown sanitize profile %q", profile)
+	}
+
 	cmd := exec.Command(cmdPath, args...)
 
 	env := NewSanitizedEnv()
@@ -200,21 +271,8 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.
 		env.SetFromMap(cs.project.Env)
 	}
 
-	// Apply command-specific sanitization
-	cmdName := strings.TrimSuffix(cmdPath, ".exe") // Handle Windows
-	cmdName = cmdName[strings.LastIndex(cmdName, "/")+1:]
-
-	switch cmdName {
-	case "gh":
-		cs.SanitizeForGH(env)
-	case "git":
-		// Check if this is a push operation by examining args
-		if len(args) > 0 && args[0] == "push" {
-			cs.SanitizeForGitPushStrict(env)
-		} else {
-			cs.SanitizeForGit(env)
-		}
-	}
+	// Apply profile-specific sanitization
+	p.apply(cs, env)
 
 	cmd.Env = env.BuildEnv()
 
@@ -223,7 +281,7 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string) *exec.
 		cmd.Dir = cs.target.RepoPath
 	}
 
-	return cmd
+	return cmd, nil
 }
 
 // ValidateCommandPath ensures the command path is safe
