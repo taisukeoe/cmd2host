@@ -434,7 +434,7 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	}
 
 	// Execute with sanitized environment + per-target working directory.
-	resp := s.executeWithSanitization(op.Command, args, projectConfig, target)
+	resp := s.executeWithSanitization(op, args, projectConfig, target)
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
 
 	s.sendOperationResponse(conn, operations.Response{
@@ -467,8 +467,13 @@ func buildReverseMatchCandidates(p *config.ProjectConfig) []operations.Candidate
 	return out
 }
 
-// executeWithSanitization executes a command with sanitized environment
-func (s *Server) executeWithSanitization(cmdName string, args []string, project *config.ProjectConfig, target *ExecutionTarget) ExecuteResult {
+// executeWithSanitization executes an operation's command with sanitized
+// environment. The sanitization profile is resolved from the operation
+// template so the applied hardening is a property of the declared
+// operation, not of the built argv.
+func (s *Server) executeWithSanitization(op *operations.Operation, args []string, project *config.ProjectConfig, target *ExecutionTarget) ExecuteResult {
+	cmdName := op.Command
+
 	// Validate command path
 	if err := ValidateCommandPath(cmdName); err != nil {
 		return ExecuteResult{
@@ -479,7 +484,13 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 
 	// Create sanitizer with project + target and prepare command once
 	sanitizer := NewCommandSanitizer(project, target)
-	preparedCmd := sanitizer.PrepareCommand(cmdName, args)
+	preparedCmd, err := sanitizer.PrepareCommand(cmdName, args, InferSanitizeProfile(op))
+	if err != nil {
+		return ExecuteResult{
+			ExitCode: 1,
+			Stderr:   err.Error(),
+		}
+	}
 
 	timeout := time.Duration(s.daemonConfig.DefaultTimeout) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -494,7 +505,7 @@ func (s *Server) executeWithSanitization(cmdName string, args []string, project 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 
 	// Cap stream output and capture per-stream truncation indicators. These
 	// values flow through the response chain on paths that surface the actual

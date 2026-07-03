@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/taisukeoe/cmd2host/pkg/config"
+	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
 
 func TestSanitizedEnv_Set(t *testing.T) {
@@ -310,7 +313,10 @@ func TestCommandSanitizer_PrepareCommand_GH(t *testing.T) {
 	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: "/path/to/repo"}
 	sanitizer := NewCommandSanitizer(project, target)
 
-	cmd := sanitizer.PrepareCommand("gh", []string{"pr", "list"})
+	cmd, err := sanitizer.PrepareCommand("gh", []string{"pr", "list"}, "gh")
+	if err != nil {
+		t.Fatalf("PrepareCommand returned error: %v", err)
+	}
 
 	// Check working directory
 	if cmd.Dir != "/path/to/repo" {
@@ -351,7 +357,10 @@ func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
 	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: "/path/to/repo"}
 	sanitizer := NewCommandSanitizer(project, target)
 
-	cmd := sanitizer.PrepareCommand("git", []string{"status"})
+	cmd, err := sanitizer.PrepareCommand("git", []string{"status"}, "git")
+	if err != nil {
+		t.Fatalf("PrepareCommand returned error: %v", err)
+	}
 
 	// Check working directory
 	if cmd.Dir != "/path/to/repo" {
@@ -378,8 +387,13 @@ func TestCommandSanitizer_PrepareCommand_Git(t *testing.T) {
 func TestCommandSanitizer_PrepareCommand_ExtractsBasename(t *testing.T) {
 	sanitizer := NewCommandSanitizer(nil, nil)
 
-	// Test with full path
-	cmd := sanitizer.PrepareCommand("/usr/bin/gh", []string{"--version"})
+	// Full command path: the profile inferred from the operation template
+	// must still resolve to gh sanitization.
+	op := &operations.Operation{Command: "/usr/bin/gh", ArgsTemplate: []string{"--version"}}
+	cmd, err := sanitizer.PrepareCommand(op.Command, []string{"--version"}, InferSanitizeProfile(op))
+	if err != nil {
+		t.Fatalf("PrepareCommand returned error: %v", err)
+	}
 
 	// Should still apply gh sanitization
 	envMap := make(map[string]string)
@@ -392,6 +406,207 @@ func TestCommandSanitizer_PrepareCommand_ExtractsBasename(t *testing.T) {
 
 	if envMap["GH_PROMPT_DISABLED"] != "1" {
 		t.Error("Expected GH_PROMPT_DISABLED=1 even with full path")
+	}
+}
+
+func TestInferSanitizeProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		op   operations.Operation
+		want string
+	}{
+		{"gh", operations.Operation{Command: "gh", ArgsTemplate: []string{"pr", "list"}}, "gh"},
+		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, "git_push_strict"},
+		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, "git"},
+		{"git no args", operations.Operation{Command: "git", ArgsTemplate: nil}, "git"},
+		{"aws", operations.Operation{Command: "aws", ArgsTemplate: []string{"s3", "ls"}}, "minimal"},
+		{"absolute git push", operations.Operation{Command: "/usr/bin/git", ArgsTemplate: []string{"push"}}, "git_push_strict"},
+		{"absolute gh", operations.Operation{Command: "/opt/homebrew/bin/gh", ArgsTemplate: []string{"pr", "view"}}, "gh"},
+		{"windows git", operations.Operation{Command: "git.exe", ArgsTemplate: []string{"fetch"}}, "git"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := InferSanitizeProfile(&tc.op); got != tc.want {
+				t.Errorf("InferSanitizeProfile(%q, %v) = %q, want %q", tc.op.Command, tc.op.ArgsTemplate, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestInferSanitizeProfile_EmbeddedTemplates pins the premise that lets
+// InferSanitizeProfile read the operation template instead of the runtime
+// argv: in every embedded template, a git operation's args_template starts
+// with a literal element (never a placeholder that could be dropped or
+// substituted), and the "push" literal appears only as that first element.
+// Under these two properties the template-derived profile always matches
+// the argv-derived decision the previous implementation made.
+func TestInferSanitizeProfile_EmbeddedTemplates(t *testing.T) {
+	names, err := config.ListTemplates()
+	if err != nil {
+		t.Fatalf("ListTemplates: %v", err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no embedded templates found")
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			data, err := config.GetTemplate(name)
+			if err != nil {
+				t.Fatalf("GetTemplate(%q): %v", name, err)
+			}
+			var tmpl struct {
+				Operations map[string]*operations.Operation `json:"operations"`
+			}
+			if err := json.Unmarshal(data, &tmpl); err != nil {
+				t.Fatalf("unmarshal template %q: %v", name, err)
+			}
+
+			for opID, op := range tmpl.Operations {
+				if commandBasename(op.Command) != "git" {
+					continue
+				}
+				if len(op.ArgsTemplate) == 0 {
+					t.Errorf("%s: git operation has empty args_template", opID)
+					continue
+				}
+				if strings.Contains(op.ArgsTemplate[0], "{") {
+					t.Errorf("%s: git operation args_template starts with a placeholder %q; the first element must be a literal", opID, op.ArgsTemplate[0])
+				}
+				for i, elem := range op.ArgsTemplate[1:] {
+					if elem == "push" {
+						t.Errorf("%s: args_template has \"push\" at index %d; it is only recognized at index 0", opID, i+1)
+					}
+				}
+				wantStrict := op.ArgsTemplate[0] == "push"
+				gotStrict := InferSanitizeProfile(op) == "git_push_strict"
+				if gotStrict != wantStrict {
+					t.Errorf("%s: InferSanitizeProfile strictness = %v, want %v", opID, gotStrict, wantStrict)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareCommand_UnknownProfileFailsClosed(t *testing.T) {
+	sanitizer := NewCommandSanitizer(nil, nil)
+
+	cmd, err := sanitizer.PrepareCommand("gh", []string{"pr", "list"}, "no_such_profile")
+	if err == nil {
+		t.Fatal("Expected error for unknown profile name")
+	}
+	if cmd != nil {
+		t.Error("Expected nil cmd when the profile name is rejected")
+	}
+	if !strings.Contains(err.Error(), "no_such_profile") {
+		t.Errorf("Expected error to name the rejected profile, got: %v", err)
+	}
+}
+
+// legacyPrepareEnv reproduces the environment construction PrepareCommand
+// performed before profiles were introduced: project env first, then the
+// sanitize method selected by command basename (with the git push special
+// case keyed on the first runtime arg). It fixes the pre-profile behavior
+// as the comparison baseline for TestPrepareCommand_GoldenEnvParity.
+func legacyPrepareEnv(cs *CommandSanitizer, cmdPath string, args []string) []string {
+	env := NewSanitizedEnv()
+
+	if cs.project != nil {
+		env.SetFromMap(cs.project.Env)
+	}
+
+	cmdName := strings.TrimSuffix(cmdPath, ".exe")
+	cmdName = cmdName[strings.LastIndex(cmdName, "/")+1:]
+
+	switch cmdName {
+	case "gh":
+		cs.SanitizeForGH(env)
+	case "git":
+		if len(args) > 0 && args[0] == "push" {
+			cs.SanitizeForGitPushStrict(env)
+		} else {
+			cs.SanitizeForGit(env)
+		}
+	}
+
+	return env.BuildEnv()
+}
+
+// normalizeGitConfigEntry makes GIT_CONFIG_PARAMETERS entries comparable:
+// the value is assembled from a map, so the 'key=value' parts appear in
+// nondeterministic order in both the legacy and the profile-based path.
+// All other entries are returned unchanged.
+func normalizeGitConfigEntry(entry string) string {
+	const prefix = "GIT_CONFIG_PARAMETERS="
+	if !strings.HasPrefix(entry, prefix) {
+		return entry
+	}
+	value := strings.TrimPrefix(entry, prefix)
+	value = strings.TrimPrefix(value, "'")
+	value = strings.TrimSuffix(value, "'")
+	parts := strings.Split(value, "' '")
+	sort.Strings(parts)
+	return prefix + "'" + strings.Join(parts, "' '") + "'"
+}
+
+// TestPrepareCommand_GoldenEnvParity pins backward compatibility for
+// operations without a declared profile: the environment produced by the
+// profile-based PrepareCommand (via InferSanitizeProfile) must be
+// identical, entry for entry and in order, to the environment the
+// pre-profile implementation produced. Covers all four legacy branches:
+// gh, git non-push, git push, and a command with no dedicated handling.
+func TestPrepareCommand_GoldenEnvParity(t *testing.T) {
+	project := &config.ProjectConfig{
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/path/to/repo"},
+		Env:       map[string]string{"CUSTOM_VAR": "value"},
+		GitConfig: map[string]string{"user.name": "tester"},
+	}
+	target := &ExecutionTarget{
+		Repo:           "owner/repo",
+		RepoPath:       "/path/to/repo",
+		ExpectedGitURL: "git@github.com:owner/repo.git",
+	}
+
+	cases := []struct {
+		name string
+		op   operations.Operation
+		args []string
+	}{
+		{"gh", operations.Operation{Command: "gh", ArgsTemplate: []string{"pr", "list"}}, []string{"pr", "list"}},
+		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, []string{"fetch", "origin"}},
+		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, []string{"push", "git@github.com:owner/repo.git", "main"}},
+		{"unknown command", operations.Operation{Command: "aws", ArgsTemplate: []string{"s3", "ls"}}, []string{"s3", "ls"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sanitizer := NewCommandSanitizer(project, target)
+
+			want := legacyPrepareEnv(sanitizer, tc.op.Command, tc.args)
+
+			cmd, err := sanitizer.PrepareCommand(tc.op.Command, tc.args, InferSanitizeProfile(&tc.op))
+			if err != nil {
+				t.Fatalf("PrepareCommand returned error: %v", err)
+			}
+			got := cmd.Env
+
+			if len(got) != len(want) {
+				t.Fatalf("env length mismatch: got %d entries, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+			}
+			for i := range want {
+				g := normalizeGitConfigEntry(got[i])
+				w := normalizeGitConfigEntry(want[i])
+				if g != w {
+					t.Errorf("env[%d] mismatch:\ngot:  %s\nwant: %s", i, g, w)
+				}
+			}
+
+			if cmd.Dir != target.RepoPath {
+				t.Errorf("Expected Dir %q, got %q", target.RepoPath, cmd.Dir)
+			}
+		})
 	}
 }
 
