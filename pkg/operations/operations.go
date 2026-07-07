@@ -261,7 +261,13 @@ func (op *Operation) ValidateParams(params map[string]ParamValue) error {
 // validateParamValue validates a single parameter value against its schema
 func validateParamValue(name string, value ParamValue, schema ParamSchema) error {
 	switch schema.Type {
-	case "string":
+	case "string", "workspace_path":
+		// "workspace_path" shares the string-shape checks (MinLength /
+		// MaxLength / Pattern). Those apply to the caller-supplied
+		// workspace-relative value; the daemon confines and rewrites it to an
+		// absolute path after validation (see pkg/daemon resolveWorkspacePath),
+		// so patterns anchored on the relative form (e.g. "^logs/") keep
+		// matching.
 		str, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("param %s: expected string, got %T", name, value)
