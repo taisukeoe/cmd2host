@@ -196,19 +196,34 @@ func filterByCommand(command string, candidates []CandidateOp) []CandidateOp {
 	return out
 }
 
-// NormalizeFlagTail rewrites "--flag value" two-token pairs into
-// "--flag=value" one-token form when the flag name is in the candidate's
-// value-bearing allow list (allowedFlags minus boolFlags) and the
-// following token does not itself start with "-". Boolean flags
-// (presence-only switches such as `--draft`) and unrecognized
-// flag-shaped tokens pass through verbatim. Operates only on the flag
-// tail produced by the per-candidate template walk, so template-literal
-// flags (which were matched 1:1 against the template) are not in scope.
+// NormalizeFlagTail canonicalizes a flag tail so the downstream ValidateFlags
+// check and the host argv agree on a single form. It handles two shapes:
 //
-// boolFlags MUST be a subset of allowedFlags. Entries in boolFlags that
-// are not also in allowedFlags are ignored (they cannot reach this code
-// path anyway — ValidateFlags would reject them).
-func NormalizeFlagTail(tail, allowedFlags, boolFlags []string) []string {
+//   - Single-value flags: "--flag value" two-token pairs are rewritten to
+//     "--flag=value" one-token form when the flag name is value-bearing
+//     (allowedFlags minus boolFlags minus multiValueFlags) and the
+//     following token does not itself start with "-".
+//   - Multi-value flags (multiValueFlags minus boolFlags): the flag and its
+//     run of space-separated values are kept as SEPARATE bare tokens (never
+//     `=`-spliced) so the host CLI receives the documented list syntax
+//     (`--rule-arns arn1 arn2 arn3`). A user-typed `=` form of a multi-value
+//     flag (`--rule-arns=arn1`) is split on the first `=` into the bare flag
+//     plus its first value, so a single canonical all-bare form results
+//     regardless of how the caller wrote it.
+//
+// Boolean flags (presence-only switches such as `--draft`) and unrecognized
+// flag-shaped tokens pass through verbatim.
+//
+// The function is idempotent: applying it to already-canonical output leaves
+// the tokens unchanged. This lets both the raw-argv reverse-match (per
+// candidate) and the shared daemon path (on the resolved req.Flags, and on
+// MCP-supplied flags) run it without conflict.
+//
+// boolFlags / multiValueFlags SHOULD be subsets of allowedFlags. Entries not
+// in allowedFlags are ignored here (they cannot reach the host anyway —
+// ValidateFlags would reject them). A flag in both boolFlags and
+// multiValueFlags is treated as boolean (boolFlags wins).
+func NormalizeFlagTail(tail, allowedFlags, boolFlags, multiValueFlags []string) []string {
 	if len(tail) == 0 {
 		return tail
 	}
@@ -216,9 +231,13 @@ func NormalizeFlagTail(tail, allowedFlags, boolFlags []string) []string {
 	for _, f := range boolFlags {
 		boolSet[f] = struct{}{}
 	}
+	multiValueSet := effectiveMultiValueSet(multiValueFlags, boolFlags)
 	valueBearing := make(map[string]struct{}, len(allowedFlags))
 	for _, f := range allowedFlags {
 		if _, isBool := boolSet[f]; isBool {
+			continue
+		}
+		if _, isMulti := multiValueSet[f]; isMulti {
 			continue
 		}
 		valueBearing[f] = struct{}{}
@@ -227,7 +246,32 @@ func NormalizeFlagTail(tail, allowedFlags, boolFlags []string) []string {
 	out := make([]string, 0, len(tail))
 	for i := 0; i < len(tail); i++ {
 		tok := tail[i]
-		if !strings.HasPrefix(tok, "--") || strings.Contains(tok, "=") {
+		if !strings.HasPrefix(tok, "--") {
+			out = append(out, tok)
+			continue
+		}
+
+		eq := strings.Index(tok, "=")
+		name := tok
+		if eq > 0 {
+			name = tok[:eq]
+		}
+
+		// Multi-value flag: keep the flag bare so its trailing value run
+		// reaches the host as separate tokens. Split a user-typed `=` form
+		// on the first `=` so the value (which may itself contain `=`, e.g.
+		// `--tag-filters=Key=A,Values=B`) is preserved as a bare token.
+		if _, isMulti := multiValueSet[name]; isMulti {
+			if eq > 0 {
+				out = append(out, tok[:eq], tok[eq+1:])
+			} else {
+				out = append(out, tok)
+			}
+			continue
+		}
+
+		// Already in `--flag=value` form: pass through unchanged.
+		if eq > 0 {
 			out = append(out, tok)
 			continue
 		}
@@ -306,7 +350,7 @@ func tryMatchCandidate(op *Operation, argv []string, injection map[string]string
 	}
 
 	flagTail := argv[len(effective):]
-	flags := NormalizeFlagTail(flagTail, op.AllowedFlags, op.BoolFlags)
+	flags := NormalizeFlagTail(flagTail, op.AllowedFlags, op.BoolFlags, op.MultiValueFlags)
 
 	// Flag validation: ValidateOperation re-runs this later, but rejecting
 	// here treats out-of-policy flags as "this candidate does not match"

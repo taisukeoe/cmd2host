@@ -82,8 +82,22 @@ type Operation struct {
 	// normalizer consults this list so it does not splice the next argv
 	// token into a boolean switch (e.g. `gh pr create --draft "title"`
 	// must reach the host as two tokens, not `--draft=title`).
-	BoolFlags   []string `json:"bool_flags,omitempty"`
-	Description string   `json:"description"` // Human-readable description
+	BoolFlags []string `json:"bool_flags,omitempty"`
+	// MultiValueFlags lists entries from AllowedFlags that accept several
+	// space-separated values (variadic list flags such as AWS CLI's
+	// `--rule-arns arn1 arn2 arn3` or `--tag-filters K=A,V=B K=C,V=D`).
+	// Flag normalization keeps a declared multi-value flag and its value
+	// run as separate tokens (never `=`-spliced) so the host CLI receives
+	// the documented space-separated form, and flag validation accepts the
+	// trailing bare value tokens that follow such a flag. Only flags named
+	// here absorb continuation tokens; every other flag keeps the default
+	// single-value behavior where a stray bare token is rejected.
+	// MultiValueFlags SHOULD be a subset of AllowedFlags; a flag not in
+	// AllowedFlags can never pass ValidateFlags anyway. A flag listed in
+	// both BoolFlags and MultiValueFlags is treated as boolean (BoolFlags
+	// wins) so a presence-only switch never absorbs host arguments.
+	MultiValueFlags []string `json:"multi_value_flags,omitempty"`
+	Description     string   `json:"description"` // Human-readable description
 }
 
 // ItemsSchema defines the schema for array items
@@ -326,9 +340,47 @@ func validateParamValue(name string, value ParamValue, schema ParamSchema) error
 	return nil
 }
 
+// effectiveMultiValueSet returns the set of flags that should absorb
+// space-separated continuation values: MultiValueFlags minus BoolFlags.
+// A flag declared in both is treated as boolean (a presence-only switch
+// must never absorb host arguments), so BoolFlags wins on contradiction.
+// Both NormalizeFlagTail (raw-argv flag-tail normalization) and
+// ValidateFlags consume this one helper so the two paths cannot drift.
+func effectiveMultiValueSet(multiValueFlags, boolFlags []string) map[string]struct{} {
+	if len(multiValueFlags) == 0 {
+		return nil
+	}
+	boolSet := make(map[string]struct{}, len(boolFlags))
+	for _, f := range boolFlags {
+		boolSet[f] = struct{}{}
+	}
+	out := make(map[string]struct{}, len(multiValueFlags))
+	for _, f := range multiValueFlags {
+		if _, isBool := boolSet[f]; isBool {
+			continue
+		}
+		out[f] = struct{}{}
+	}
+	return out
+}
+
 // ValidateFlags validates that all provided flags are in the allowed list.
-// Flags must be in --flag or --flag=value format. Separate value arguments
-// (e.g., --state open) are not supported - use --state=open instead.
+// It operates on an already-normalized flag list: the shared daemon path
+// (handleOperationRequest) runs NormalizeFlagTail on req.Flags before this
+// check on BOTH routes, so a caller may write "--flag value" or "--flag=value"
+// interchangeably — the separate-value form is joined to "--flag=value" before
+// it reaches here. ValidateFlags itself, seen in isolation, still rejects a
+// stray bare token that is not part of a multi-value run: it is the last line
+// that catches a surplus argument the normalizer could not attach to any flag.
+//
+// Exception: a flag declared in MultiValueFlags accepts a run of trailing
+// bare value tokens (e.g. `--rule-arns arn1 arn2 arn3`). Such a flag, in its
+// bare form, opens a value run; every subsequent bare token (one that does
+// not start with "-") is accepted as one of its values until the next
+// flag-shaped token closes the run. This mirrors the space-separated list
+// syntax variadic CLIs (AWS CLI, ...) document. The `=` form of a
+// multi-value flag does not open a run — callers pass the fully bare form,
+// which NormalizeFlagTail also produces from the raw argv.
 func (op *Operation) ValidateFlags(flags []string) error {
 	if len(op.AllowedFlags) == 0 && len(flags) > 0 {
 		return fmt.Errorf("no flags allowed for this operation")
@@ -338,22 +390,38 @@ func (op *Operation) ValidateFlags(flags []string) error {
 	for _, f := range op.AllowedFlags {
 		allowedSet[f] = true
 	}
+	multiValueSet := effectiveMultiValueSet(op.MultiValueFlags, op.BoolFlags)
 
+	// inMultiValueRun is true while iterating the value tokens that follow a
+	// bare multi-value flag. A bare (non-"-") token is legal only inside a
+	// run; outside one it is a stray separate-value argument and rejected.
+	inMultiValueRun := false
 	for _, flag := range flags {
-		// Every element must be a flag (start with -)
+		// Every element must be a flag (start with -) unless it is a value
+		// token inside an open multi-value run.
 		if !strings.HasPrefix(flag, "-") {
+			if inMultiValueRun {
+				continue
+			}
 			return fmt.Errorf("invalid flag format: %s (use --flag=value, not --flag value)", flag)
 		}
 
 		// Extract flag name (handle --flag=value)
 		flagName := flag
+		hasValue := false
 		if idx := strings.Index(flag, "="); idx > 0 {
 			flagName = flag[:idx]
+			hasValue = true
 		}
 
 		if !allowedSet[flagName] {
 			return fmt.Errorf("flag not allowed: %s", flagName)
 		}
+
+		// A bare multi-value flag opens a value run; any other flag-shaped
+		// token (including the `=` form of a multi-value flag) closes it.
+		_, isMultiValue := multiValueSet[flagName]
+		inMultiValueRun = isMultiValue && !hasValue
 	}
 
 	return nil
