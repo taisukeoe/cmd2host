@@ -19,7 +19,10 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -66,7 +69,8 @@ func resolveWorkspacePathParams(op *operations.Operation, params map[string]oper
 //
 // Rejected: empty values, values containing a NUL byte, absolute paths,
 // values with a `~` prefix, and any value whose resolved location lands
-// at or above base (via `..` or a symlink whose target is outside base).
+// outside base (via `..` or a symlink whose target is outside base). The
+// workspace root itself (value ".") resolves to base and is accepted.
 func resolveWorkspacePath(base, value string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("workspace_path: value is empty")
@@ -128,15 +132,37 @@ func escapesUpward(p string) bool {
 // ancestor yields the canonical location the path would occupy once
 // created. The walk terminates because filepath.Dir reaches the volume
 // root, and in practice stops at base, which always exists.
+//
+// The walk advances to the parent only when the current component is truly
+// absent. Any other EvalSymlinks error is returned as-is: such a component
+// is present but unresolvable (permission, too many symlink levels), and
+// treating it lexically would skip the symlink resolution the containment
+// check depends on. A NotExist result is disambiguated with os.Lstat,
+// because a dangling symlink (the entry exists, its target does not) also
+// reports NotExist — walking past it would let a later write follow the
+// link outside the workspace. Both cases fail closed, keeping the
+// resolve-then-check guarantee.
 func resolveExistingPrefix(path string) (string, error) {
 	cur := path
 	var suffix string
 	for {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
 			if suffix == "" {
 				return resolved, nil
 			}
 			return filepath.Join(resolved, suffix), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		// EvalSymlinks reported NotExist. Only treat cur as absent (and walk
+		// up) when the entry itself does not exist; a present-but-dangling
+		// symlink is unresolvable and must fail closed.
+		if _, lerr := os.Lstat(cur); lerr == nil {
+			return "", fmt.Errorf("unresolvable path component %q", cur)
+		} else if !errors.Is(lerr, fs.ErrNotExist) {
+			return "", lerr
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {

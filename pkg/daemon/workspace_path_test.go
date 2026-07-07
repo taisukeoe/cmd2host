@@ -72,6 +72,20 @@ func TestResolveWorkspacePath_Reject(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(base, "escape-link")); err != nil {
 		t.Fatal(err)
 	}
+	// A self-referential symlink: resolving through it fails with a
+	// non-NotExist error, not "absent". The resolver must fail closed rather
+	// than walk past the unresolved component and treat it lexically.
+	if err := os.Symlink("selfloop", filepath.Join(base, "selfloop")); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling symlink pointing outside the workspace: the symlink entry
+	// exists but its target does not, so resolving it reports NotExist even
+	// though the component is present. Walking past it and treating it
+	// lexically would let a later write follow the link outside the
+	// workspace, so the resolver must reject it.
+	if err := os.Symlink(filepath.Join(outside, "missing-target"), filepath.Join(base, "broken-link")); err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -86,6 +100,9 @@ func TestResolveWorkspacePath_Reject(t *testing.T) {
 		{"tilde_prefix", "~/evil.log"},
 		{"tilde_user_prefix", "~root/evil.log"},
 		{"symlink_escape", "escape-link/evil.log"},
+		{"symlink_loop", "selfloop/out.log"},
+		{"broken_symlink_final", "broken-link"},
+		{"broken_symlink_with_suffix", "broken-link/evil.log"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
