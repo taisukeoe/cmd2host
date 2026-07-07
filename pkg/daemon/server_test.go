@@ -634,6 +634,248 @@ func TestServer_RunOperation_NoTruncationLeavesFlagsZero(t *testing.T) {
 // it to test_op (template ["{message}"]), and the resolved request flows
 // through the same validate/sanitize/execute path as the explicit operation
 // entry.
+// setupServerWithMultiValueOp mirrors setupServerWithProject but seeds a
+// single echo-based operation that declares a multi-value flag, so tests can
+// observe the host argv shape (echo prints its arguments verbatim) after the
+// shared-path flag normalization runs.
+func setupServerWithMultiValueOp(t *testing.T) (*Server, string) {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	repoPath := t.TempDir()
+
+	projectID := "owner_repo"
+	projectDir := filepath.Join(config.ProjectsDirAt(baseDir), projectID)
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("Failed to create project dir: %v", err)
+	}
+
+	projectConfigContent := `{
+		"repo": "owner/repo",
+		"repo_path": "` + repoPath + `",
+		"allowed_operations": ["mv_echo"],
+		"operations": {
+			"mv_echo": {
+				"command": "echo",
+				"args_template": [],
+				"params": {},
+				"allowed_flags": ["--rule-arns", "--region"],
+				"multi_value_flags": ["--rule-arns"],
+				"description": "multi-value echo"
+			}
+		}
+	}`
+
+	configPath := filepath.Join(projectDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(projectConfigContent), 0644); err != nil {
+		t.Fatalf("Failed to write project config: %v", err)
+	}
+	if err := config.AllowConfigAt(baseDir, projectID); err != nil {
+		t.Fatalf("Failed to allow config: %v", err)
+	}
+
+	tokenDir := filepath.Join(baseDir, "tokens")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("Failed to create token dir: %v", err)
+	}
+	hash := auth.HashToken(testToken)
+	if err := os.WriteFile(filepath.Join(tokenDir, hash), []byte(`{"repo":"owner/repo"}`), 0600); err != nil {
+		t.Fatalf("Failed to create token file: %v", err)
+	}
+
+	server, err := NewServerAt(baseDir, config.DefaultDaemonConfig())
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+	return server, repoPath
+}
+
+// TestServer_RunOperation_MCPFlagNormalization verifies the shared-path flag
+// canonicalization: on the MCP (explicit-operation) route, which does not go
+// through reverse-match, a multi-value flag's `=` form is split to the bare
+// list form and a single-value flag's separate value is joined — both reach
+// the host (echo) in the canonical shape.
+func TestServer_RunOperation_MCPFlagNormalization(t *testing.T) {
+	server, tmpDir := setupServerWithMultiValueOp(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	tests := []struct {
+		name       string
+		flags      []string
+		want       string
+		wantDenied bool
+	}{
+		{
+			name:  "multi-value =-form split to bare list",
+			flags: []string{"--rule-arns=arn1", "arn2", "arn3"},
+			want:  "--rule-arns arn1 arn2 arn3",
+		},
+		{
+			name:  "multi-value already-bare list passes through",
+			flags: []string{"--rule-arns", "arn1", "arn2"},
+			want:  "--rule-arns arn1 arn2",
+		},
+		{
+			name:  "single-value separate form joined",
+			flags: []string{"--region", "us-east-1"},
+			want:  "--region=us-east-1",
+		},
+		{
+			// Boundary preserved end-to-end: a surplus bare token after a
+			// NON-multi-value flag is not absorbed by the shared
+			// normalization and never reaches the host — the request is
+			// denied.
+			name:       "surplus bare token after single-value flag denied",
+			flags:      []string{"--region", "us-east-1", "extra"},
+			wantDenied: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			req := operations.Request{
+				Operation: "mv_echo",
+				Flags:     tt.flags,
+				Token:     testToken,
+			}
+			reqData, _ := json.Marshal(req)
+			writeAndCloseWrite(t, conn, reqData)
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+
+			if tt.wantDenied {
+				if resp.DeniedReason == nil {
+					t.Errorf("expected denial, got stdout=%q exit_code=%d", resp.Stdout, resp.ExitCode)
+				}
+				return
+			}
+
+			if resp.DeniedReason != nil {
+				t.Fatalf("operation denied: %s", *resp.DeniedReason)
+			}
+			if resp.ExitCode != 0 {
+				t.Errorf("expected exit_code=0, got %d (stderr=%q)", resp.ExitCode, resp.Stderr)
+			}
+			if strings.TrimSpace(resp.Stdout) != tt.want {
+				t.Errorf("host argv = %q, want %q", strings.TrimSpace(resp.Stdout), tt.want)
+			}
+		})
+	}
+}
+
+// TestServer_RunOperation_RawArgvMultiValue verifies the raw-argv route
+// end-to-end: a natural `--rule-arns arn1 arn2 arn3` argv reverse-matches the
+// multi-value operation and reaches the host (echo) as the original
+// separate-token list, and a `=`-first form is canonicalized to the same
+// shape.
+func TestServer_RunOperation_RawArgvMultiValue(t *testing.T) {
+	server, tmpDir := setupServerWithMultiValueOp(t)
+	initRepoWithOrigin(t, tmpDir, "owner/repo")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+	addr := listener.Addr().String()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go server.handleClient(conn, func() {})
+		}
+	}()
+
+	tests := []struct {
+		name    string
+		rawArgv []string
+		want    string
+	}{
+		{
+			name:    "bare list reaches host as separate tokens",
+			rawArgv: []string{"echo", "--rule-arns", "arn1", "arn2", "arn3"},
+			want:    "--rule-arns arn1 arn2 arn3",
+		},
+		{
+			name:    "=-first form canonicalized to bare list",
+			rawArgv: []string{"echo", "--rule-arns=arn1", "arn2"},
+			want:    "--rule-arns arn1 arn2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("Failed to connect: %v", err)
+			}
+			defer conn.Close()
+
+			req := operations.Request{
+				RawArgv: tt.rawArgv,
+				Token:   testToken,
+			}
+			reqData, _ := json.Marshal(req)
+			writeAndCloseWrite(t, conn, reqData)
+
+			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			buf := make([]byte, 65536)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("Failed to read: %v", err)
+			}
+			var resp operations.Response
+			if err := json.Unmarshal(buf[:n], &resp); err != nil {
+				t.Fatalf("Failed to parse response: %v", err)
+			}
+			if resp.DeniedReason != nil {
+				t.Fatalf("raw-argv operation denied: %s", *resp.DeniedReason)
+			}
+			if resp.ExitCode != 0 {
+				t.Errorf("expected exit_code=0, got %d (stderr=%q)", resp.ExitCode, resp.Stderr)
+			}
+			if strings.TrimSpace(resp.Stdout) != tt.want {
+				t.Errorf("host argv = %q, want %q", strings.TrimSpace(resp.Stdout), tt.want)
+			}
+		})
+	}
+}
+
 func TestServer_RunOperation_RawArgvDispatch(t *testing.T) {
 	server, _, tmpDir := setupServerWithProject(t)
 	initRepoWithOrigin(t, tmpDir, "owner/repo")

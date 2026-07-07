@@ -390,6 +390,17 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	fmt.Printf("[OP:%q] source=%q project=%q target_repo=%q resolved_target_source=%q request_id=%q resolved_operation_id=%q\n",
 		req.Operation, req.Source, projectID, target.Repo, resolvedSource, req.RequestID, req.Operation)
 
+	// Canonicalize flags on the shared path so both entry routes (raw-argv
+	// reverse-match and the MCP explicit-operation entry) reach validation
+	// and argv build with a single normalized form. For raw-argv this is
+	// idempotent — reverse-match already normalized resolved.Flags — while
+	// for the MCP route this is where "--flag value" and the `=` form of a
+	// declared multi-value flag are canonicalized. When the operation is
+	// unknown the normalization is skipped and ValidateOperation reports it.
+	if normOp, ok := projectConfig.GetOperation(req.Operation); ok {
+		req.Flags = operations.NormalizeFlagTail(req.Flags, normOp.AllowedFlags, normOp.BoolFlags, normOp.MultiValueFlags)
+	}
+
 	// Validate operation against per-target context
 	op, result := s.validator.ValidateOperation(req, projectConfig, target)
 	if !result.OK {

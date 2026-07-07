@@ -709,6 +709,80 @@ func TestReverseMatch_AmbiguousFailsLoud(t *testing.T) {
 	}
 }
 
+func TestReverseMatch_MultiValueFlagDifferentiatesCandidates(t *testing.T) {
+	// Two candidates share command + template but differ in multi_value_flags.
+	// A two-value argv matches only the candidate that declares the flag as
+	// multi-value; the other rejects the second bare value and does not match.
+	multiOp := &Operation{
+		Command:         "aws",
+		ArgsTemplate:    []string{"ec2", "describe-tags"},
+		AllowedFlags:    []string{"--filters"},
+		MultiValueFlags: []string{"--filters"},
+	}
+	singleOp := &Operation{
+		Command:      "aws",
+		ArgsTemplate: []string{"ec2", "describe-tags"},
+		AllowedFlags: []string{"--filters"},
+	}
+	candidates := []CandidateOp{
+		{ID: "multi_op", Operation: multiOp},
+		{ID: "single_op", Operation: singleOp},
+	}
+	resolved, err := ReverseMatch(
+		"aws",
+		[]string{"ec2", "describe-tags", "--filters", "Name=key,Values=a", "Name=key,Values=b"},
+		candidates,
+		stdInjection,
+	)
+	if err != nil {
+		t.Fatalf("expected unambiguous match to the multi-value candidate, got error: %v", err)
+	}
+	if resolved.OperationID != "multi_op" {
+		t.Errorf("resolved to %q, want multi_op", resolved.OperationID)
+	}
+	want := []string{"--filters", "Name=key,Values=a", "Name=key,Values=b"}
+	if !stringSliceEqual(resolved.Flags, want) {
+		t.Errorf("resolved flags = %v, want %v", resolved.Flags, want)
+	}
+}
+
+func TestReverseMatch_BothMultiValueCandidatesAreAmbiguous(t *testing.T) {
+	// When two candidates share command + template AND both declare the flag
+	// as multi-value, the two-value argv matches both and reverse-match fails
+	// loud rather than guessing.
+	opA := &Operation{
+		Command:         "aws",
+		ArgsTemplate:    []string{"ec2", "describe-tags"},
+		AllowedFlags:    []string{"--filters"},
+		MultiValueFlags: []string{"--filters"},
+	}
+	opB := &Operation{
+		Command:         "aws",
+		ArgsTemplate:    []string{"ec2", "describe-tags"},
+		AllowedFlags:    []string{"--filters"},
+		MultiValueFlags: []string{"--filters"},
+	}
+	candidates := []CandidateOp{
+		{ID: "first_multi", Operation: opA},
+		{ID: "second_multi", Operation: opB},
+	}
+	_, err := ReverseMatch(
+		"aws",
+		[]string{"ec2", "describe-tags", "--filters", "Name=key,Values=a", "Name=key,Values=b"},
+		candidates,
+		stdInjection,
+	)
+	if err == nil {
+		t.Fatalf("expected ambiguous error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error %q does not signal ambiguity", err.Error())
+	}
+	if !strings.Contains(err.Error(), "first_multi") || !strings.Contains(err.Error(), "second_multi") {
+		t.Errorf("error %q does not list both candidate IDs", err.Error())
+	}
+}
+
 func TestReverseMatch_InjectionMismatchIsNotMatch(t *testing.T) {
 	// gh_pr_review_comments needs the inline {repo} to substitute exactly
 	// to "owner/repo". A request for a different repo path must not match.
@@ -727,11 +801,12 @@ func TestReverseMatch_InjectionMismatchIsNotMatch(t *testing.T) {
 
 func TestNormalizeFlagTail(t *testing.T) {
 	tests := []struct {
-		name         string
-		tail         []string
-		allowedFlags []string
-		boolFlags    []string
-		want         []string
+		name            string
+		tail            []string
+		allowedFlags    []string
+		boolFlags       []string
+		multiValueFlags []string
+		want            []string
 	}{
 		{
 			name:         "no-op when empty",
@@ -792,11 +867,86 @@ func TestNormalizeFlagTail(t *testing.T) {
 			boolFlags:    []string{"--rogue"},
 			want:         []string{"--state=open"},
 		},
+		{
+			// Multi-value flag keeps the flag and its space-separated value
+			// run as separate bare tokens so the host receives the list form.
+			name:            "multi-value flag keeps value run bare",
+			tail:            []string{"--rule-arns", "arn1", "arn2", "arn3"},
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			want:            []string{"--rule-arns", "arn1", "arn2", "arn3"},
+		},
+		{
+			// A single value for a multi-value flag also stays bare (never
+			// `=`-spliced), so the canonical form is uniform.
+			name:            "multi-value flag with one value stays bare",
+			tail:            []string{"--rule-arns", "arn1"},
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			want:            []string{"--rule-arns", "arn1"},
+		},
+		{
+			// A user-typed `=` form of a multi-value flag is split on the
+			// first `=` into the bare flag plus its first value; the run
+			// then continues with the following bare tokens.
+			name:            "multi-value flag =-form is split to bare",
+			tail:            []string{"--rule-arns=arn1", "arn2"},
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			want:            []string{"--rule-arns", "arn1", "arn2"},
+		},
+		{
+			// The value may itself contain `=` (AWS structured shorthand);
+			// only the first `=` splits the flag from its value.
+			name:            "multi-value flag =-form preserves = in value",
+			tail:            []string{"--tag-filters=Key=Env,Values=prod", "Key=Tier,Values=web"},
+			allowedFlags:    []string{"--tag-filters"},
+			multiValueFlags: []string{"--tag-filters"},
+			want:            []string{"--tag-filters", "Key=Env,Values=prod", "Key=Tier,Values=web"},
+		},
+		{
+			// Two multi-value flags each absorb their own run; the second
+			// flag closes the first run.
+			name:            "two multi-value flags absorb independently",
+			tail:            []string{"--rule-arns", "arn1", "arn2", "--tag-filters", "Key=Env,Values=prod"},
+			allowedFlags:    []string{"--rule-arns", "--tag-filters"},
+			multiValueFlags: []string{"--rule-arns", "--tag-filters"},
+			want:            []string{"--rule-arns", "arn1", "arn2", "--tag-filters", "Key=Env,Values=prod"},
+		},
+		{
+			// A single-value flag following a multi-value run is still
+			// spliced normally.
+			name:            "single-value flag after multi-value run is spliced",
+			tail:            []string{"--rule-arns", "arn1", "--region", "us-east-1"},
+			allowedFlags:    []string{"--rule-arns", "--region"},
+			multiValueFlags: []string{"--rule-arns"},
+			want:            []string{"--rule-arns", "arn1", "--region=us-east-1"},
+		},
+		{
+			// bool wins on contradiction: a flag in both bool and
+			// multi-value is treated as boolean (no value absorbed / spliced).
+			name:            "bool wins when flag is in both bool and multi-value",
+			tail:            []string{"--flag", "--state", "open"},
+			allowedFlags:    []string{"--flag", "--state"},
+			boolFlags:       []string{"--flag"},
+			multiValueFlags: []string{"--flag"},
+			want:            []string{"--flag", "--state=open"},
+		},
+		{
+			// Idempotence: applying the normalizer to already-canonical
+			// multi-value output leaves it unchanged (the shared daemon
+			// path re-runs it on resolved.Flags).
+			name:            "idempotent on canonical multi-value output",
+			tail:            []string{"--rule-arns", "arn1", "arn2"},
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			want:            []string{"--rule-arns", "arn1", "arn2"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeFlagTail(tt.tail, tt.allowedFlags, tt.boolFlags)
+			got := NormalizeFlagTail(tt.tail, tt.allowedFlags, tt.boolFlags, tt.multiValueFlags)
 			if !stringSliceEqual(got, tt.want) {
 				t.Errorf("NormalizeFlagTail = %v, want %v", got, tt.want)
 			}

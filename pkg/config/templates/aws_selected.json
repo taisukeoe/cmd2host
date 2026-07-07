@@ -3,7 +3,8 @@
   "repo_paths": ["/path/to/repo"],
   "allowed_operations": [
     "aws_sts_get_caller_identity",
-    "aws_s3_ls"
+    "aws_s3_ls",
+    "aws_ec2_describe_tags"
   ],
   "operations": {
     "aws_sts_get_caller_identity": {
@@ -24,6 +25,14 @@
         }
       },
       "description": "List objects under an s3:// URI. Read-only sample operation; the bucket parameter must be an s3:// URI so the raw-argv reverse-match can bind it unambiguously."
+    },
+    "aws_ec2_describe_tags": {
+      "command": "aws",
+      "args_template": ["ec2", "describe-tags"],
+      "params": {},
+      "allowed_flags": ["--filters", "--region", "--max-items"],
+      "multi_value_flags": ["--filters"],
+      "description": "Describe EC2 resource tags. Read-only sample operation that demonstrates multi_value_flags: --filters takes several space-separated Name=..,Values=.. entries (e.g. `aws ec2 describe-tags --filters Name=resource-type,Values=instance Name=key,Values=Env`), which the daemon keeps as separate tokens for the host CLI."
     }
   }
 }

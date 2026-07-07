@@ -222,6 +222,107 @@ func TestOperation_ValidateFlags(t *testing.T) {
 	}
 }
 
+func TestOperation_ValidateFlags_MultiValue(t *testing.T) {
+	tests := []struct {
+		name            string
+		allowedFlags    []string
+		boolFlags       []string
+		multiValueFlags []string
+		flags           []string
+		wantErr         bool
+	}{
+		{
+			// A declared multi-value flag accepts a run of trailing bare
+			// value tokens (the canonical form the normalizer produces).
+			name:            "multi-value flag accepts bare value run",
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--rule-arns", "arn1", "arn2", "arn3"},
+			wantErr:         false,
+		},
+		{
+			name:            "multi-value flag accepts a single bare value",
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--rule-arns", "arn1"},
+			wantErr:         false,
+		},
+		{
+			// Boundary preserved: a bare token after a NON-multi-value flag
+			// is still rejected.
+			name:            "bare token after single-value flag still rejected",
+			allowedFlags:    []string{"--state", "--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--state", "open"},
+			wantErr:         true,
+		},
+		{
+			// A bare token with no preceding multi-value flag is rejected.
+			name:            "leading bare token rejected",
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"stray", "--rule-arns", "arn1"},
+			wantErr:         true,
+		},
+		{
+			// The run closes at the next flag-shaped token; a following
+			// single-value flag in `=` form is fine.
+			name:            "run closes at next flag",
+			allowedFlags:    []string{"--rule-arns", "--region"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--rule-arns", "arn1", "arn2", "--region=us-east-1"},
+			wantErr:         false,
+		},
+		{
+			// bool wins on contradiction: a flag in both bool and
+			// multi-value is boolean, so it does NOT open a run and the
+			// following bare token is rejected.
+			name:            "bool wins: no run opened, trailing bare rejected",
+			allowedFlags:    []string{"--flag"},
+			boolFlags:       []string{"--flag"},
+			multiValueFlags: []string{"--flag"},
+			flags:           []string{"--flag", "value"},
+			wantErr:         true,
+		},
+		{
+			// At the ValidateFlags level the `=` form of a multi-value flag
+			// does not open a run (the normalizer converts it to bare form
+			// upstream on both routes). A trailing bare token after the `=`
+			// form is therefore rejected.
+			name:            "=-form does not open a run at validation level",
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--rule-arns=arn1", "arn2"},
+			wantErr:         true,
+		},
+		{
+			// A disallowed flag appearing as a bare-looking value is still
+			// caught once the run closes: here the run is open so bare
+			// tokens are values, but a flag-shaped token re-enters the
+			// allow-list check.
+			name:            "flag-shaped token in run re-enters allow list",
+			allowedFlags:    []string{"--rule-arns"},
+			multiValueFlags: []string{"--rule-arns"},
+			flags:           []string{"--rule-arns", "arn1", "--evil=x"},
+			wantErr:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := &Operation{
+				AllowedFlags:    tt.allowedFlags,
+				BoolFlags:       tt.boolFlags,
+				MultiValueFlags: tt.multiValueFlags,
+			}
+			err := op.ValidateFlags(tt.flags)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateFlags(%v) error = %v, wantErr %v", tt.flags, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOperation_BuildArgs(t *testing.T) {
 	op := &Operation{
 		ArgsTemplate: []string{"pr", "view", "{number}", "--json", "{fields}"},
