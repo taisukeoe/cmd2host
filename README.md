@@ -573,6 +573,58 @@ cmd2host config migrate <project-id> --apply   # Rewrite the file
 cmd2host config allow <project-id>             # Re-allow after migrating
 ```
 
+### Parameter types
+
+Each entry in an operation's `params` declares a `type`. The type governs
+how the daemon validates the caller-supplied value before it reaches the
+host command.
+
+| Type | Value shape | Validation keys | Notes |
+|---|---|---|---|
+| `string` | string | `minLength`, `maxLength`, `pattern` | Interpolated verbatim into the argv. |
+| `integer` | number | `min`, `max` | JSON numbers accepted; bound as an integer. |
+| `array` | string array | `items.type` | Expands to multiple argv tokens. |
+| `workspace_path` | string | `minLength`, `maxLength`, `pattern` | For host-side file destinations that must stay inside the session workspace. See below. |
+
+#### `workspace_path`
+
+Use `workspace_path` for a parameter that names a local file or directory
+the host command reads or writes — for example the destination of an
+`aws s3 cp` download. The value is supplied as a **workspace-relative**
+path; the daemon resolves it against the session workspace (`{repo_path}`
+of the resolved target) and passes the resolved absolute path to the host
+command. Values that are absolute, begin with `~`, or resolve (through
+`..` or a symlink) to a location outside the workspace are rejected, so the
+path handed to the host command is confined to the workspace directory.
+
+The string validation keys (`minLength` / `maxLength` / `pattern`) apply to
+the workspace-relative input, so a pattern such as `"^logs/"` matches the
+value the caller wrote, not the resolved absolute path.
+
+```json
+"s3_download": {
+  "command": "aws",
+  "args_template": ["s3", "cp", "{src}", "{dest}"],
+  "params": {
+    "src":  {"type": "string", "pattern": "^s3://[a-zA-Z0-9._/-]+$"},
+    "dest": {"type": "workspace_path", "maxLength": 256}
+  },
+  "description": "Download an S3 object into the workspace"
+}
+```
+
+Guidance:
+
+- Put the path on a `workspace_path` **parameter**, not on an
+  `allowed_flags` entry. Flag values are not workspace-confined, so a path
+  passed as a bare flag value (`--output=...`) does not get this treatment.
+- Prefer a whole-argument placeholder (`{dest}`) or a literal-boundary
+  inline form (`--dest={dest}`). Ambiguous multi-placeholder tokens such as
+  `{dir}{name}` rely on positional splitting and are harder to reason about.
+- `workspace_path` confines the destination to the workspace; it is
+  independent of `constraints.path_deny`, which governs git pathspec
+  denial. `path_deny` is not applied to `workspace_path` values.
+
 ### Templates
 
 Templates are embedded in the cmd2host binary. Use CLI commands to list and view them:

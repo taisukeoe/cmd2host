@@ -73,6 +73,55 @@ func TestOperation_ValidateParams(t *testing.T) {
 	}
 }
 
+func TestOperation_ValidateParams_WorkspacePath(t *testing.T) {
+	op := &Operation{
+		Command:      "aws",
+		ArgsTemplate: []string{"s3", "cp", "{src}", "{dest}"},
+		Params: map[string]ParamSchema{
+			"src":  {Type: "string"},
+			"dest": {Type: "workspace_path", MaxLength: 200, Pattern: "^[a-zA-Z0-9._/-]+$"},
+		},
+	}
+	if err := op.CompilePatterns(); err != nil {
+		t.Fatalf("CompilePatterns failed: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		params  map[string]ParamValue
+		wantErr bool
+	}{
+		{
+			name:    "workspace_path accepts a relative string",
+			params:  map[string]ParamValue{"src": "s3://bucket/log", "dest": "logs/out.log"},
+			wantErr: false,
+		},
+		{
+			name:    "workspace_path applies string Pattern to the relative input",
+			params:  map[string]ParamValue{"src": "s3://bucket/log", "dest": "logs/out log"},
+			wantErr: true, // space fails the pattern
+		},
+		{
+			name:    "workspace_path applies MaxLength",
+			params:  map[string]ParamValue{"src": "s3://bucket/log", "dest": strings.Repeat("a", 201)},
+			wantErr: true,
+		},
+		{
+			name:    "workspace_path rejects non-string",
+			params:  map[string]ParamValue{"src": "s3://bucket/log", "dest": float64(3)},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := op.ValidateParams(tt.params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOperation_ValidateParams_Optional(t *testing.T) {
 	op := &Operation{
 		Params: map[string]ParamSchema{

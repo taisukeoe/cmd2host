@@ -286,6 +286,132 @@ func TestReverseMatch_TemplateOps(t *testing.T) {
 	}
 }
 
+// TestReverseMatch_WorkspacePathBinding pins how a workspace_path param
+// binds through raw-argv reverse-match. The daemon confines the bound value
+// afterward (pkg/daemon resolveWorkspacePath); reverse-match only extracts
+// the token. Recommended shapes are whole-arg {dest} and literal-boundary
+// inline (--dest={dest}); the trailing-plus-flag case confirms extra argv
+// tokens become flags rather than being swallowed into the path.
+func TestReverseMatch_WorkspacePathBinding(t *testing.T) {
+	mkCandidates := func(t *testing.T, ops []struct {
+		id string
+		op *Operation
+	}) []CandidateOp {
+		t.Helper()
+		out := make([]CandidateOp, 0, len(ops))
+		for _, o := range ops {
+			if err := o.op.CompilePatterns(); err != nil {
+				t.Fatalf("CompilePatterns(%s): %v", o.id, err)
+			}
+			out = append(out, CandidateOp{ID: o.id, Operation: o.op})
+		}
+		return out
+	}
+
+	wholeArg := mkCandidates(t, []struct {
+		id string
+		op *Operation
+	}{
+		{"aws_s3_cp", &Operation{
+			Command:      "aws",
+			ArgsTemplate: []string{"s3", "cp", "{src}", "{dest}"},
+			Params: map[string]ParamSchema{
+				"src":  {Type: "string"},
+				"dest": {Type: "workspace_path"},
+			},
+		}},
+	})
+
+	inlineBoundary := mkCandidates(t, []struct {
+		id string
+		op *Operation
+	}{
+		{"tool_dump", &Operation{
+			Command:      "tool",
+			ArgsTemplate: []string{"dump", "--dest={dest}"},
+			Params: map[string]ParamSchema{
+				"dest": {Type: "workspace_path"},
+			},
+		}},
+	})
+
+	trailingWithFlags := mkCandidates(t, []struct {
+		id string
+		op *Operation
+	}{
+		{"tool_fetch", &Operation{
+			Command:      "tool",
+			ArgsTemplate: []string{"fetch", "{dest}"},
+			Params: map[string]ParamSchema{
+				"dest": {Type: "workspace_path"},
+			},
+			AllowedFlags: []string{"--verbose"},
+		}},
+	})
+
+	tests := []struct {
+		name       string
+		candidates []CandidateOp
+		command    string
+		argv       []string
+		wantOpID   string
+		wantParams map[string]ParamValue
+		wantFlags  []string
+	}{
+		{
+			name:       "whole-arg dest binds verbatim relative token",
+			candidates: wholeArg,
+			command:    "aws",
+			argv:       []string{"s3", "cp", "s3://bucket/log", "logs/out.log"},
+			wantOpID:   "aws_s3_cp",
+			wantParams: map[string]ParamValue{"src": "s3://bucket/log", "dest": "logs/out.log"},
+		},
+		{
+			name:       "whole-arg dest binds an escaping token verbatim (daemon confines later)",
+			candidates: wholeArg,
+			command:    "aws",
+			argv:       []string{"s3", "cp", "s3://bucket/log", "../escape.log"},
+			wantOpID:   "aws_s3_cp",
+			wantParams: map[string]ParamValue{"src": "s3://bucket/log", "dest": "../escape.log"},
+		},
+		{
+			name:       "inline literal-boundary dest",
+			candidates: inlineBoundary,
+			command:    "tool",
+			argv:       []string{"dump", "--dest=logs/out.log"},
+			wantOpID:   "tool_dump",
+			wantParams: map[string]ParamValue{"dest": "logs/out.log"},
+		},
+		{
+			name:       "trailing dest plus allowed flag: flag stays a flag",
+			candidates: trailingWithFlags,
+			command:    "tool",
+			argv:       []string{"fetch", "logs/out.log", "--verbose"},
+			wantOpID:   "tool_fetch",
+			wantParams: map[string]ParamValue{"dest": "logs/out.log"},
+			wantFlags:  []string{"--verbose"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ReverseMatch(tt.command, tt.argv, tt.candidates, stdInjection)
+			if err != nil {
+				t.Fatalf("ReverseMatch err = %v", err)
+			}
+			if got.OperationID != tt.wantOpID {
+				t.Errorf("operation_id = %q, want %q", got.OperationID, tt.wantOpID)
+			}
+			if !paramsEqual(got.Params, tt.wantParams) {
+				t.Errorf("params = %v, want %v", got.Params, tt.wantParams)
+			}
+			if !stringSliceEqual(got.Flags, tt.wantFlags) {
+				t.Errorf("flags = %v, want %v", got.Flags, tt.wantFlags)
+			}
+		})
+	}
+}
+
 func TestReverseMatch_RejectsBadInputs(t *testing.T) {
 	candidates := gitGithubWriteCandidates(t)
 

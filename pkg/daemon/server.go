@@ -415,6 +415,23 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		return
 	}
 
+	// Confine workspace_path params under the target's workspace before
+	// building the argv. Each param the operation declares as
+	// "workspace_path" is resolved against target.RepoPath and its value is
+	// replaced with the resolved absolute path, so BuildArgs (and the host
+	// command) only ever see a path proven to live inside the workspace.
+	// Runs after ValidateOperation (schema checks apply to the relative
+	// input) and before BuildArgs (the argv carries the resolved value).
+	if err := resolveWorkspacePathParams(op, req.Params, target.RepoPath); err != nil {
+		fmt.Printf("  -> DENIED (workspace_path): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+
 	// Build arguments from template.
 	// Template placeholders that depend on per-request target context are
 	// injected here so a single template can serve any repo in the allow list.

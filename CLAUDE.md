@@ -98,6 +98,7 @@ security boundary.
 - `pkg/daemon/server.go` - TCP/Unix server, request dispatch, sanitized execution
 - `pkg/daemon/validator.go` - Operation validation logic
 - `pkg/daemon/sanitize.go` - Command sanitization (env vars, git config)
+- `pkg/daemon/workspace_path.go` - `workspace_path` param resolver (confines a param value under the target's workspace before argv build)
 - `pkg/config/config.go` - Daemon configuration loading
 - `pkg/config/project.go` - Project configuration, allowance, constraints validation
 - `pkg/operations/operations.go` - Operation template definitions and parameter handling

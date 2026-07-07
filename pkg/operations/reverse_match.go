@@ -431,7 +431,10 @@ func bindParam(op *Operation, name, raw string, params map[string]ParamValue) er
 			return err
 		}
 		newVal = n
-	case "string", "":
+	case "string", "workspace_path", "":
+		// "workspace_path" binds the raw argv token verbatim, like "string".
+		// Workspace confinement runs later on the daemon (resolveWorkspacePath)
+		// against the resolved value, not here in reverse-match.
 		newVal = raw
 	default:
 		return fmt.Errorf("%w: placeholder %q has type %q", errUnsupportedType, name, schema.Type)
