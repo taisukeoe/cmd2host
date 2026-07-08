@@ -22,7 +22,10 @@ func TestRunGit_TimesOutOnHungGit(t *testing.T) {
 	fakePath := filepath.Join(fakeDir, "git")
 	// The stub blocks forever so any successful return from runGit
 	// definitely came from the deadline, not from the subprocess exiting.
-	const script = "#!/bin/sh\nsleep 60\n"
+	// exec replaces the shell with sleep so killing the PID kills sleep
+	// directly; without exec, killing /bin/sh leaves an orphaned sleep
+	// that holds the stdout pipe open until the 60s natural exit.
+	const script = "#!/bin/sh\nexec sleep 60\n"
 	if err := os.WriteFile(fakePath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
