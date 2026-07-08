@@ -18,11 +18,25 @@
 package proxyclient
 
 import (
+	"context"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/taisukeoe/cmd2host/pkg/operations"
 )
+
+// cwdGitTimeout bounds each git subprocess runGit spawns so a hung git
+// (background index lock, filesystem stall, malformed .git) cannot stall
+// wrapper startup. Wrapper CLIs (gh/aws proxied through cmd2host-proxy)
+// call CollectCwdContext synchronously before dispatching to the daemon,
+// so the whole invocation blocks here until it returns; 5s is well above
+// the observed p99 for a healthy `git rev-parse` (single-digit ms) and
+// still cuts off pathological cases before the user notices.
+//
+// Kept as a var (not const) so unit tests can shorten it enough to
+// exercise the deadline path without adding real seconds to `just test`.
+var cwdGitTimeout = 5 * time.Second
 
 // CollectCwdContext gathers the cwd's git toplevel and origin URL. Returns
 // nil when either signal is unavailable so the caller can pass through to
@@ -47,10 +61,16 @@ func CollectCwdContext() *operations.CwdContext {
 
 // runGit invokes git with the given args in the current process's cwd
 // and returns the trimmed stdout. The bool reports success (exit 0 and
-// no exec error); stderr is discarded because every failure mode maps to
-// the same "no hint" outcome.
+// no exec error); stderr is not surfaced to callers. cmd.Output may
+// buffer stderr onto an *exec.ExitError when Cmd.Stderr is nil, but
+// runGit intentionally drops the error because every failure mode maps
+// to the same "no hint" outcome — including context.DeadlineExceeded
+// when git blocks past cwdGitTimeout, which collapses into the caller's
+// silent-skip path.
 func runGit(args ...string) (string, bool) {
-	cmd := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cwdGitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", false

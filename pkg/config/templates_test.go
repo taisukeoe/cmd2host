@@ -251,6 +251,46 @@ func argsContainPair(args []string, want, val string) bool {
 	return false
 }
 
+// TestTemplate_GitPushBranch_RejectsLeadingDash pins the branch param
+// pattern in every bundled template that exposes git_push. A leading `-`
+// on `{branch}` would let `git push {expected_git_url} {branch}:refs/…`
+// re-parse the branch as an option — the explicit URL fixation is the
+// primary defense, but rejecting the shape at param-validate time keeps
+// defense-in-depth without depending on git's argv scan.
+func TestTemplate_GitPushBranch_RejectsLeadingDash(t *testing.T) {
+	templates := []string{"git_write", "git_github_write"}
+
+	rejected := []string{
+		"-foo",
+		"--force",
+		"-",
+	}
+	accepted := []string{
+		"main",
+		"feature/bar-baz",
+		"release/1.2.3",
+		"topic-branch",
+		".hidden",
+		"_leading-underscore",
+	}
+
+	for _, tmpl := range templates {
+		t.Run(tmpl, func(t *testing.T) {
+			op := loadTemplateOperation(t, tmpl, "git_push")
+			for _, branch := range rejected {
+				if err := op.ValidateParams(map[string]operations.ParamValue{"branch": branch}); err == nil {
+					t.Errorf("branch %q must be rejected by the git_push pattern", branch)
+				}
+			}
+			for _, branch := range accepted {
+				if err := op.ValidateParams(map[string]operations.ParamValue{"branch": branch}); err != nil {
+					t.Errorf("branch %q must be accepted; got %v", branch, err)
+				}
+			}
+		})
+	}
+}
+
 // TestTemplates_BodyOpsMigration asserts the on-disk templates carry the
 // Pattern A migration for gh_pr_create / gh_pr_edit / gh_issue_create.
 // This is the regression gate: if anyone reintroduces "--body" into

@@ -1603,3 +1603,79 @@ func TestServer_DispatchConn_NoCapPassesThrough(t *testing.T) {
 		t.Fatal("dispatchConn did not return within 1s")
 	}
 }
+
+// TestServer_SendResponse_WriteDeadline pins the write-deadline gate on
+// every response sender. A client that stops draining its socket must not
+// pin the handler goroutine beyond writeTimeout, since net.Pipe with no
+// reader on the peer end otherwise blocks Write indefinitely and holds
+// the in-flight semaphore slot for the connection's whole lifetime. Each
+// subtest calls one sender against a net.Pipe whose peer end never
+// reads, then requires the sender to return well inside a bounded margin.
+func TestServer_SendResponse_WriteDeadline(t *testing.T) {
+	prev := writeTimeout
+	writeTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { writeTimeout = prev })
+
+	server := &Server{}
+	// Marshaled response bodies fit in the pipe's zero-length buffer only
+	// when the peer end reads. With no reader, any non-empty write blocks.
+	payload := operations.Response{
+		RequestID:    "req-1",
+		ExitCode:     0,
+		DeniedReason: strPtr(strings.Repeat("x", 4096)),
+	}
+
+	cases := []struct {
+		name string
+		send func(conn net.Conn)
+	}{
+		{
+			name: "sendOperationResponse",
+			send: func(conn net.Conn) { server.sendOperationResponse(conn, payload) },
+		},
+		{
+			name: "sendListOperationsResponse",
+			send: func(conn net.Conn) {
+				server.sendListOperationsResponse(conn, operations.ListOperationsResponse{
+					Error: strings.Repeat("x", 4096),
+				})
+			},
+		},
+		{
+			name: "sendDescribeOperationResponse",
+			send: func(conn net.Conn) {
+				server.sendDescribeOperationResponse(conn, operations.DescribeOperationResponse{
+					Error: strings.Repeat("x", 4096),
+				})
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := net.Pipe()
+			t.Cleanup(func() {
+				a.Close()
+				b.Close()
+			})
+
+			done := make(chan struct{})
+			start := time.Now()
+			go func() {
+				tc.send(a)
+				close(done)
+			}()
+
+			// margin generous enough for goroutine scheduling on loaded CI
+			// but far below what an un-deadlined blocking Write would take.
+			select {
+			case <-done:
+				if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+					t.Errorf("sender returned but took %v (want < 500ms with writeTimeout=%v)", elapsed, writeTimeout)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("sender blocked past write deadline (writeTimeout=%v); the SetWriteDeadline call must be present before conn.Write", writeTimeout)
+			}
+		})
+	}
+}
