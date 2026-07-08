@@ -29,6 +29,14 @@ const (
 	maxReadSize = 65536
 )
 
+// writeTimeout bounds each response send so a client that stops draining
+// its socket cannot pin a handler goroutine indefinitely. Kept as a var
+// (not const) so unit tests can shorten it to exercise the deadline path
+// without waiting the production duration. Its lifetime pair is
+// readTimeout above: read is bounded at handleClient entry, write is
+// bounded per response send.
+var writeTimeout = 10 * time.Second
+
 // Server handles TCP and Unix socket connections and command proxying.
 // baseDir anchors per-instance directory lookups for project configs and the
 // token store; all internal config / auth path resolution flows through it.
@@ -764,6 +772,7 @@ func (s *Server) sendListOperationsResponse(conn net.Conn, resp operations.ListO
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if _, err := conn.Write(data); err != nil {
 		fmt.Println("  -> ERROR writing response:", err)
 	}
@@ -776,6 +785,7 @@ func (s *Server) sendDescribeOperationResponse(conn net.Conn, resp operations.De
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if _, err := conn.Write(data); err != nil {
 		fmt.Println("  -> ERROR writing response:", err)
 	}
@@ -788,6 +798,7 @@ func (s *Server) sendOperationResponse(conn net.Conn, resp operations.Response) 
 		fmt.Println("  -> ERROR marshaling response:", err)
 		return
 	}
+	conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if _, err := conn.Write(data); err != nil {
 		fmt.Println("  -> ERROR writing response:", err)
 	}

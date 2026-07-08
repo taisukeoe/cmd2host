@@ -43,6 +43,27 @@ type Constraints struct {
 
 var repoFormatRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
+// dynamicLoaderEnvKeys is the fixed set of env variable names the dynamic
+// linker consults when spawning a child process that Validate rejects
+// verbatim if they appear in a project's `env` map. The list is exhaustive
+// with respect to this contract — a project env carrying one of these
+// exact names is rejected; a name outside the list, even if it turns out
+// to influence loader behavior on some platform we did not enumerate here,
+// is not covered and would need an explicit addition. Kept as a named
+// list rather than a prefix / heuristic match so the rejected surface
+// stays auditable and does not silently drift when a new LD_* / DYLD_*
+// variable is introduced upstream.
+var dynamicLoaderEnvKeys = []string{
+	"LD_PRELOAD",
+	"LD_LIBRARY_PATH",
+	"LD_AUDIT",
+	"DYLD_INSERT_LIBRARIES",
+	"DYLD_LIBRARY_PATH",
+	"DYLD_FRAMEWORK_PATH",
+	"DYLD_FALLBACK_LIBRARY_PATH",
+	"DYLD_FALLBACK_FRAMEWORK_PATH",
+}
+
 // UnmarshalJSON normalizes legacy (`repo`/`repo_path` singular) and new
 // (`repos`/`repo_paths` array) forms into the new form. Mixing the two
 // forms is rejected. Semantic validation (length match, owner/repo format,
@@ -164,6 +185,12 @@ func (p *ProjectConfig) Validate() error {
 		// path_deny enforcement, git -C, path-repo consistency check) do not
 		// resolve a relative repo_path against the daemon CWD.
 		p.RepoPaths[i] = clean
+	}
+
+	for _, key := range dynamicLoaderEnvKeys {
+		if _, present := p.Env[key]; present {
+			return fmt.Errorf("env contains dynamic-loader hijack key %q; project env must not override the child process dynamic loader", key)
+		}
 	}
 
 	return nil
@@ -573,6 +600,16 @@ func AllowConfigAt(dir, projectID string) error {
 }
 
 func allowConfigAtPaths(configPath, allowedPath string) error {
+	// Gate the allow write on the full load+Validate path so an
+	// operator-edited config that trips a semantic invariant (invalid
+	// repo shape, dynamic-loader hijack env, etc.) is rejected at
+	// allow time rather than surfacing later as an operation-time
+	// denial. loadProjectConfigFromPath ties the hash we stamp to a
+	// config the daemon would also accept at request time.
+	if _, err := loadProjectConfigFromPath(configPath, ""); err != nil {
+		return err
+	}
+
 	hash, err := ComputeConfigHash(configPath)
 	if err != nil {
 		return err

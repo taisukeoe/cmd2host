@@ -527,7 +527,7 @@ func TestConfigAllow(t *testing.T) {
 		t.Fatalf("Failed to create project dir: %v", err)
 	}
 
-	configContent := `{"repo": "owner/repo", "allowed_operations": [], "operations": {}}`
+	configContent := `{"repo": "owner/repo", "repo_path": "/path/to/repo", "allowed_operations": [], "operations": {}}`
 	configPath := filepath.Join(projectDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config: %v", err)
@@ -556,8 +556,8 @@ func TestConfigAllow(t *testing.T) {
 		t.Error("Config should be allowed after AllowConfig")
 	}
 
-	// Modify config
-	newContent := `{"repo": "owner/repo", "allowed_operations": ["gh_pr_view"], "operations": {}}`
+	// Modify config (still valid, but different content → different hash)
+	newContent := `{"repo": "owner/repo", "repo_path": "/path/to/repo/v2", "allowed_operations": [], "operations": {}}`
 	if err := os.WriteFile(configPath, []byte(newContent), 0644); err != nil {
 		t.Fatalf("Failed to write modified config: %v", err)
 	}
@@ -1129,5 +1129,74 @@ func TestCreateProjectConfig_WrapperTransparency(t *testing.T) {
 	}
 	if len(projects) != 1 || projects[0] != id {
 		t.Errorf("ListProjectsAt = %v, want [%s]", projects, id)
+	}
+}
+
+// TestValidate_RejectsDynamicLoaderEnvKeys pins the fail-loud gate that
+// blocks a project env from naming a dynamic-loader env variable. Covers
+// every entry in dynamicLoaderEnvKeys plus a control case that MUST NOT
+// be rejected, so a future edit to the list is picked up here.
+func TestValidate_RejectsDynamicLoaderEnvKeys(t *testing.T) {
+	base := ProjectConfig{
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/tmp/repo"},
+	}
+
+	rejected := []string{
+		"LD_PRELOAD",
+		"LD_LIBRARY_PATH",
+		"LD_AUDIT",
+		"DYLD_INSERT_LIBRARIES",
+		"DYLD_LIBRARY_PATH",
+		"DYLD_FRAMEWORK_PATH",
+		"DYLD_FALLBACK_LIBRARY_PATH",
+		"DYLD_FALLBACK_FRAMEWORK_PATH",
+	}
+	for _, key := range rejected {
+		t.Run("reject/"+key, func(t *testing.T) {
+			p := base
+			p.Env = map[string]string{key: "/tmp/attacker.dylib"}
+			if err := p.Validate(); err == nil {
+				t.Fatalf("Validate() must reject env key %q", key)
+			} else if !strings.Contains(err.Error(), key) {
+				t.Errorf("Validate() error must name the offending key; got %v", err)
+			}
+		})
+	}
+
+	t.Run("accept/benign-env", func(t *testing.T) {
+		p := base
+		p.Env = map[string]string{"GH_TOKEN": "value", "PATH": "/usr/bin"}
+		if err := p.Validate(); err != nil {
+			t.Errorf("Validate() must accept env without loader-hijack keys; got %v", err)
+		}
+	})
+}
+
+// TestAllowConfig_RejectsDynamicLoaderEnvKeys pins the second half of the
+// gate: an operator who edits a project config on disk to add a loader
+// hijack env and then runs `cmd2host config allow` must be denied at allow
+// time (not later at operation time). Runs against AllowConfigAt so it
+// uses only the per-instance base dir and does not touch process env.
+func TestAllowConfig_RejectsDynamicLoaderEnvKeys(t *testing.T) {
+	base := t.TempDir()
+	const cfg = `{
+        "repos": ["owner/repo"],
+        "repo_paths": ["/tmp/repo"],
+        "allowed_operations": [],
+        "operations": {},
+        "env": {"DYLD_INSERT_LIBRARIES": "/tmp/attacker.dylib"}
+    }`
+	id := seedProjectConfigAt(t, base, "owner/repo", cfg)
+
+	err := AllowConfigAt(base, id)
+	if err == nil {
+		t.Fatalf("AllowConfigAt must reject a config carrying a dynamic-loader env key")
+	}
+	if !strings.Contains(err.Error(), "DYLD_INSERT_LIBRARIES") {
+		t.Errorf("AllowConfigAt error must name the offending key; got %v", err)
+	}
+	if _, statErr := os.Stat(AllowedHashPathAt(base, id)); !os.IsNotExist(statErr) {
+		t.Errorf("allowed.sha256 must not exist when AllowConfigAt rejects the config; stat err = %v", statErr)
 	}
 }
