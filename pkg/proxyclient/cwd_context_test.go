@@ -26,7 +26,7 @@ func TestRunGit_TimesOutOnHungGit(t *testing.T) {
 	if err := os.WriteFile(fakePath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
-	t.Setenv("PATH", fakeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	prev := cwdGitTimeout
 	cwdGitTimeout = 50 * time.Millisecond
@@ -64,7 +64,7 @@ func TestRunGit_ReturnsSubprocessOutputWithinDeadline(t *testing.T) {
 	if err := os.WriteFile(fakePath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
-	t.Setenv("PATH", fakeDir)
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	prev := cwdGitTimeout
 	cwdGitTimeout = 500 * time.Millisecond

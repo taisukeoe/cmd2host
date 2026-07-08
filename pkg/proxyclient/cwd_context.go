@@ -61,9 +61,11 @@ func CollectCwdContext() *operations.CwdContext {
 
 // runGit invokes git with the given args in the current process's cwd
 // and returns the trimmed stdout. The bool reports success (exit 0 and
-// no exec error); stderr is discarded because every failure mode maps to
-// the same "no hint" outcome — including context.DeadlineExceeded when
-// git blocks past cwdGitTimeout, which collapses into the caller's
+// no exec error); stderr is not surfaced to callers. cmd.Output may
+// buffer stderr onto an *exec.ExitError when Cmd.Stderr is nil, but
+// runGit intentionally drops the error because every failure mode maps
+// to the same "no hint" outcome — including context.DeadlineExceeded
+// when git blocks past cwdGitTimeout, which collapses into the caller's
 // silent-skip path.
 func runGit(args ...string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), cwdGitTimeout)
