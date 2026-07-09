@@ -32,7 +32,7 @@ func mkStagingWorkspace(t *testing.T) string {
 func TestAllocateStaging_Nlink1(t *testing.T) {
 	workspace := mkStagingWorkspace(t)
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
-	entry, err := allocateStaging(stagingRoot, "STAGE1", 0, "dest", filepath.Join(workspace, "out.log"))
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE1", 0, "dest", filepath.Join(workspace, "out.log"))
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
@@ -57,12 +57,67 @@ func TestAllocateStaging_Nlink1(t *testing.T) {
 func TestAllocateStaging_RejectsExistingEntry(t *testing.T) {
 	workspace := mkStagingWorkspace(t)
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
-	if _, err := allocateStaging(stagingRoot, "STAGE2", 0, "dest", filepath.Join(workspace, "out.log")); err != nil {
+	if _, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE2", 0, "dest", filepath.Join(workspace, "out.log")); err != nil {
 		t.Fatalf("first allocateStaging: %v", err)
 	}
 	// A second allocation into the same slot must not overwrite.
-	if _, err := allocateStaging(stagingRoot, "STAGE2", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
+	if _, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE2", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
 		t.Fatalf("second allocateStaging accepted an existing entry")
+	}
+}
+
+// TestAllocateStaging_RejectsSymlinkedWorkspaceStagingRoot pins the
+// contract at the staging root: workspace mode requires
+// `.cmd2host-staging` to be a real directory, so an operator whose repo
+// carries a same-named symlink sees allocation refuse rather than walk
+// into the linked directory.
+func TestAllocateStaging_RejectsSymlinkedWorkspaceStagingRoot(t *testing.T) {
+	workspace := mkStagingWorkspace(t)
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(workspace, ".cmd2host-staging")); err != nil {
+		t.Fatalf("symlink staging root: %v", err)
+	}
+	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
+	if _, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
+		t.Fatalf("allocateStaging accepted a symlinked .cmd2host-staging root")
+	}
+	// The symlink target must not have received any staging entries.
+	entries, rerr := os.ReadDir(elsewhere)
+	if rerr != nil {
+		t.Fatalf("read elsewhere: %v", rerr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging walked through symlinked root: %d entries appeared at %q", len(entries), elsewhere)
+	}
+}
+
+// TestAllocateStaging_RejectsSymlinkedExplicitRoot pins the same
+// requirement for explicit-mode roots: the operator's `root` must be a
+// real directory, and allocation refuses to walk through a symlink
+// pointed at that path.
+func TestAllocateStaging_RejectsSymlinkedExplicitRoot(t *testing.T) {
+	workspace := mkStagingWorkspace(t)
+	realDir := filepath.Join(workspace, "real-explicit")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatalf("mkdir real explicit: %v", err)
+	}
+	symlinkRoot := filepath.Join(workspace, "explicit-symlink")
+	if err := os.Symlink(realDir, symlinkRoot); err != nil {
+		t.Fatalf("symlink explicit root: %v", err)
+	}
+	cfg := &config.DaemonConfig{WorkspacePathStaging: &config.StagingConfig{
+		Mode: config.StagingModeExplicit,
+		Root: symlinkRoot,
+	}}
+	if _, err := allocateStaging(cfg, "", symlinkRoot, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
+		t.Fatalf("allocateStaging accepted a symlinked explicit root")
+	}
+	entries, rerr := os.ReadDir(realDir)
+	if rerr != nil {
+		t.Fatalf("read realDir: %v", rerr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("staging walked through symlinked explicit root: %d entries appeared", len(entries))
 	}
 }
 
@@ -81,7 +136,7 @@ func TestAllocateStaging_RejectsSymlinkTarget(t *testing.T) {
 	if err := os.Symlink("/etc/passwd", stagingPath); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	if _, err := allocateStaging(stagingRoot, "STAGE3", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
+	if _, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE3", 0, "dest", filepath.Join(workspace, "out.log")); err == nil {
 		t.Fatalf("allocateStaging accepted a symlink target")
 	}
 }
@@ -94,7 +149,7 @@ func TestFinalizeStaging_Identity(t *testing.T) {
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
 	finalPath := filepath.Join(workspace, "logs", "out.log")
 
-	entry, err := allocateStaging(stagingRoot, "STAGE4", 0, "dest", finalPath)
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE4", 0, "dest", finalPath)
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
@@ -112,6 +167,7 @@ func TestFinalizeStaging_Identity(t *testing.T) {
 		t.Fatalf("unexpected sys type %T", stagingInfo.Sys())
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE4",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -165,11 +221,12 @@ func TestFinalizeStaging_RejectsSymlinkedAncestor(t *testing.T) {
 	}
 	finalPath := filepath.Join(symlinkAncestor, "out.log")
 
-	entry, err := allocateStaging(stagingRoot, "STAGE5", 0, "dest", finalPath)
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE5", 0, "dest", finalPath)
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE5",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -203,7 +260,7 @@ func TestFinalizeStaging_ReplacesExistingRegularFile(t *testing.T) {
 		t.Fatalf("seed final: %v", err)
 	}
 
-	entry, err := allocateStaging(stagingRoot, "STAGE_OVR", 0, "dest", finalPath)
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE_OVR", 0, "dest", finalPath)
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
@@ -211,6 +268,7 @@ func TestFinalizeStaging_ReplacesExistingRegularFile(t *testing.T) {
 		t.Fatalf("write staging: %v", err)
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE_OVR",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -232,10 +290,10 @@ func TestFinalizeStaging_ReplacesExistingRegularFile(t *testing.T) {
 
 // TestFinalizeStaging_ReplacesExistingSymlink documents that renameat
 // replaces a symlink at the final path without following it: whatever
-// the symlink pointed at outside the workspace stays untouched, and the
-// entry now names the staged regular file. Compare against the ancestor
-// symlink swap test — a symlink at a *parent* is rejected by the walk;
-// a symlink at the final basename is renamed over.
+// the symlink named outside the workspace stays untouched, and the
+// entry now names the staged regular file. The parallel ancestor test
+// covers a different level of the path: components above the basename
+// must be real directories for the walk to succeed at all.
 func TestFinalizeStaging_ReplacesExistingSymlink(t *testing.T) {
 	workspace := mkStagingWorkspace(t)
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
@@ -251,7 +309,7 @@ func TestFinalizeStaging_ReplacesExistingSymlink(t *testing.T) {
 		t.Fatalf("symlink final: %v", err)
 	}
 
-	entry, err := allocateStaging(stagingRoot, "STAGE_OVR_SL", 0, "dest", finalPath)
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE_OVR_SL", 0, "dest", finalPath)
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
@@ -259,6 +317,7 @@ func TestFinalizeStaging_ReplacesExistingSymlink(t *testing.T) {
 		t.Fatalf("write staging: %v", err)
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE_OVR_SL",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -296,11 +355,12 @@ func TestFinalizeStaging_CreatesMissingSubdir(t *testing.T) {
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
 	finalPath := filepath.Join(workspace, "new", "subdir", "out.log")
 
-	entry, err := allocateStaging(stagingRoot, "STAGE6", 0, "dest", finalPath)
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE6", 0, "dest", finalPath)
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE6",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -321,11 +381,12 @@ func TestFinalizeStaging_CreatesMissingSubdir(t *testing.T) {
 func TestCleanupStaging_RemovesRequestDir(t *testing.T) {
 	workspace := mkStagingWorkspace(t)
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
-	entry, err := allocateStaging(stagingRoot, "STAGE7", 0, "dest", filepath.Join(workspace, "out.log"))
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, "STAGE7", 0, "dest", filepath.Join(workspace, "out.log"))
 	if err != nil {
 		t.Fatalf("allocateStaging: %v", err)
 	}
 	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
 		stagingID:     "STAGE7",
 		workspaceRoot: workspace,
 		stagingRoot:   stagingRoot,
@@ -337,33 +398,137 @@ func TestCleanupStaging_RemovesRequestDir(t *testing.T) {
 	}
 }
 
+// TestCleanupStaging_LeavesReplacedRootAlone pins the fd-bound teardown:
+// if the workspace's `.cmd2host-staging` root is replaced by a symlink
+// between allocation and cleanup, the helper stops at the anchor check
+// and does not remove anything under the symlink's target. The staged
+// request subtree may accumulate under the swapped root, but unrelated
+// data at the symlink target stays intact and later GC handles the
+// leftover.
+func TestCleanupStaging_LeavesReplacedRootAlone(t *testing.T) {
+	workspace := mkStagingWorkspace(t)
+	stagingID := "cccccccccccccccccccccccccccccccc"
+	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
+	entry, err := allocateStaging(&config.DaemonConfig{}, workspace, stagingRoot, stagingID, 0, "dest", filepath.Join(workspace, "out.log"))
+	if err != nil {
+		t.Fatalf("allocateStaging: %v", err)
+	}
+
+	// Replace the real staging root with a symlink pointing at unrelated data.
+	elsewhere := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatalf("mkdir elsewhere: %v", err)
+	}
+	elsewhereEntry := filepath.Join(elsewhere, "keep-me")
+	if err := os.WriteFile(elsewhereEntry, []byte{0x01}, 0o600); err != nil {
+		t.Fatalf("seed elsewhere: %v", err)
+	}
+	if err := os.RemoveAll(stagingRoot); err != nil {
+		t.Fatalf("remove staging root: %v", err)
+	}
+	if err := os.Symlink(elsewhere, stagingRoot); err != nil {
+		t.Fatalf("symlink staging root: %v", err)
+	}
+
+	plan := &stagingPlan{
+		daemonConfig:  &config.DaemonConfig{},
+		stagingID:     stagingID,
+		workspaceRoot: workspace,
+		stagingRoot:   stagingRoot,
+		entries:       []stagingEntry{entry},
+	}
+	cleanupStaging(plan)
+
+	body, rerr := os.ReadFile(elsewhereEntry)
+	if rerr != nil {
+		t.Fatalf("cleanup removed unrelated data at symlink target: %v", rerr)
+	}
+	if len(body) != 1 || body[0] != 0x01 {
+		t.Fatalf("cleanup rewrote unrelated data at symlink target: got %v, want [0x01]", body)
+	}
+}
+
 // TestSweepStagingRoot_SkipsActive pins the GC contract: an entry
 // registered as in-flight is never removed regardless of its age.
 func TestSweepStagingRoot_SkipsActive(t *testing.T) {
 	workspace := mkStagingWorkspace(t)
 	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
-	if err := os.MkdirAll(filepath.Join(stagingRoot, "ACTIVE1"), 0o700); err != nil {
-		t.Fatalf("mkdir ACTIVE1: %v", err)
+	// Names must match stagingIDPattern (32 lowercase hex) so the sweep's
+	// pattern gate lets them through; the "active" one then falls out of
+	// the removal set via the registry.
+	activeID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	staleID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := os.MkdirAll(filepath.Join(stagingRoot, activeID), 0o700); err != nil {
+		t.Fatalf("mkdir active: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(stagingRoot, "STALE1"), 0o700); err != nil {
-		t.Fatalf("mkdir STALE1: %v", err)
+	if err := os.MkdirAll(filepath.Join(stagingRoot, staleID), 0o700); err != nil {
+		t.Fatalf("mkdir stale: %v", err)
 	}
 	// Backdate both entries so mtime is not a differentiating factor.
 	old := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(stagingRoot, "ACTIVE1"), old, old); err != nil {
-		t.Fatalf("chtimes ACTIVE1: %v", err)
+	if err := os.Chtimes(filepath.Join(stagingRoot, activeID), old, old); err != nil {
+		t.Fatalf("chtimes active: %v", err)
 	}
-	if err := os.Chtimes(filepath.Join(stagingRoot, "STALE1"), old, old); err != nil {
-		t.Fatalf("chtimes STALE1: %v", err)
+	if err := os.Chtimes(filepath.Join(stagingRoot, staleID), old, old); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
 	}
 	registry := newStagingRegistry()
-	registry.Register("ACTIVE1")
+	registry.Register(activeID)
 	sweepStagingRoot(stagingRoot, registry, time.Now(), time.Hour)
-	if _, err := os.Stat(filepath.Join(stagingRoot, "ACTIVE1")); err != nil {
+	if _, err := os.Stat(filepath.Join(stagingRoot, activeID)); err != nil {
 		t.Errorf("sweep removed active entry: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(stagingRoot, "STALE1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(stagingRoot, staleID)); !os.IsNotExist(err) {
 		t.Errorf("sweep kept stale entry: %v", err)
+	}
+}
+
+// TestSweepStagingRoot_SymlinkRootSkipped pins the contract: sweep runs
+// only when the staging root is a real directory. A symlink-shaped root
+// is skipped with a warning, so anything under the symlink's target is
+// left as-is.
+func TestSweepStagingRoot_SymlinkRootSkipped(t *testing.T) {
+	workspace := mkStagingWorkspace(t)
+	realDir := filepath.Join(workspace, "real")
+	if err := os.MkdirAll(realDir, 0o700); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	target := filepath.Join(realDir, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("mkdir target entry: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(target, old, old); err != nil {
+		t.Fatalf("chtimes target: %v", err)
+	}
+	symlinkRoot := filepath.Join(workspace, "staging-symlink")
+	if err := os.Symlink(realDir, symlinkRoot); err != nil {
+		t.Fatalf("symlink staging root: %v", err)
+	}
+	sweepStagingRoot(symlinkRoot, newStagingRegistry(), time.Now(), time.Hour)
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("sweep followed symlinked root and removed %q: %v", target, err)
+	}
+}
+
+// TestSweepStagingRoot_NonPatternEntryKept pins the sweep's scope: only
+// entries whose name matches the 32-hex staging ID pattern are eligible
+// for removal, so an explicit-mode root shared with other data keeps
+// that data even when its age exceeds the GC cutoff.
+func TestSweepStagingRoot_NonPatternEntryKept(t *testing.T) {
+	workspace := mkStagingWorkspace(t)
+	stagingRoot := filepath.Join(workspace, ".cmd2host-staging")
+	strayName := "not-a-staging-id"
+	if err := os.MkdirAll(filepath.Join(stagingRoot, strayName), 0o700); err != nil {
+		t.Fatalf("mkdir stray: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(filepath.Join(stagingRoot, strayName), old, old); err != nil {
+		t.Fatalf("chtimes stray: %v", err)
+	}
+	sweepStagingRoot(stagingRoot, newStagingRegistry(), time.Now(), time.Hour)
+	if _, err := os.Stat(filepath.Join(stagingRoot, strayName)); err != nil {
+		t.Errorf("sweep removed non-pattern entry %q: %v", strayName, err)
 	}
 }
 
@@ -456,7 +621,7 @@ func TestPlanStaging_MutatesParams(t *testing.T) {
 
 // TestPlanStaging_NoParam is a no-op for operations without any
 // workspace_path parameter; planStaging returns nil and the request path
-// bypasses the pipeline.
+// skips the pipeline.
 func TestPlanStaging_NoParam(t *testing.T) {
 	op := &operations.Operation{
 		Command:      "gh",

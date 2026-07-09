@@ -549,9 +549,9 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 
 // resolveStagingWorkspaceRoot canonicalizes the target repo path through
 // filepath.EvalSymlinks so the staging pipeline walks the same absolute
-// root the workspace_path resolver used. Falls back to a filepath.Clean of
-// the input when EvalSymlinks fails so the failure surfaces as a
-// staging-time error rather than a silent walk against an unresolved base.
+// root the workspace_path resolver used. Returns an error when the input
+// is empty or EvalSymlinks fails; the caller surfaces that error as a
+// staging-time denial rather than proceeding with an unresolved base.
 func resolveStagingWorkspaceRoot(repoPath string) (string, error) {
 	if repoPath == "" {
 		return "", fmt.Errorf("workspace_path staging: target.RepoPath is empty")
