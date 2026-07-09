@@ -48,10 +48,71 @@ type DaemonConfig struct {
 	// the cap; doing so on a non-loopback listener is not recommended.
 	MaxInFlight int `json:"max_in_flight,omitempty"` // Default: 64
 
+	// WorkspacePathStaging configures where the daemon allocates staging
+	// files for workspace_path parameters. When omitted, the daemon uses
+	// the "workspace" mode (a hidden `.cmd2host-staging/` directory under
+	// the target repo path) so single-file foreground output is finalized
+	// via same-device rename by default. See StagingConfig for mode values.
+	WorkspacePathStaging *StagingConfig `json:"workspace_path_staging,omitempty"`
+
 	// Warnings collects non-fatal advisories produced during LoadDaemonConfig.
 	// Callers (typically runDaemon) print these to stderr after a successful
 	// load. Excluded from JSON marshalling so it cannot be set via daemon.json.
 	Warnings []string `json:"-"`
+}
+
+// StagingConfig configures the workspace_path staging root.
+//
+// Two modes are supported:
+//
+//   - "workspace" (default): staging lives under
+//     `<target.RepoPath>/.cmd2host-staging/`. Same-device rename is
+//     guaranteed on any workspace whose repo path resides on a single
+//     filesystem, which is the common case. Root is ignored.
+//   - "explicit": staging lives under Root (which must be an absolute path
+//     the operator has verified is on the same filesystem as the target
+//     workspaces). Cross-device rename fails loud at finalize time.
+//
+// The zero value (Mode = "" and Root = "") resolves to Mode "workspace"
+// via EffectiveStagingMode, so a project config that never wrote this
+// field stays hash-stable.
+type StagingConfig struct {
+	Mode string `json:"mode,omitempty"`
+	Root string `json:"root,omitempty"`
+}
+
+// StagingModeWorkspace names the default staging mode: staging root lives
+// under the target repo path, giving same-device rename on the common
+// single-filesystem case without requiring operator-side setup.
+const StagingModeWorkspace = "workspace"
+
+// StagingModeExplicit names the operator-supplied staging root mode. Root
+// must be an absolute path the operator has verified is on the same
+// filesystem as the workspace_path target; the daemon does not attempt
+// cross-device fallback.
+const StagingModeExplicit = "explicit"
+
+// EffectiveStagingMode returns the resolved staging mode. When
+// WorkspacePathStaging is nil or Mode is empty, the daemon uses the
+// declared default ("workspace"). Callers should validate the returned
+// value against the known modes before using it.
+func (c *DaemonConfig) EffectiveStagingMode() string {
+	if c.WorkspacePathStaging == nil || c.WorkspacePathStaging.Mode == "" {
+		return StagingModeWorkspace
+	}
+	return c.WorkspacePathStaging.Mode
+}
+
+// EffectiveStagingRoot returns the operator-supplied root path used with
+// mode "explicit". Empty otherwise; callers should not derive a
+// workspace-relative default from this — that computation is the staging
+// pipeline's responsibility (it needs the target repo path, which lives
+// downstream of DaemonConfig).
+func (c *DaemonConfig) EffectiveStagingRoot() string {
+	if c.WorkspacePathStaging == nil {
+		return ""
+	}
+	return c.WorkspacePathStaging.Root
 }
 
 // DefaultDaemonConfigPath returns the default daemon config file path.
@@ -92,7 +153,38 @@ func LoadDaemonConfig(path string) (*DaemonConfig, error) {
 		return nil, err
 	}
 
+	if err := validateStagingConfig(&config); err != nil {
+		return nil, err
+	}
+
 	return &config, nil
+}
+
+// validateStagingConfig checks WorkspacePathStaging when the operator has
+// written it. A nil value uses the "workspace" default and never surfaces
+// here. When present, Mode must be one of the declared modes and "explicit"
+// must carry an absolute Root.
+func validateStagingConfig(config *DaemonConfig) error {
+	sc := config.WorkspacePathStaging
+	if sc == nil {
+		return nil
+	}
+	switch sc.Mode {
+	case "", StagingModeWorkspace:
+		if sc.Root != "" {
+			return fmt.Errorf("workspace_path_staging: root must be empty for mode %q", StagingModeWorkspace)
+		}
+	case StagingModeExplicit:
+		if sc.Root == "" {
+			return fmt.Errorf("workspace_path_staging: root is required for mode %q", StagingModeExplicit)
+		}
+		if !filepath.IsAbs(sc.Root) {
+			return fmt.Errorf("workspace_path_staging: root %q must be an absolute path for mode %q", sc.Root, StagingModeExplicit)
+		}
+	default:
+		return fmt.Errorf("workspace_path_staging: unknown mode %q (supported: %q, %q)", sc.Mode, StagingModeWorkspace, StagingModeExplicit)
+	}
+	return nil
 }
 
 // isValidHost reports whether s is a syntactically acceptable host token for

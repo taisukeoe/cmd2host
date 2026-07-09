@@ -48,13 +48,14 @@ var writeTimeout = 10 * time.Second
 // it exits, so the cap is enforced uniformly across the TCP and Unix
 // transports.
 type Server struct {
-	daemonConfig *config.DaemonConfig
-	validator    *Validator
-	tokenStore   *auth.TokenStore
-	tcpListener  net.Listener
-	unixListener net.Listener
-	baseDir      string
-	inFlightSem  chan struct{}
+	daemonConfig  *config.DaemonConfig
+	validator     *Validator
+	tokenStore    *auth.TokenStore
+	tcpListener   net.Listener
+	unixListener  net.Listener
+	baseDir       string
+	inFlightSem   chan struct{}
+	activeStaging *stagingRegistry
 }
 
 // NewServer creates a new Server using the default cmd2host base directory
@@ -88,11 +89,12 @@ func NewServerAt(dir string, daemonConfig *config.DaemonConfig) (*Server, error)
 		sem = make(chan struct{}, daemonConfig.MaxInFlight)
 	}
 	return &Server{
-		daemonConfig: daemonConfig,
-		validator:    NewValidator(),
-		tokenStore:   tokenStore,
-		baseDir:      dir,
-		inFlightSem:  sem,
+		daemonConfig:  daemonConfig,
+		validator:     NewValidator(),
+		tokenStore:    tokenStore,
+		baseDir:       dir,
+		inFlightSem:   sem,
+		activeStaging: newStagingRegistry(),
 	}, nil
 }
 
@@ -451,6 +453,45 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		return
 	}
 
+	// Reject workspace_path operations whose template or normalized flags
+	// would expand the run beyond the single-foreground-file shape the
+	// staging contract covers. Runs before staging allocation so a rejected
+	// operation never touches the staging root.
+	if err := op.ValidateNoScopeExpanders(req.Flags); err != nil {
+		fmt.Printf("  -> DENIED (workspace_path_scope): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+
+	// Allocate staging files for every workspace_path parameter. The plan
+	// mutates req.Params so BuildArgs (and the child) see the staging path
+	// rather than the caller's resolved final path. A nil plan means the
+	// operation had no workspace_path params and the pipeline is a no-op.
+	stagingWorkspaceRoot, err := resolveStagingWorkspaceRoot(target.RepoPath)
+	if err != nil {
+		fmt.Printf("  -> DENIED (workspace_path): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+	plan, err := planStaging(s.daemonConfig, s.activeStaging, op, req.Params, stagingWorkspaceRoot)
+	if err != nil {
+		fmt.Printf("  -> DENIED (workspace_path_staging): %v\n", err)
+		s.sendOperationResponse(conn, operations.Response{
+			RequestID:    req.RequestID,
+			ExitCode:     1,
+			DeniedReason: strPtr(err.Error()),
+		})
+		return
+	}
+
 	// Build arguments from template.
 	// Template placeholders that depend on per-request target context are
 	// injected here so a single template can serve any repo in the allow list.
@@ -461,6 +502,10 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	args, err := op.BuildArgs(req.Params, req.Flags, projectEnv)
 	if err != nil {
 		fmt.Printf("  -> ARG BUILD FAILED: %v\n", err)
+		if plan != nil {
+			cleanupStaging(plan)
+			s.activeStaging.Release(plan.stagingID)
+		}
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,
 			ExitCode:     1,
@@ -473,6 +518,23 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	resp := s.executeWithSanitization(op, args, projectConfig, target)
 	fmt.Printf("  -> exit_code=%d\n", resp.ExitCode)
 
+	// Post-execution staging placement. Only run when the child exited
+	// successfully and there is a plan to finalize; any other case unlinks
+	// the staged files so the workspace does not accumulate partial output.
+	if plan != nil {
+		if resp.ExitCode == 0 {
+			if ferr := finalizeStaging(plan, s.activeStaging); ferr != nil {
+				fmt.Printf("  -> post-run finalize failed: %v\n", ferr)
+				cleanupStaging(plan)
+				resp.ExitCode = 1
+				resp.Stderr = appendStderrLine(resp.Stderr, fmt.Sprintf("cmd2host: post-run finalize failed: %v", ferr))
+			}
+		} else {
+			cleanupStaging(plan)
+			s.activeStaging.Release(plan.stagingID)
+		}
+	}
+
 	s.sendOperationResponse(conn, operations.Response{
 		RequestID:           req.RequestID,
 		ExitCode:            resp.ExitCode,
@@ -483,6 +545,36 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 		StdoutOriginalBytes: resp.StdoutOriginalBytes,
 		StderrOriginalBytes: resp.StderrOriginalBytes,
 	})
+}
+
+// resolveStagingWorkspaceRoot canonicalizes the target repo path through
+// filepath.EvalSymlinks so the staging pipeline walks the same absolute
+// root the workspace_path resolver used. Falls back to a filepath.Clean of
+// the input when EvalSymlinks fails so the failure surfaces as a
+// staging-time error rather than a silent walk against an unresolved base.
+func resolveStagingWorkspaceRoot(repoPath string) (string, error) {
+	if repoPath == "" {
+		return "", fmt.Errorf("workspace_path staging: target.RepoPath is empty")
+	}
+	resolved, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("workspace_path staging: resolve workspace root %q: %w", repoPath, err)
+	}
+	return resolved, nil
+}
+
+// appendStderrLine keeps the daemon-supplied indicator on its own line
+// without accidentally producing a leading blank when the child left
+// stderr empty. Existing content already ending in a newline is preserved
+// verbatim so streaming consumers see one final marker line.
+func appendStderrLine(existing, line string) string {
+	if existing == "" {
+		return line + "\n"
+	}
+	if strings.HasSuffix(existing, "\n") {
+		return existing + line + "\n"
+	}
+	return existing + "\n" + line + "\n"
 }
 
 // buildReverseMatchCandidates assembles ReverseMatch input from the project
@@ -809,12 +901,61 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// sweepAllStagingRoots walks every configured project and sweeps its
+// staging root. Explicit staging mode has a single fixed root that is
+// swept once regardless of how many projects reference it; workspace
+// mode has one root per project (under the project's repo path) so the
+// walk covers each project independently.
+//
+// Best-effort: an unreadable project directory or a missing staging
+// root is skipped silently. The registry lookup happens inside
+// sweepStagingRoot so an in-flight staging ID is never reaped.
+func (s *Server) sweepAllStagingRoots(now time.Time, minAge time.Duration) {
+	if s.activeStaging == nil {
+		return
+	}
+	switch s.daemonConfig.EffectiveStagingMode() {
+	case config.StagingModeExplicit:
+		root := s.daemonConfig.EffectiveStagingRoot()
+		if root == "" {
+			return
+		}
+		sweepStagingRoot(root, s.activeStaging, now, minAge)
+	case config.StagingModeWorkspace:
+		projects, _ := config.ListProjectsAt(s.baseDir)
+		visited := make(map[string]struct{}, len(projects))
+		for _, projectID := range projects {
+			p, err := config.LoadProjectConfigAt(s.baseDir, projectID)
+			if err != nil {
+				continue
+			}
+			for _, repoPath := range p.RepoPaths {
+				resolved, rerr := filepath.EvalSymlinks(repoPath)
+				if rerr != nil {
+					continue
+				}
+				root := filepath.Join(resolved, stagingRootDirName)
+				if _, seen := visited[root]; seen {
+					continue
+				}
+				visited[root] = struct{}{}
+				sweepStagingRoot(root, s.activeStaging, now, minAge)
+			}
+		}
+	}
+}
+
 // Run starts the server based on listen mode
 func (s *Server) Run() error {
 	// Cleanup expired tokens on startup
 	if err := s.tokenStore.CleanupExpired(); err != nil {
 		fmt.Printf("Warning: failed to cleanup expired tokens: %v\n", err)
 	}
+
+	// Startup sweep for orphaned staging subtrees before any request is
+	// in-flight. Passes minAge=0 so a daemon crash that left a partial
+	// subtree on disk is removed regardless of age.
+	s.sweepAllStagingRoots(time.Now(), 0)
 
 	// Periodic cleanup for long-running daemons
 	go func() {
@@ -824,6 +965,7 @@ func (s *Server) Run() error {
 			if err := s.tokenStore.CleanupExpired(); err != nil {
 				fmt.Printf("Warning: periodic token cleanup failed: %v\n", err)
 			}
+			s.sweepAllStagingRoots(time.Now(), stagingGCMinAge)
 		}
 	}()
 

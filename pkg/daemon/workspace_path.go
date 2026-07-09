@@ -2,19 +2,42 @@
 //
 // A `workspace_path` param carries a caller-supplied destination for a
 // host-executed operation (e.g. the local file an `aws s3 cp` writes to).
-// Because the daemon runs the command on the host, the value must be
-// confined to the session workspace (the resolved target.RepoPath, which
-// oneshot-agent binds to the container's workspace). resolveWorkspacePath
-// turns a workspace-relative value into an absolute path proven to live
-// under the workspace, or returns an error the caller surfaces as a
-// denial.
+// The daemon confines the value to the session workspace (the resolved
+// target.RepoPath, which oneshot-agent binds to the container's workspace)
+// and stages the output through a workspace-owned identity before placing
+// it at the caller-supplied path.
 //
-// The guarantee is confinement computed from the filesystem state at
-// resolution time: the value's deepest existing ancestor is resolved
-// through symlinks and checked against the resolved workspace root, and
-// the remaining (not-yet-existing) suffix is lexical-only. The resolver
-// does not hand the running command a file descriptor, so it governs the
-// path the command is given, not the command's own write behavior.
+// resolveWorkspacePath turns a workspace-relative value into an absolute
+// path proven to live under the workspace, or returns an error the caller
+// surfaces as a denial. Every param the operation declares as
+// workspace_path then flows through the staging pipeline (see
+// workspace_path_staging.go):
+//
+//   - Direction: v1 supports "output" only. Empty resolves to "output"
+//     via ParamSchema.EffectiveDirection, keeping existing project
+//     configs hash-stable; "input" is reserved for a future release.
+//   - Shape: single foreground file per param. Operations whose template
+//     or normalized flags carry a scope-expander flag (--recursive,
+//     --sync, -R) are rejected by operations.Operation.ValidateNoScopeExpanders
+//     before the staging pipeline runs.
+//   - Placement: the daemon allocates a staging file under a hidden
+//     .cmd2host-staging/ subtree (or the operator-configured explicit
+//     root), passes the staging path to the child, and finalizes the
+//     file at the caller-supplied path only after the child exits
+//     successfully. Every step in the finalize walk uses O_NOFOLLOW so
+//     the placement stays anchored to the workspace-owned root the
+//     resolver validated. Finalize uses renameat, which replaces an
+//     entry already present at the caller-supplied path (regardless of
+//     whether the pre-existing entry is a regular file or a symlink) —
+//     the daemon does not attempt to follow such an entry, only to
+//     rename over its directory slot.
+//   - Multiplicity: at most one workspace_path param per operation in
+//     v1. CompilePatterns rejects an operation that declares more,
+//     matching the "single foreground file" contract and keeping the
+//     placement step atomic.
+//   - Background writers, multi-file expansions, and daemonizing
+//     children are out of contract; those shapes need a different
+//     primitive.
 
 package daemon
 

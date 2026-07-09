@@ -43,6 +43,11 @@ cleanup() {
     if [[ -n "$DAEMON_CONFIG_DIR" && "$DAEMON_CONFIG_DIR" == *".cmd2host" ]]; then
         rm -f "$DAEMON_CONFIG_DIR/daemon.json"
     fi
+    # Clean up workspace_path integration probe artifacts (with safety checks)
+    if [[ -n "${PROJECT_ROOT:-}" && "$PROJECT_ROOT" == */cmd2host* ]]; then
+        rm -rf "$PROJECT_ROOT/test/host/scratch" 2>/dev/null || true
+        rm -rf "$PROJECT_ROOT/.cmd2host-staging" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -70,7 +75,7 @@ setup_project_config() {
 {
   "repo": "taisukeoe/cmd2host",
   "repo_path": "$PROJECT_ROOT",
-  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version"],
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version", "ws_write", "ws_write_recursive"],
   "operations": {
     "gh_version": {
       "command": "gh",
@@ -93,6 +98,23 @@ setup_project_config() {
       "params": {},
       "allowed_flags": ["--json", "--state", "--limit"],
       "description": "List pull requests"
+    },
+    "ws_write": {
+      "command": "dd",
+      "args_template": ["if=/dev/zero", "of={dest}", "bs=1", "count=1"],
+      "params": {
+        "dest": {"type": "workspace_path"}
+      },
+      "description": "Integration probe: write one byte to a workspace_path"
+    },
+    "ws_write_recursive": {
+      "command": "dd",
+      "args_template": ["if=/dev/zero", "of={dest}", "bs=1", "count=1"],
+      "params": {
+        "dest": {"type": "workspace_path"}
+      },
+      "allowed_flags": ["--recursive"],
+      "description": "Integration probe: workspace_path with a scope-expander flag"
     }
   }
 }
@@ -259,6 +281,47 @@ test_operation \
     '{"operation":"unknown_op","params":{},"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "Unknown operation"
+
+# =====================
+# workspace_path staging tests
+# =====================
+
+# Test: ws_write places the child's output at the workspace-relative path,
+# proving the staging pipeline allocated → wrote → finalized end to end.
+WS_PROBE_PATH="$PROJECT_ROOT/test/host/scratch/probe.bin"
+rm -f "$WS_PROBE_PATH"
+test_operation \
+    "workspace_path staging places file at final path" \
+    '{"operation":"ws_write","params":{"dest":"test/host/scratch/probe.bin"},"token":"'"$TEST_TOKEN"'"}' \
+    "0" \
+    '"stdout"'
+
+if [[ -f "$WS_PROBE_PATH" ]]; then
+    log_pass "workspace_path staging final path exists"
+else
+    log_fail "workspace_path staging final path exists" "$WS_PROBE_PATH present" "missing"
+fi
+
+# The staging root should have been cleaned up by the finalize step.
+if [[ ! -e "$PROJECT_ROOT/.cmd2host-staging" ]] || [[ -z "$(ls -A "$PROJECT_ROOT/.cmd2host-staging" 2>/dev/null || true)" ]]; then
+    log_pass "workspace_path staging root cleaned after finalize"
+else
+    log_fail "workspace_path staging root cleaned after finalize" "staging root absent or empty" "residual entries"
+fi
+
+# Test: workspace_path operation with a scope-expander flag is rejected
+# before the child runs.
+test_operation \
+    "workspace_path with --recursive flag rejected" \
+    '{"operation":"ws_write_recursive","params":{"dest":"test/host/scratch/should-not-exist.bin"},"flags":["--recursive"],"token":"'"$TEST_TOKEN"'"}' \
+    "1" \
+    "single-foreground-file output only"
+
+if [[ -e "$PROJECT_ROOT/test/host/scratch/should-not-exist.bin" ]]; then
+    log_fail "workspace_path scope-expander leaves no file" "no file" "present"
+else
+    log_pass "workspace_path scope-expander leaves no file"
+fi
 
 # =====================
 # list_operations tests

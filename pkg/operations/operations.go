@@ -107,7 +107,7 @@ type ItemsSchema struct {
 
 // ParamSchema defines validation rules for a parameter
 type ParamSchema struct {
-	Type      string       `json:"type"`                // "string", "integer", "array"
+	Type      string       `json:"type"`                // "string", "integer", "array", "workspace_path"
 	Optional  bool         `json:"optional,omitempty"`  // If true, parameter can be omitted
 	Pattern   string       `json:"pattern,omitempty"`   // Regex pattern for strings
 	MinLength int          `json:"minLength,omitempty"` // Min length for strings
@@ -116,8 +116,31 @@ type ParamSchema struct {
 	Max       *int         `json:"max,omitempty"`       // Max value for integers (pointer to distinguish unset from 0)
 	Items     *ItemsSchema `json:"items,omitempty"`     // For array types
 
+	// Direction declares the lifecycle a workspace_path param carries. v1
+	// supports "output" only: the child command writes a single foreground
+	// file at the resolved path, and the daemon stages that file to bind it
+	// to a workspace-owned identity. Empty string resolves to "output" via
+	// EffectiveDirection so existing project configs stay hash-stable.
+	// Values outside {"", "output", "input"} fail loud in CompilePatterns;
+	// "input" is reserved for a future direction and reported as unsupported
+	// in cmd2host v1. Non-workspace_path params ignore this field.
+	Direction string `json:"direction,omitempty"`
+
 	// Compiled pattern (not serialized)
 	compiledPattern *regexp.Regexp
+}
+
+// EffectiveDirection returns the resolved direction for a workspace_path
+// parameter, coercing the zero-value (unset field) to "output" so callers
+// receive the declared v1 default without having to distinguish the empty
+// string from an explicit "output". Non-workspace_path params also resolve
+// to "output" as a documented default; callers should inspect
+// ParamSchema.Type before acting on the result.
+func (p ParamSchema) EffectiveDirection() string {
+	if p.Direction == "" {
+		return "output"
+	}
+	return p.Direction
 }
 
 // ParamValue represents a parameter value that can be string, int, or []string
@@ -232,8 +255,25 @@ type OperationInfo struct {
 	AllowedFlags []string               `json:"allowed_flags,omitempty"`
 }
 
-// CompilePatterns compiles regex patterns in parameter schemas
+// CompilePatterns compiles regex patterns in parameter schemas and validates
+// per-type constraints declared on the schema.
+//
+// For workspace_path params:
+//
+//   - Direction is checked against the v1 supported set: empty string
+//     (= "output") and "output" are accepted; "input" is reported as
+//     unsupported in cmd2host v1; any other value is rejected as an
+//     unknown direction. Non-workspace_path params ignore Direction.
+//   - At most one workspace_path parameter per operation is allowed in
+//     v1. The staging pipeline commits each placement independently, so
+//     restricting the count keeps the contract atomic (one child, one
+//     output file, one rename).
+//
+// The check runs at operation load time so a config with an unsupported
+// direction or with multiple workspace_path params fails loud before it
+// can reach request dispatch.
 func (op *Operation) CompilePatterns() error {
+	workspacePathCount := 0
 	for name, schema := range op.Params {
 		if schema.Pattern != "" {
 			re, err := regexp.Compile(schema.Pattern)
@@ -243,8 +283,114 @@ func (op *Operation) CompilePatterns() error {
 			schema.compiledPattern = re
 			op.Params[name] = schema
 		}
+		if schema.Type == "workspace_path" {
+			workspacePathCount++
+			switch schema.Direction {
+			case "", "output":
+				// accepted (empty resolves to "output" via EffectiveDirection)
+			case "input":
+				return fmt.Errorf("workspace_path param %q: direction \"input\" is unsupported in cmd2host v1", name)
+			default:
+				return fmt.Errorf("workspace_path param %q: unknown direction %q (supported: \"output\")", name, schema.Direction)
+			}
+		}
+	}
+	if workspacePathCount > 1 {
+		return fmt.Errorf("operation declares %d workspace_path params; v1 supports at most one workspace_path parameter per operation", workspacePathCount)
 	}
 	return nil
+}
+
+// scopeExpanderFlags names the flag tokens that ValidateNoScopeExpanders
+// rejects for operations declaring a workspace_path parameter. The set is a
+// conservative v1 denylist rather than an exhaustive scope-expander model:
+// each flag is one that turns a single-file operation into a multi-file
+// operation on common host CLIs (aws s3 sync / cp -R / rsync-family), and
+// the daemon-managed staging contract only covers the single-foreground-file
+// case. `-R` is included even though it overloads to "repository" on gh
+// because a workspace_path operation is not the shape where `-R` would name
+// a repo (repo selection uses the injection-only `{repo}` placeholder).
+var scopeExpanderFlags = map[string]struct{}{
+	"--recursive": {},
+	"--sync":      {},
+	"-R":          {},
+}
+
+// ValidateNoScopeExpanders rejects flag combinations that would expand a
+// workspace_path operation beyond the single-foreground-file shape the
+// staging contract covers. It runs on the operation template plus the
+// normalized flag list (both sources the daemon can trust as coming from
+// project config or the reverse-match / flag-tail normalizer). Post-BuildArgs
+// argv is deliberately NOT scanned: a user-supplied string parameter value
+// like "--sync" would false-reject an unrelated operation, so provenance
+// matters — this predicate only inspects tokens known to be flags rather
+// than values.
+//
+// Returns nil when the operation declares no workspace_path parameter (the
+// predicate is a no-op for other operation shapes). Otherwise, iterates the
+// operation's template literals and the caller-supplied normalized flags,
+// rejecting on the first hit against scopeExpanderFlags. The error message
+// names both the offending flag and the reason so an operator debugging a
+// custom operation sees the intent, not just the rejection.
+func (op *Operation) ValidateNoScopeExpanders(flags []string) error {
+	if !op.hasWorkspacePathParam() {
+		return nil
+	}
+	if err := checkTemplateForScopeExpanders(op.ArgsTemplate); err != nil {
+		return err
+	}
+	for _, flag := range flags {
+		name := flag
+		if idx := strings.Index(flag, "="); idx > 0 {
+			name = flag[:idx]
+		}
+		if _, hit := scopeExpanderFlags[name]; hit {
+			return scopeExpanderError(name)
+		}
+	}
+	return nil
+}
+
+// hasWorkspacePathParam reports whether the operation declares at least one
+// param whose Type is "workspace_path". The scope-expander guard only fires
+// for such operations because it is the staging contract — not a general
+// property of the argv — that requires single-file shape.
+func (op *Operation) hasWorkspacePathParam() bool {
+	for _, schema := range op.Params {
+		if schema.Type == "workspace_path" {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTemplateForScopeExpanders scans the operation's declared template
+// literals for a flag in scopeExpanderFlags. A `key=value` template literal
+// is split on the first `=` and only the flag half is checked; a bare
+// non-flag literal falls through untouched.
+func checkTemplateForScopeExpanders(tmpl []string) error {
+	for _, tok := range tmpl {
+		if !strings.HasPrefix(tok, "-") {
+			continue
+		}
+		name := tok
+		if idx := strings.Index(tok, "="); idx > 0 {
+			name = tok[:idx]
+		}
+		if _, hit := scopeExpanderFlags[name]; hit {
+			return scopeExpanderError(name)
+		}
+	}
+	return nil
+}
+
+// scopeExpanderError composes the deny message. It states the intent (v1
+// contract covers single-foreground-file output only) rather than claiming
+// the flag universally means recursion, so `-R`'s repo-selection meaning on
+// gh is not mis-attributed and future direction expansions can lift the
+// wording verbatim.
+func scopeExpanderError(flag string) error {
+	return fmt.Errorf("cmd2host: flag %q not permitted for workspace_path operations in v1 (single-foreground-file output only; recursive / sync shapes are out of scope)", flag)
 }
 
 // ValidateParams validates parameters against the operation schema
