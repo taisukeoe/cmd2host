@@ -893,3 +893,201 @@ func TestRequest_Validate(t *testing.T) {
 		})
 	}
 }
+
+// TestParamSchema_EffectiveDirection pins the zero-value coercion so
+// existing project configs (which never wrote the field) resolve to the
+// declared v1 default without callers having to distinguish an empty string
+// from an explicit "output". Non-workspace_path params also resolve to
+// "output"; callers are expected to inspect ParamSchema.Type first.
+func TestParamSchema_EffectiveDirection(t *testing.T) {
+	cases := []struct {
+		name  string
+		input ParamSchema
+		want  string
+	}{
+		{"empty resolves to output", ParamSchema{Type: "workspace_path"}, "output"},
+		{"explicit output", ParamSchema{Type: "workspace_path", Direction: "output"}, "output"},
+		{"explicit input", ParamSchema{Type: "workspace_path", Direction: "input"}, "input"},
+		{"non-workspace_path empty resolves to output", ParamSchema{Type: "string"}, "output"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.input.EffectiveDirection(); got != tc.want {
+				t.Errorf("EffectiveDirection() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOperation_CompilePatterns_WorkspacePathDirection covers the v1
+// direction gate. Empty and "output" are accepted, "input" fails loud with
+// the documented unsupported-in-v1 message, and any other value is rejected
+// as an unknown direction. Non-workspace_path params are untouched even if
+// Direction happens to carry a value.
+func TestOperation_CompilePatterns_WorkspacePathDirection(t *testing.T) {
+	cases := []struct {
+		name       string
+		schema     ParamSchema
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name:    "workspace_path empty direction accepted",
+			schema:  ParamSchema{Type: "workspace_path"},
+			wantErr: false,
+		},
+		{
+			name:    "workspace_path explicit output accepted",
+			schema:  ParamSchema{Type: "workspace_path", Direction: "output"},
+			wantErr: false,
+		},
+		{
+			name:       "workspace_path direction input rejected as unsupported v1",
+			schema:     ParamSchema{Type: "workspace_path", Direction: "input"},
+			wantErr:    true,
+			wantErrMsg: "unsupported in cmd2host v1",
+		},
+		{
+			name:       "workspace_path unknown direction rejected",
+			schema:     ParamSchema{Type: "workspace_path", Direction: "sideways"},
+			wantErr:    true,
+			wantErrMsg: "unknown direction",
+		},
+		{
+			name:    "non-workspace_path direction ignored",
+			schema:  ParamSchema{Type: "string", Direction: "input"},
+			wantErr: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &Operation{
+				Command:      "test",
+				ArgsTemplate: []string{"probe"},
+				Params:       map[string]ParamSchema{"dest": tc.schema},
+			}
+			err := op.CompilePatterns()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("CompilePatterns() err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if tc.wantErr && tc.wantErrMsg != "" && !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Errorf("CompilePatterns() err = %q, want it to contain %q", err.Error(), tc.wantErrMsg)
+			}
+		})
+	}
+}
+
+// TestOperation_CompilePatterns_MultipleWorkspacePathParams pins the v1
+// single-foreground-file contract at the schema level: declaring two or
+// more workspace_path parameters is rejected before the operation can
+// reach request dispatch. The check is scope-locked so an operation
+// with one workspace_path and any number of non-workspace_path params
+// stays valid.
+func TestOperation_CompilePatterns_MultipleWorkspacePathParams(t *testing.T) {
+	cases := []struct {
+		name    string
+		params  map[string]ParamSchema
+		wantErr bool
+	}{
+		{
+			name:    "single workspace_path accepted",
+			params:  map[string]ParamSchema{"dest": {Type: "workspace_path"}, "note": {Type: "string"}},
+			wantErr: false,
+		},
+		{
+			name:    "two workspace_path rejected",
+			params:  map[string]ParamSchema{"a": {Type: "workspace_path"}, "b": {Type: "workspace_path"}},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &Operation{Command: "test", ArgsTemplate: []string{"probe"}, Params: tc.params}
+			err := op.CompilePatterns()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("CompilePatterns() err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestOperation_ValidateNoScopeExpanders covers the v1 scope-expander guard.
+//
+// The guard is provenance-aware: it fires on template literals (project
+// config) and on the normalized flag list (raw-argv reverse-match or the
+// MCP path's canonicalized flags), but NOT on user param values. That
+// distinction is what makes a caller-supplied "--sync" string parameter
+// safe: it never reaches the guard because the guard runs before
+// BuildArgs collapses params into positional argv tokens. The last case
+// pins that provenance: an operation whose template accepts a
+// user-supplied string in the position that would carry the value
+// "--sync" is NOT rejected — provenance decides.
+func TestOperation_ValidateNoScopeExpanders(t *testing.T) {
+	workspaceParam := map[string]ParamSchema{"dest": {Type: "workspace_path"}}
+	stringParam := map[string]ParamSchema{"note": {Type: "string"}}
+
+	cases := []struct {
+		name    string
+		op      Operation
+		flags   []string
+		wantErr bool
+	}{
+		{
+			name:    "no workspace_path param, guard is a no-op",
+			op:      Operation{Command: "cp", ArgsTemplate: []string{"--recursive", "src", "dst"}, Params: stringParam},
+			flags:   []string{"--recursive"},
+			wantErr: false,
+		},
+		{
+			name:    "workspace_path with clean flags accepted",
+			op:      Operation{Command: "aws", ArgsTemplate: []string{"s3", "cp", "src", "{dest}"}, Params: workspaceParam},
+			flags:   []string{"--only-show-errors"},
+			wantErr: false,
+		},
+		{
+			name:    "workspace_path with template --recursive rejected",
+			op:      Operation{Command: "aws", ArgsTemplate: []string{"s3", "cp", "--recursive", "src", "{dest}"}, Params: workspaceParam},
+			flags:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "workspace_path with template --sync rejected",
+			op:      Operation{Command: "aws", ArgsTemplate: []string{"s3", "--sync", "src", "{dest}"}, Params: workspaceParam},
+			flags:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "workspace_path with template -R rejected",
+			op:      Operation{Command: "cp", ArgsTemplate: []string{"-R", "src", "{dest}"}, Params: workspaceParam},
+			flags:   nil,
+			wantErr: true,
+		},
+		{
+			name:    "workspace_path with flag --recursive rejected",
+			op:      Operation{Command: "aws", ArgsTemplate: []string{"s3", "cp", "src", "{dest}"}, Params: workspaceParam},
+			flags:   []string{"--recursive"},
+			wantErr: true,
+		},
+		{
+			name:    "workspace_path with flag --sync=on rejected via prefix",
+			op:      Operation{Command: "aws", ArgsTemplate: []string{"s3", "cp", "src", "{dest}"}, Params: workspaceParam},
+			flags:   []string{"--sync=on"},
+			wantErr: true,
+		},
+		{
+			name:    "user value that looks like --sync is not rejected (provenance)",
+			op:      Operation{Command: "printer", ArgsTemplate: []string{"emit", "{note}", "{dest}"}, Params: map[string]ParamSchema{"note": {Type: "string"}, "dest": {Type: "workspace_path"}}},
+			flags:   nil,
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.op.ValidateNoScopeExpanders(tc.flags)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ValidateNoScopeExpanders() err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
