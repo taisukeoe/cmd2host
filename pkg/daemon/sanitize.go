@@ -159,13 +159,15 @@ func (cs *CommandSanitizer) SanitizeForGit(env *SanitizedEnv) {
 	}
 }
 
-// SanitizeForGitPushStrict applies strict sanitization for git push.
-// Explicit URL fixation (the push target URL is passed as an explicit
-// argument by the operation template) is the primary defense; the env
-// hardening below removes secondary channels (system / global git config,
-// credential helpers, pre-push hooks, SSH command override, recursive
-// submodule push) that could redirect or hijack the push.
-func (cs *CommandSanitizer) SanitizeForGitPushStrict(env *SanitizedEnv) {
+// SanitizeForGitRemoteStrict applies strict sanitization for git
+// subcommands that communicate with a remote (push / fetch / clone / pull /
+// ls-remote / remote). Explicit URL fixation (the remote target URL is
+// passed as an explicit argument by the operation template) is the primary
+// defense; the env hardening below removes secondary channels (system /
+// global git config, credential helpers, pre-push hooks, SSH command
+// override, recursive submodule operations) that could redirect or hijack
+// the remote-communicating invocation.
+func (cs *CommandSanitizer) SanitizeForGitRemoteStrict(env *SanitizedEnv) {
 	// Apply base git sanitization first
 	cs.SanitizeForGit(env)
 
@@ -200,10 +202,10 @@ type sanitizeProfile struct {
 // PrepareCommand only executes profiles present in this registry; a name
 // outside it is rejected rather than silently mapped to a weaker profile.
 var sanitizeProfiles = map[string]sanitizeProfile{
-	"minimal":         {apply: func(cs *CommandSanitizer, env *SanitizedEnv) {}},
-	"gh":              {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGH(env) }},
-	"git":             {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGit(env) }},
-	"git_push_strict": {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGitPushStrict(env) }},
+	"minimal":           {apply: func(cs *CommandSanitizer, env *SanitizedEnv) {}},
+	"gh":                {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGH(env) }},
+	"git":               {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGit(env) }},
+	"git_remote_strict": {apply: func(cs *CommandSanitizer, env *SanitizedEnv) { cs.SanitizeForGitRemoteStrict(env) }},
 }
 
 // commandBasename returns the command's basename with a trailing ".exe"
@@ -213,12 +215,47 @@ func commandBasename(cmdPath string) string {
 	return name[strings.LastIndex(name, "/")+1:]
 }
 
+// gitRemoteSubcommands lists the top-level git subcommand names that
+// communicate with a remote via a URL passed as an argv token and therefore
+// run under git_remote_strict. The strict profile pairs with URL fixation
+// through the operation template's {expected_git_url} placeholder; every
+// subcommand named here is a shape whose operation template can bind the
+// remote destination by supplying that URL in argv.
+//
+// Excluded on purpose:
+//   - `remote`: `git remote add / set-url / update` operate on the
+//     repo-local remote configuration (or, for `remote update`, on all
+//     configured remotes). Their destination is resolved from
+//     `.git/config`, not from an argv URL, so URL fixation cannot bind
+//     them and routing them to strict would advertise a contract this
+//     profile does not enforce.
+//   - Sub-subcommand trees (`git lfs fetch`, `git submodule update
+//     --remote`, ...): the first args_template element is `lfs` /
+//     `submodule`, not the remote-communicating verb, so operators that
+//     template those shapes keep the base "git" profile unless a future
+//     entry names them explicitly here.
+var gitRemoteSubcommands = map[string]struct{}{
+	"push":      {},
+	"fetch":     {},
+	"clone":     {},
+	"pull":      {},
+	"ls-remote": {},
+}
+
+// isGitRemoteSubcommand reports whether a git subcommand name identifies
+// an invocation that communicates with a remote.
+func isGitRemoteSubcommand(name string) bool {
+	_, ok := gitRemoteSubcommands[name]
+	return ok
+}
+
 // InferSanitizeProfile returns the sanitization profile for an operation
 // derived from its command and args template:
 //
 //   - command basename "gh" → "gh"
 //   - command basename "git" with an args_template whose first element is
-//     the literal "push" → "git_push_strict"
+//     a remote-communicating subcommand (isGitRemoteSubcommand) →
+//     "git_remote_strict"
 //   - any other "git" operation → "git"
 //   - everything else → "minimal"
 //
@@ -229,8 +266,8 @@ func InferSanitizeProfile(op *operations.Operation) string {
 	case "gh":
 		return "gh"
 	case "git":
-		if len(op.ArgsTemplate) > 0 && op.ArgsTemplate[0] == "push" {
-			return "git_push_strict"
+		if len(op.ArgsTemplate) > 0 && isGitRemoteSubcommand(op.ArgsTemplate[0]) {
+			return "git_remote_strict"
 		}
 		return "git"
 	default:
@@ -241,14 +278,15 @@ func InferSanitizeProfile(op *operations.Operation) string {
 // ExecutionProfile returns the sanitization profile for an operation about
 // to execute with the given argv. It starts from the template-declarative
 // InferSanitizeProfile and applies a strengthen-only correction: a git
-// invocation whose first runtime argument is "push" always executes under
-// "git_push_strict", even when the operation template reaches "push"
-// through a placeholder rather than a literal head. This keeps the runtime
-// invariant that git push never runs under a weaker profile.
+// invocation whose first runtime argument names a remote-communicating
+// subcommand always executes under "git_remote_strict", even when the
+// operation template reaches that subcommand through a placeholder rather
+// than a literal head. This keeps the runtime invariant that a git remote
+// operation never runs under a weaker profile.
 func ExecutionProfile(op *operations.Operation, args []string) string {
 	profile := InferSanitizeProfile(op)
-	if profile == "git" && len(args) > 0 && args[0] == "push" {
-		return "git_push_strict"
+	if profile == "git" && len(args) > 0 && isGitRemoteSubcommand(args[0]) {
+		return "git_remote_strict"
 	}
 	return profile
 }
@@ -256,10 +294,31 @@ func ExecutionProfile(op *operations.Operation, args []string) string {
 // PrepareCommand creates an exec.Cmd with sanitized environment. profile
 // selects the sanitization behavior from sanitizeProfiles; a name outside
 // the registry is an error and no command is prepared.
+//
+// When profile is "git_remote_strict", PrepareCommand additionally
+// enforces the URL-fixation contract at runtime: the daemon-derived
+// target.ExpectedGitURL must appear at args[1], immediately after the
+// subcommand and before any option or refspec. Placing the URL at the
+// first positional slot binds it to the "<repository>" argument git
+// resolves as the connection destination for push / fetch / clone / pull /
+// ls-remote. Any other layout (URL absent, URL as an option value like
+// `--upload-pack=<URL>`, URL after another positional that git would
+// treat as the repository) is rejected fail-closed so a custom operation
+// cannot advertise the strict profile while resolving the remote through
+// `.git/config`.
 func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string, profile string) (*exec.Cmd, error) {
 	p, ok := sanitizeProfiles[profile]
 	if !ok {
 		return nil, fmt.Errorf("unknown sanitize profile %q", profile)
+	}
+
+	if profile == "git_remote_strict" {
+		if cs.target == nil || cs.target.ExpectedGitURL == "" {
+			return nil, fmt.Errorf("sanitize profile %q requires target.ExpectedGitURL to be resolved", profile)
+		}
+		if len(args) < 2 || args[1] != cs.target.ExpectedGitURL {
+			return nil, fmt.Errorf("sanitize profile %q requires the daemon-derived expected_git_url %q at args[1] (immediately after the subcommand, so it binds the git <repository> positional); resolved argv: %v", profile, cs.target.ExpectedGitURL, args)
+		}
 	}
 
 	cmd := exec.Command(cmdPath, args...)

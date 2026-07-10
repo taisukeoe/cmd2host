@@ -81,28 +81,57 @@ func (v *Validator) ValidateOperation(req operations.Request, project *config.Pr
 		}
 	}
 
-	// Special guard: `git add` with broad staging flags but no explicit paths
-	// would skip path_deny enforcement (ValidatePaths is only called when
-	// paths are present). When the project has a non-empty path_deny, require
-	// explicit paths so each one is validated. Lax projects (no path_deny)
-	// keep the flexible behavior.
+	// Special guards for `git add` under a non-empty path_deny:
 	//
-	// Use filepath.Base because ResolveOperationCommands rewrites op.Command
-	// to an absolute path (e.g. "/usr/bin/git") in initialized configs.
+	//   (1) --pathspec-from-file / --pathspec-file-nul feed pathspecs from
+	//       a file whose contents live outside the request. That source is
+	//       not carried in policyReq.Paths, so ValidatePaths cannot apply
+	//       path_deny to it. Deny both flags unconditionally (regardless of
+	//       whether the caller also supplied paths) so the deny reason is
+	//       consistent instead of falling through to a downstream git-side
+	//       incompatibility error.
+	//
+	//   (2) Broad staging flags (-A / --all / -u / --update) with no
+	//       explicit paths would skip path_deny enforcement entirely
+	//       (ValidatePaths is only called when paths are present). When
+	//       paths are present, git narrows the broad flag to those
+	//       pathspecs and ValidatePaths already covered them, so the guard
+	//       stays scoped to the empty-paths case for those flags.
+	//
+	// Both guards are opt-in via path_deny: lax projects (no path_deny)
+	// keep the flexible behavior. Use filepath.Base because
+	// ResolveOperationCommands rewrites op.Command to an absolute path
+	// (e.g. "/usr/bin/git") in initialized configs.
 	if filepath.Base(op.Command) == "git" && len(op.ArgsTemplate) > 0 && op.ArgsTemplate[0] == "add" &&
-		len(policyReq.Paths) == 0 && len(project.Constraints.PathDeny) > 0 {
+		len(project.Constraints.PathDeny) > 0 {
 		for _, flag := range req.Flags {
 			// Normalize "--flag=value" to "--flag" to mirror ValidateFlags;
-			// otherwise inputs like "--all=true" would not match this switch.
+			// otherwise inputs like "--pathspec-from-file=paths.txt" would
+			// not match this switch.
 			name := flag
 			if i := strings.Index(flag, "="); i > 0 {
 				name = flag[:i]
 			}
 			switch name {
-			case "-A", "--all", "-u", "--update":
+			case "--pathspec-from-file", "--pathspec-file-nul":
 				return nil, ValidationResult{
 					OK:      false,
-					Message: fmt.Sprintf("git add %s requires explicit paths when path_deny is configured", flag),
+					Message: fmt.Sprintf("git add %s is not permitted when path_deny is configured (pathspec source cannot be enforced against the deny list)", flag),
+				}
+			}
+		}
+		if len(policyReq.Paths) == 0 {
+			for _, flag := range req.Flags {
+				name := flag
+				if i := strings.Index(flag, "="); i > 0 {
+					name = flag[:i]
+				}
+				switch name {
+				case "-A", "--all", "-u", "--update":
+					return nil, ValidationResult{
+						OK:      false,
+						Message: fmt.Sprintf("git add %s requires explicit paths when path_deny is configured", flag),
+					}
 				}
 			}
 		}

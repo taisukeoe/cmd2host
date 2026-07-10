@@ -84,17 +84,26 @@ Commands are validated using **operation mode**: predefined operation templates 
 - Environment variables
 - Config hash verification (changes require explicit allowance)
 
-### Push destination fixation
+### Remote destination fixation
 
-For `git push`, the daemon does NOT trust the repo-local `origin` remote.
-Instead, it derives the canonical SSH URL from `target_repo` (e.g.
-`git@github.com:owner/repo.git`) and hands it to `git` as an explicit
-argument together with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`,
-`credential.helper=`, `core.hooksPath=/dev/null`, `core.sshCommand=...`,
-and `submodule.recurse=false` overrides. A separate path-repo consistency
-check (`git remote get-url origin` vs `target_repo`) runs immediately
-before execution as a misconfiguration detector, not as the primary
-security boundary.
+For git subcommands that communicate with a remote via a URL argv token
+(`push`, `fetch`, `clone`, `pull`, `ls-remote`), the daemon does NOT trust
+the repo-local `origin` remote. Instead, it derives the canonical SSH URL
+from `target_repo` (e.g. `git@github.com:owner/repo.git`) and hands it to
+`git` as an explicit argument through the `{expected_git_url}` template
+placeholder, together with `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_CONFIG_GLOBAL=/dev/null`, `credential.helper=`,
+`core.hooksPath=/dev/null`, `core.sshCommand=...`, and
+`submodule.recurse=false` overrides applied by the `git_remote_strict`
+sanitize profile. A separate path-repo consistency check
+(`git remote get-url origin` vs `target_repo`, including the host portion
+derived from `remote_hosts_allow[0]`) runs immediately before execution as
+a misconfiguration detector, not as the primary security boundary. Git
+subcommands whose destination lives in `.git/config` rather than argv
+(`git remote update`, `git remote prune`, `git remote show`, ...) are not
+covered by URL fixation and remain on the base `git` sanitize profile;
+operators can still declare such shapes as custom operations, but the
+strict profile's URL-fixation contract does not attach to them.
 
 ## Key Files
 

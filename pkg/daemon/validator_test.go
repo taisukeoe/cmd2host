@@ -20,7 +20,7 @@ func makeGitAddProject(t *testing.T, repoDir string) *config.ProjectConfig {
 				Command:      "git",
 				ArgsTemplate: []string{"add", "{paths}"},
 				Params:       map[string]operations.ParamSchema{"paths": {Type: "array", Optional: true, Items: &operations.ItemsSchema{Type: "string"}}},
-				AllowedFlags: []string{"-u", "--update", "-A", "--all"},
+				AllowedFlags: []string{"-u", "--update", "-A", "--all", "--pathspec-from-file", "--pathspec-file-nul"},
 				Description:  "Stage changes",
 			},
 		},
@@ -57,6 +57,8 @@ func TestValidator_GitAdd_BroadFlagsRequirePaths_PathDenySet(t *testing.T) {
 		{"reject --update without paths", []string{"--update"}},
 		{"reject --all=true (normalized form)", []string{"--all=true"}},
 		{"reject --update=1 (normalized form)", []string{"--update=1"}},
+		{"reject --pathspec-from-file without paths", []string{"--pathspec-from-file=paths.txt"}},
+		{"reject --pathspec-file-nul without paths", []string{"--pathspec-from-file=paths.txt", "--pathspec-file-nul"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,5 +117,56 @@ func TestValidator_GitAdd_BroadFlagsGuard_AbsolutePath(t *testing.T) {
 	_, result := v.ValidateOperation(req, p, target)
 	if result.OK {
 		t.Errorf("broad-flag guard must still trigger when op.Command is an absolute path")
+	}
+}
+
+func TestValidator_GitAdd_PathspecFromFile_UnconditionallyDenied(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	p := makeGitAddProject(t, tmpDir)
+	p.Constraints.PathDeny = []string{".env*"}
+	if err := p.CompilePatterns(); err != nil {
+		t.Fatalf("CompilePatterns failed: %v", err)
+	}
+
+	v := NewValidator()
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+
+	// --pathspec-from-file must be denied whether or not explicit paths are
+	// present: the file source is not carried in the request, so
+	// ValidatePaths cannot apply path_deny to its contents. Both entry
+	// shapes (empty-paths / non-empty-paths) reach the guard.
+	cases := []struct {
+		name   string
+		params map[string]operations.ParamValue
+		flags  []string
+	}{
+		{"empty paths + --pathspec-from-file", map[string]operations.ParamValue{}, []string{"--pathspec-from-file=paths.txt"}},
+		{"safe explicit paths + --pathspec-from-file", map[string]operations.ParamValue{"paths": []string{"src/main.go"}}, []string{"--pathspec-from-file=paths.txt"}},
+		{"safe explicit paths + --pathspec-file-nul + --pathspec-from-file", map[string]operations.ParamValue{"paths": []string{"src/main.go"}}, []string{"--pathspec-from-file=paths.txt", "--pathspec-file-nul"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := operations.Request{Operation: "git_add", Params: tc.params, Flags: tc.flags}
+			_, result := v.ValidateOperation(req, p, target)
+			if result.OK {
+				t.Errorf("git_add with %v must be denied unconditionally when path_deny is configured", tc.flags)
+			}
+		})
+	}
+}
+
+func TestValidator_GitAdd_PathspecFromFile_NoPathDeny_Allowed(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	p := makeGitAddProject(t, tmpDir)
+	// path_deny intentionally empty -> pathspec-from-file guard does not fire.
+
+	v := NewValidator()
+	target := &ExecutionTarget{Repo: "owner/repo", RepoPath: p.RepoPaths[0]}
+	req := operations.Request{Operation: "git_add", Params: map[string]operations.ParamValue{}, Flags: []string{"--pathspec-from-file=paths.txt"}}
+	_, result := v.ValidateOperation(req, p, target)
+	if !result.OK {
+		t.Errorf("git_add --pathspec-from-file should be allowed when path_deny is empty: %s", result.Message)
 	}
 }

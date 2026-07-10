@@ -424,9 +424,11 @@ func (s *Server) handleOperationRequest(conn net.Conn, data []byte, rawArgvPrese
 	}
 
 	// Misconfiguration detector: verify the target repo_path's origin remote
-	// matches the resolved target_repo. This is not the primary security
-	// boundary (explicit URL fixation is) but catches obvious config drift.
-	if err := VerifyPathRepoConsistency(target.RepoPath, target.Repo); err != nil {
+	// matches the resolved target_repo AND the resolved host. This is not
+	// the primary security boundary (explicit URL fixation is) but catches
+	// obvious config drift and enforces the remote_hosts_allow[0]
+	// annotation against the actual remote URL.
+	if err := VerifyPathRepoConsistency(target.RepoPath, target.Repo, target.Host); err != nil {
 		fmt.Printf("  -> DENIED (consistency): %v\n", err)
 		s.sendOperationResponse(conn, operations.Response{
 			RequestID:    req.RequestID,

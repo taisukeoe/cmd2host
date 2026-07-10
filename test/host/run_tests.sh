@@ -75,7 +75,10 @@ setup_project_config() {
 {
   "repo": "taisukeoe/cmd2host",
   "repo_path": "$PROJECT_ROOT",
-  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version", "ws_write", "ws_write_recursive"],
+  "allowed_operations": ["gh_pr_view", "gh_pr_list", "gh_version", "ws_write", "ws_write_recursive", "git_add"],
+  "constraints": {
+    "path_deny": [".env*", "**/*.pem"]
+  },
   "operations": {
     "gh_version": {
       "command": "gh",
@@ -115,6 +118,15 @@ setup_project_config() {
       },
       "allowed_flags": ["--recursive"],
       "description": "Integration probe: workspace_path with a scope-expander flag"
+    },
+    "git_add": {
+      "command": "git",
+      "args_template": ["add", "{paths}"],
+      "params": {
+        "paths": {"type": "array", "optional": true, "items": {"type": "string"}}
+      },
+      "allowed_flags": ["-u", "--update", "-A", "--all", "--pathspec-from-file", "--pathspec-file-nul"],
+      "description": "Stage changes (path_deny guarded)"
     }
   }
 }
@@ -257,9 +269,25 @@ test_operation_executed \
 # Test: operation not in allowed_operations
 test_operation \
     "operation not in allowed_operations (denied)" \
-    '{"operation":"git_add","params":{"paths":["file.txt"]},"token":"'"$TEST_TOKEN"'"}' \
+    '{"operation":"git_status","params":{},"token":"'"$TEST_TOKEN"'"}' \
     "1" \
     "Unknown operation"
+
+# Test: git add --pathspec-from-file with explicit safe path is denied
+# unconditionally when path_deny is configured (the pathspec source is
+# read from a file that the daemon cannot enforce path_deny against).
+test_operation \
+    "git add --pathspec-from-file with explicit paths (denied)" \
+    '{"operation":"git_add","params":{"paths":["src/main.go"]},"flags":["--pathspec-from-file=paths.txt"],"token":"'"$TEST_TOKEN"'"}' \
+    "1" \
+    "pathspec source cannot be enforced"
+
+# Test: git add --pathspec-from-file with no paths is also denied.
+test_operation \
+    "git add --pathspec-from-file without paths (denied)" \
+    '{"operation":"git_add","params":{},"flags":["--pathspec-from-file=paths.txt"],"token":"'"$TEST_TOKEN"'"}' \
+    "1" \
+    "pathspec source cannot be enforced"
 
 # Test: invalid params (number below min)
 test_operation \
