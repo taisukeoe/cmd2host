@@ -406,7 +406,7 @@ Token flow:
 Each project has its own configuration with:
 
 - **allowed_operations**: Whitelist of permitted operations (default deny)
-- **constraints**: Path restrictions (`path_deny`). `remote_hosts_allow` is reserved in the schema but not yet enforced
+- **constraints**: Path restrictions (`path_deny`) and remote host allow list (`remote_hosts_allow`). The first entry of `remote_hosts_allow` is used as the expected host in the daemon-derived `{expected_git_url}` and is compared against the `origin` URL host portion during the pre-execution path-repo consistency check
 - **operations**: Predefined command templates with typed parameters
 
 ### Config Allowance

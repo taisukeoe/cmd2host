@@ -15,9 +15,9 @@
   "operations": {
     "git_fetch": {
       "command": "git",
-      "args_template": ["fetch", "origin"],
+      "args_template": ["fetch", "{expected_git_url}", "+refs/heads/*:refs/remotes/origin/*"],
       "params": {},
-      "description": "Fetch from origin remote"
+      "description": "Fetch from the daemon-resolved expected URL of target_repo (strict sanitization + explicit URL fixation + refspec that mirrors the default remote.origin.fetch)"
     },
     "gh_pr_view": {
       "command": "gh",

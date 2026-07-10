@@ -16,17 +16,17 @@
   "operations": {
     "git_fetch": {
       "command": "git",
-      "args_template": ["fetch", "origin"],
+      "args_template": ["fetch", "{expected_git_url}", "+refs/heads/*:refs/remotes/origin/*"],
       "params": {},
-      "description": "Fetch from origin remote"
+      "description": "Fetch from the daemon-resolved expected URL of target_repo (strict sanitization + explicit URL fixation + refspec that mirrors the default remote.origin.fetch)"
     },
     "git_push": {
       "command": "git",
-      "args_template": ["push", "--no-verify", "{expected_git_url}", "{branch}:refs/heads/{branch}"],
+      "args_template": ["push", "{expected_git_url}", "--no-verify", "{branch}:refs/heads/{branch}"],
       "params": {
         "branch": {"type": "string", "pattern": "^[a-zA-Z0-9._/][a-zA-Z0-9._/-]*$", "minLength": 1, "maxLength": 255}
       },
-      "description": "Push branch to the daemon-resolved expected URL of target_repo (strict sanitization + explicit URL fixation)"
+      "description": "Push branch to the daemon-resolved expected URL of target_repo (strict sanitization + explicit URL fixation at the git <repository> positional)"
     },
     "gh_pr_view": {
       "command": "gh",

@@ -291,6 +291,50 @@ func TestTemplate_GitPushBranch_RejectsLeadingDash(t *testing.T) {
 	}
 }
 
+// TestTemplate_GitFetchFixatesExpectedURL pins the argv shape bundled
+// git_fetch templates produce: the resolved argv must begin with
+// `fetch <expected_git_url> +refs/heads/*:refs/remotes/origin/*`, so the
+// remote destination is bound by the daemon-supplied URL rather than the
+// repo-local `remote.origin.url`, and remote-tracking refs stay in sync
+// with the pattern `git fetch origin` produces by default.
+func TestTemplate_GitFetchFixatesExpectedURL(t *testing.T) {
+	templates := []string{"git_write", "git_github_write", "github_write", "readonly"}
+	profileEnv := map[string]string{
+		"repo":             "owner/repo",
+		"repo_path":        "/path/to/repo",
+		"expected_git_url": "git@github.com:owner/repo.git",
+	}
+	wantHead := []string{"fetch", "git@github.com:owner/repo.git", "+refs/heads/*:refs/remotes/origin/*"}
+
+	for _, tmpl := range templates {
+		t.Run(tmpl, func(t *testing.T) {
+			op := loadTemplateOperation(t, tmpl, "git_fetch")
+
+			// Rendered argv must start with the fixed head.
+			args, err := op.BuildArgs(nil, nil, profileEnv)
+			if err != nil {
+				t.Fatalf("BuildArgs: %v", err)
+			}
+			if len(args) < len(wantHead) {
+				t.Fatalf("args too short: got %v, want head %v", args, wantHead)
+			}
+			for i, want := range wantHead {
+				if args[i] != want {
+					t.Errorf("args[%d] = %q, want %q (full argv: %v)", i, args[i], want, args)
+				}
+			}
+
+			// Template must not carry the pre-migration `origin` alias
+			// literal at index 1 — that shape hands remote resolution to
+			// the repo-local `remote.origin.url`, which the daemon does
+			// not trust for remote-communicating git operations.
+			if len(op.ArgsTemplate) >= 2 && op.ArgsTemplate[1] == "origin" {
+				t.Errorf("args_template[1] = %q; expected the {expected_git_url} placeholder (repo-local origin alias must not survive)", op.ArgsTemplate[1])
+			}
+		})
+	}
+}
+
 // TestTemplates_BodyOpsMigration asserts the on-disk templates carry the
 // Pattern A migration for gh_pr_create / gh_pr_edit / gh_issue_create.
 // This is the regression gate: if anyone reintroduces "--body" into

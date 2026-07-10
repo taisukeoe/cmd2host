@@ -243,7 +243,7 @@ func TestCommandSanitizer_SanitizeForGit(t *testing.T) {
 	}
 }
 
-func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
+func TestCommandSanitizer_SanitizeForGitRemoteStrict(t *testing.T) {
 	project := &config.ProjectConfig{
 		GitConfig: map[string]string{
 			"user.name": "Test",
@@ -252,7 +252,7 @@ func TestCommandSanitizer_SanitizeForGitPushStrict(t *testing.T) {
 	sanitizer := NewCommandSanitizer(project, nil)
 	env := NewSanitizedEnv()
 
-	sanitizer.SanitizeForGitPushStrict(env)
+	sanitizer.SanitizeForGitRemoteStrict(env)
 
 	result := env.BuildEnv()
 
@@ -416,13 +416,19 @@ func TestInferSanitizeProfile(t *testing.T) {
 		want string
 	}{
 		{"gh", operations.Operation{Command: "gh", ArgsTemplate: []string{"pr", "list"}}, "gh"},
-		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, "git_push_strict"},
-		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, "git"},
+		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, "git_remote_strict"},
+		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "{expected_git_url}"}}, "git_remote_strict"},
+		{"git clone", operations.Operation{Command: "git", ArgsTemplate: []string{"clone", "{expected_git_url}"}}, "git_remote_strict"},
+		{"git pull", operations.Operation{Command: "git", ArgsTemplate: []string{"pull", "{expected_git_url}"}}, "git_remote_strict"},
+		{"git ls-remote", operations.Operation{Command: "git", ArgsTemplate: []string{"ls-remote", "{expected_git_url}"}}, "git_remote_strict"},
+		{"git remote update stays base profile (config-driven destination)", operations.Operation{Command: "git", ArgsTemplate: []string{"remote", "update"}}, "git"},
+		{"git status stays base profile", operations.Operation{Command: "git", ArgsTemplate: []string{"status"}}, "git"},
 		{"git no args", operations.Operation{Command: "git", ArgsTemplate: nil}, "git"},
 		{"aws", operations.Operation{Command: "aws", ArgsTemplate: []string{"s3", "ls"}}, "minimal"},
-		{"absolute git push", operations.Operation{Command: "/usr/bin/git", ArgsTemplate: []string{"push"}}, "git_push_strict"},
+		{"absolute git push", operations.Operation{Command: "/usr/bin/git", ArgsTemplate: []string{"push"}}, "git_remote_strict"},
+		{"absolute git fetch", operations.Operation{Command: "/usr/bin/git", ArgsTemplate: []string{"fetch"}}, "git_remote_strict"},
 		{"absolute gh", operations.Operation{Command: "/opt/homebrew/bin/gh", ArgsTemplate: []string{"pr", "view"}}, "gh"},
-		{"windows git", operations.Operation{Command: "git.exe", ArgsTemplate: []string{"fetch"}}, "git"},
+		{"windows git fetch", operations.Operation{Command: "git.exe", ArgsTemplate: []string{"fetch"}}, "git_remote_strict"},
 	}
 
 	for _, tc := range cases {
@@ -438,9 +444,10 @@ func TestInferSanitizeProfile(t *testing.T) {
 // InferSanitizeProfile read the operation template instead of the runtime
 // argv: in every embedded template, a git operation's args_template starts
 // with a literal element (never a placeholder that could be dropped or
-// substituted), and the "push" literal appears only as that first element.
-// Under these two properties the template-derived profile always matches
-// the argv-derived decision the previous implementation made.
+// substituted), and any remote-communicating subcommand
+// (isGitRemoteSubcommand) appears only as that first element. Under these
+// two properties the template-derived profile matches the argv-derived
+// decision at runtime.
 func TestInferSanitizeProfile_EmbeddedTemplates(t *testing.T) {
 	names, err := config.ListTemplates()
 	if err != nil {
@@ -475,12 +482,12 @@ func TestInferSanitizeProfile_EmbeddedTemplates(t *testing.T) {
 					t.Errorf("%s: git operation args_template starts with a placeholder %q; the first element must be a literal", opID, op.ArgsTemplate[0])
 				}
 				for i, elem := range op.ArgsTemplate[1:] {
-					if elem == "push" {
-						t.Errorf("%s: args_template has \"push\" at index %d; it is only recognized at index 0", opID, i+1)
+					if isGitRemoteSubcommand(elem) {
+						t.Errorf("%s: args_template has remote-communicating subcommand %q at index %d; it is only recognized at index 0", opID, elem, i+1)
 					}
 				}
-				wantStrict := op.ArgsTemplate[0] == "push"
-				gotStrict := InferSanitizeProfile(op) == "git_push_strict"
+				wantStrict := isGitRemoteSubcommand(op.ArgsTemplate[0])
+				gotStrict := InferSanitizeProfile(op) == "git_remote_strict"
 				if gotStrict != wantStrict {
 					t.Errorf("%s: InferSanitizeProfile strictness = %v, want %v", opID, gotStrict, wantStrict)
 				}
@@ -496,10 +503,12 @@ func TestExecutionProfile(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"git literal push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}"}}, []string{"push", "git@github.com:owner/repo.git"}, "git_push_strict"},
-		{"git placeholder expanding to push", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"push", "origin"}, "git_push_strict"},
-		{"git placeholder expanding to fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"fetch", "origin"}, "git"},
-		{"git fetch stays base profile", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, []string{"fetch", "origin"}, "git"},
+		{"git literal push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}"}}, []string{"push", "git@github.com:owner/repo.git"}, "git_remote_strict"},
+		{"git placeholder expanding to push", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"push", "origin"}, "git_remote_strict"},
+		{"git placeholder expanding to fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"fetch", "origin"}, "git_remote_strict"},
+		{"git literal fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "{expected_git_url}"}}, []string{"fetch", "git@github.com:owner/repo.git"}, "git_remote_strict"},
+		{"git placeholder expanding to clone", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"clone", "origin"}, "git_remote_strict"},
+		{"git placeholder expanding to local subcommand stays base profile", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}"}}, []string{"status"}, "git"},
 		{"gh unaffected by push arg", operations.Operation{Command: "gh", ArgsTemplate: []string{"{subcommand}"}}, []string{"push"}, "gh"},
 		{"non-git unaffected by push arg", operations.Operation{Command: "aws", ArgsTemplate: []string{"{subcommand}"}}, []string{"push"}, "minimal"},
 	}
@@ -511,6 +520,97 @@ func TestExecutionProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPrepareCommand_GitRemoteStrictRequiresExpectedURL guards the
+// URL-fixation contract on the strict remote profile: PrepareCommand must
+// reject a resolved argv unless target.ExpectedGitURL sits at args[1],
+// immediately after the subcommand. Any other layout (URL absent, URL
+// hidden inside an option value, URL demoted behind another positional or
+// behind an option token that git would bind before it) resolves the
+// remote through repo-local `.git/config` and defeats the strict
+// profile's advertised contract.
+func TestPrepareCommand_GitRemoteStrictRequiresExpectedURL(t *testing.T) {
+	project := &config.ProjectConfig{
+		Repos:     []string{"owner/repo"},
+		RepoPaths: []string{"/path/to/repo"},
+	}
+	target := &ExecutionTarget{
+		Repo:           "owner/repo",
+		RepoPath:       "/path/to/repo",
+		ExpectedGitURL: "git@github.com:owner/repo.git",
+	}
+
+	rejected := []struct {
+		name string
+		args []string
+	}{
+		{"fetch with origin alias", []string{"fetch", "origin"}},
+		{"push with origin alias", []string{"push", "origin", "main:refs/heads/main"}},
+		{"clone with alias", []string{"clone", "origin"}},
+		{"pull with alias", []string{"pull", "origin"}},
+		{"ls-remote with alias", []string{"ls-remote", "origin"}},
+		{"host-matching but different URL", []string{"fetch", "git@github.com:owner/other-repo.git"}},
+		{"URL hidden inside --upload-pack option value", []string{"fetch", "--upload-pack=git@github.com:owner/repo.git", "origin"}},
+		{"URL hidden as separate --upload-pack value token", []string{"fetch", "--upload-pack", "git@github.com:owner/repo.git", "origin"}},
+		{"URL demoted behind an option token", []string{"push", "--no-verify", "git@github.com:owner/repo.git", "main:refs/heads/main"}},
+		{"empty argv reaches strict profile", []string{}},
+		{"subcommand-only argv reaches strict profile", []string{"fetch"}},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			sanitizer := NewCommandSanitizer(project, target)
+			cmd, err := sanitizer.PrepareCommand("git", tc.args, "git_remote_strict")
+			if err == nil {
+				t.Fatalf("expected git_remote_strict to reject argv %v, got no error", tc.args)
+			}
+			if cmd != nil {
+				t.Errorf("expected nil cmd on rejection, got %v", cmd)
+			}
+			if !strings.Contains(err.Error(), "expected_git_url") {
+				t.Errorf("expected error to name the missing expected_git_url slot, got: %v", err)
+			}
+		})
+	}
+
+	accepted := []struct {
+		name string
+		args []string
+	}{
+		{"fetch with expected URL at args[1]", []string{"fetch", "git@github.com:owner/repo.git", "+refs/heads/*:refs/remotes/origin/*"}},
+		{"push with expected URL at args[1], options after", []string{"push", "git@github.com:owner/repo.git", "--no-verify", "main:refs/heads/main"}},
+		{"clone with expected URL at args[1]", []string{"clone", "git@github.com:owner/repo.git", "into/dir"}},
+		{"ls-remote with expected URL at args[1]", []string{"ls-remote", "git@github.com:owner/repo.git"}},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			sanitizer := NewCommandSanitizer(project, target)
+			cmd, err := sanitizer.PrepareCommand("git", tc.args, "git_remote_strict")
+			if err != nil {
+				t.Fatalf("expected git_remote_strict to accept argv %v, got error: %v", tc.args, err)
+			}
+			if cmd == nil {
+				t.Error("expected non-nil cmd on acceptance")
+			}
+		})
+	}
+
+	t.Run("empty target", func(t *testing.T) {
+		sanitizer := NewCommandSanitizer(project, nil)
+		_, err := sanitizer.PrepareCommand("git", []string{"push", "git@github.com:owner/repo.git"}, "git_remote_strict")
+		if err == nil {
+			t.Fatal("expected git_remote_strict with nil target to be rejected")
+		}
+	})
+
+	t.Run("empty ExpectedGitURL", func(t *testing.T) {
+		targetNoURL := &ExecutionTarget{Repo: "owner/repo", RepoPath: "/path/to/repo"}
+		sanitizer := NewCommandSanitizer(project, targetNoURL)
+		_, err := sanitizer.PrepareCommand("git", []string{"push", "git@github.com:owner/repo.git"}, "git_remote_strict")
+		if err == nil {
+			t.Fatal("expected git_remote_strict with empty ExpectedGitURL to be rejected")
+		}
+	})
 }
 
 func TestPrepareCommand_UnknownProfileFailsClosed(t *testing.T) {
@@ -548,7 +648,7 @@ func legacyPrepareEnv(cs *CommandSanitizer, cmdPath string, args []string) []str
 		cs.SanitizeForGH(env)
 	case "git":
 		if len(args) > 0 && args[0] == "push" {
-			cs.SanitizeForGitPushStrict(env)
+			cs.SanitizeForGitRemoteStrict(env)
 		} else {
 			cs.SanitizeForGit(env)
 		}
@@ -575,11 +675,20 @@ func normalizeGitConfigEntry(entry string) string {
 }
 
 // TestPrepareCommand_GoldenEnvParity pins backward compatibility for
-// operations without a declared profile: the environment produced by the
-// profile-based PrepareCommand (via InferSanitizeProfile) must be
-// identical, entry for entry and in order, to the environment the
-// pre-profile implementation produced. Covers all four legacy branches:
-// gh, git non-push, git push, and a command with no dedicated handling.
+// operations whose profile routing has not changed from the pre-profile
+// implementation: the environment produced by the profile-based
+// PrepareCommand (via ExecutionProfile) must be identical, entry for
+// entry and in order, to the environment the pre-profile implementation
+// produced. Covers gh, a local git subcommand, git push, and unknown
+// command. Non-push git remote-communicating subcommands (fetch, clone,
+// pull, ls-remote) are intentionally excluded here — the profile they
+// resolve to changed from base "git" to "git_remote_strict", and the
+// shift is covered by TestInferSanitizeProfile / TestExecutionProfile.
+// Placeholder-head shapes whose runtime args_template lacks
+// {expected_git_url} are also excluded: they resolve to "git_remote_strict"
+// only at ExecutionProfile time, and PrepareCommand now rejects them
+// fail-closed via the URL-fixation contract check — see
+// TestPrepareCommand_GitRemoteStrictRequiresExpectedURL for that path.
 func TestPrepareCommand_GoldenEnvParity(t *testing.T) {
 	project := &config.ProjectConfig{
 		Repos:     []string{"owner/repo"},
@@ -599,9 +708,8 @@ func TestPrepareCommand_GoldenEnvParity(t *testing.T) {
 		args []string
 	}{
 		{"gh", operations.Operation{Command: "gh", ArgsTemplate: []string{"pr", "list"}}, []string{"pr", "list"}},
-		{"git fetch", operations.Operation{Command: "git", ArgsTemplate: []string{"fetch", "origin"}}, []string{"fetch", "origin"}},
+		{"git local subcommand (status)", operations.Operation{Command: "git", ArgsTemplate: []string{"status"}}, []string{"status"}},
 		{"git push", operations.Operation{Command: "git", ArgsTemplate: []string{"push", "{expected_git_url}", "{branch}"}}, []string{"push", "git@github.com:owner/repo.git", "main"}},
-		{"git placeholder push", operations.Operation{Command: "git", ArgsTemplate: []string{"{subcommand}", "origin"}}, []string{"push", "origin"}},
 		{"unknown command", operations.Operation{Command: "aws", ArgsTemplate: []string{"s3", "ls"}}, []string{"s3", "ls"}},
 	}
 
