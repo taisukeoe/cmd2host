@@ -160,13 +160,13 @@ func (cs *CommandSanitizer) SanitizeForGit(env *SanitizedEnv) {
 }
 
 // SanitizeForGitRemoteStrict applies strict sanitization for git
-// subcommands that communicate with a remote (push / fetch / clone / pull /
-// ls-remote / remote). Explicit URL fixation (the remote target URL is
-// passed as an explicit argument by the operation template) is the primary
-// defense; the env hardening below removes secondary channels (system /
-// global git config, credential helpers, pre-push hooks, SSH command
-// override, recursive submodule operations) that could redirect or hijack
-// the remote-communicating invocation.
+// subcommands that communicate with a remote via an explicit URL argument
+// (push / fetch / clone / pull / ls-remote). Explicit URL fixation (the
+// remote target URL is passed as an explicit argument by the operation
+// template) is the primary defense; the env hardening below removes
+// secondary channels (system / global git config, credential helpers,
+// Git hooks, SSH command override, recursive submodule operations) that
+// could redirect or hijack the remote-communicating invocation.
 func (cs *CommandSanitizer) SanitizeForGitRemoteStrict(env *SanitizedEnv) {
 	// Apply base git sanitization first
 	cs.SanitizeForGit(env)
@@ -317,7 +317,13 @@ func (cs *CommandSanitizer) PrepareCommand(cmdPath string, args []string, profil
 			return nil, fmt.Errorf("sanitize profile %q requires target.ExpectedGitURL to be resolved", profile)
 		}
 		if len(args) < 2 || args[1] != cs.target.ExpectedGitURL {
-			return nil, fmt.Errorf("sanitize profile %q requires the daemon-derived expected_git_url %q at args[1] (immediately after the subcommand, so it binds the git <repository> positional); resolved argv: %v", profile, cs.target.ExpectedGitURL, args)
+			// Deliberately omit the resolved argv from the error: the
+			// message reaches the caller via stderr, and a custom
+			// operation whose argv carries a token would otherwise
+			// surface that token in the failure text. The profile name
+			// and the required expected_git_url identify the violated
+			// contract sufficiently.
+			return nil, fmt.Errorf("sanitize profile %q requires the daemon-derived expected_git_url %q at args[1] (immediately after the subcommand, so it binds the git <repository> positional)", profile, cs.target.ExpectedGitURL)
 		}
 	}
 
